@@ -1,0 +1,35 @@
+# === AI Agent Artifacts ===
+# Worklog artifacts are local-only (conversation reports, analysis, etc.)
+.agents/worklog/*
+!.agents/worklog/.gitkeep
+.agents/inputs/*
+!.agents/inputs/.gitkeep
+
+# === Cursor Runtime ===
+# Ignore most .cursor runtime files, but keep committed rules and skills
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
+!.cursor/skills/
+!.cursor/skills/**
+
+# Skill-local logs/artifacts (must come after the whitelist)
+.cursor/skills/**/logs/
+
+# Legacy .mdc rule files (deprecated format)
+.cursor/rules/*.mdc
+
+# === General ===
+.DS_Store
+*.pyc
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
