@@ -1,14 +1,14 @@
 ---
-name: personal-cursor-autoapprove
+name: cursor-autoapprove
 description: >-
-  Set up safer Cursor command auto-approval for any repo. Installs a
+  Set up safer Cursor command auto-approval for any repo. Installs or resets a
   beforeShellExecution hook, a window-scoped approval watcher, and session
   management so long-running agent work requires only one up-front approval.
   Use when the user wants automatic shell approvals in a dedicated Cursor
   window or instance, or when setting up auto-approval in a new repo.
 ---
 
-# Personal Cursor Auto-Approve
+# Cursor Auto-Approval
 
 This skill packages everything needed to auto-approve Cursor agent prompts
 safely. It works by combining a `beforeShellExecution` hook (for shell
@@ -24,18 +24,24 @@ both bound to a single Cursor window.
 
 ## First-Time Setup
 
-Run the install script to set up everything in your home directory:
+If you want a clean slate first, reset any old install:
 
 ```bash
-bash "$(git rev-parse --show-toplevel)/.cursor/skills/personal-cursor-autoapprove/scripts/install.sh" --target global
+bash "$(git rev-parse --show-toplevel)/.cursor/skills/cursor-autoapprove/scripts/reset.sh" --target global
 ```
 
-This copies the controller, AppleScripts, and hooks config into `~/.cursor/auto-approval/` and wires `~/.cursor/hooks.json`.
+Then run the install script to set up everything in your home directory:
+
+```bash
+bash "$(git rev-parse --show-toplevel)/.cursor/skills/cursor-autoapprove/scripts/install.sh" --target global
+```
+
+This copies the controller, AppleScripts, hooks config, and skill docs into `~/.cursor/auto-approval/`, `~/.cursor/hooks.json`, and `~/.cursor/skills/cursor-autoapprove/`.
 
 To install into a specific repo instead:
 
 ```bash
-bash "$(git rev-parse --show-toplevel)/.cursor/skills/personal-cursor-autoapprove/scripts/install.sh" --target /path/to/repo
+bash "$(git rev-parse --show-toplevel)/.cursor/skills/cursor-autoapprove/scripts/install.sh" --target /path/to/repo
 ```
 
 ### Verify Installation

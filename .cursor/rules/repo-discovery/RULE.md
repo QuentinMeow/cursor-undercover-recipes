@@ -1,5 +1,5 @@
 ---
-description: Repo discovery — where rules, skills, inputs, and outputs live
+description: Repo discovery and routing — canonical entrypoint for repo layout and related rules
 alwaysApply: true
 ---
 ## Repo Layout
@@ -19,3 +19,12 @@ alwaysApply: true
 - Start with `README.md` at repo root for human orientation.
 - Read a skill's `SKILL.md` before modifying anything inside that skill folder.
 - Read the nearest `AGENTS.md` before editing agent-facing docs at any level.
+- Read the nearest `README.md` before editing human-facing docs at any level.
+
+## Related Rules
+
+Use these supporting rules as the task demands:
+
+1. `.cursor/rules/readme-and-agents-guide/RULE.md` when editing any `README.md` or `AGENTS.md`.
+2. `.cursor/rules/worklog-enforcer/RULE.md` for substantive conversations that create, modify, or analyze code/docs.
+3. `.cursor/rules/skill-conventions/RULE.md` when working inside `.cursor/skills/**`.

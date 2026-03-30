@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+SKILL_NAME="$(basename "$SKILL_DIR")"
 
 usage() {
     cat <<EOF
@@ -72,7 +73,7 @@ fi
 
 DEST_APPROVAL="$DEST_BASE/auto-approval"
 DEST_HOOKS="$DEST_BASE/hooks.json"
-DEST_SKILL="$DEST_BASE/skills/personal-cursor-autoapprove"
+DEST_SKILL="$DEST_BASE/skills/$SKILL_NAME"
 
 copy_file() {
     local src="$1"
@@ -110,6 +111,79 @@ write_file() {
     fi
 }
 
+ensure_shell_hook() {
+    local hooks_path="$1"
+    local controller_path="$2"
+    local mode="apply"
+    if $DRY_RUN; then
+        mode="dry-run"
+    fi
+
+    /usr/bin/python3 - "$hooks_path" "$controller_path" "$mode" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+hooks_path = Path(sys.argv[1])
+controller_path = sys.argv[2]
+mode = sys.argv[3]
+
+desired_entry = {"command": f"/usr/bin/python3 {controller_path} hook-shell"}
+existing_payload: dict[str, object]
+
+if hooks_path.exists():
+    try:
+        raw_payload = json.loads(hooks_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        raw_payload = {}
+    existing_payload = raw_payload if isinstance(raw_payload, dict) else {}
+else:
+    existing_payload = {}
+
+payload = dict(existing_payload)
+payload["version"] = 1
+
+hooks = payload.get("hooks")
+if not isinstance(hooks, dict):
+    hooks = {}
+
+before_shell = hooks.get("beforeShellExecution")
+if not isinstance(before_shell, list):
+    before_shell = []
+
+removed_count = 0
+kept_entries: list[object] = []
+for entry in before_shell:
+    command = entry.get("command") if isinstance(entry, dict) else None
+    if isinstance(command, str) and "cursor_auto_approval.py hook-shell" in command and "/auto-approval/" in command:
+        removed_count += 1
+        continue
+    kept_entries.append(entry)
+
+kept_entries.append(desired_entry)
+hooks["beforeShellExecution"] = kept_entries
+payload["hooks"] = hooks
+
+if mode == "dry-run":
+    action = "update" if hooks_path.exists() else "write"
+    print(f"[dry-run] {action} {hooks_path}")
+    if removed_count:
+        print(f"[dry-run] replace {removed_count} existing auto-approval hook(s)")
+    print(f"[dry-run] ensure hook -> {desired_entry['command']}")
+    raise SystemExit(0)
+
+hooks_path.parent.mkdir(parents=True, exist_ok=True)
+hooks_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+if removed_count:
+    print(f"  replaced: {removed_count} existing auto-approval hook(s)")
+print(f"  wrote: {hooks_path}")
+print(f"  ensured hook: {desired_entry['command']}")
+PY
+}
+
 echo "=== Cursor Auto-Approval Installer ==="
 echo "Source: $SKILL_DIR"
 echo "Target: $DEST_BASE"
@@ -123,30 +197,11 @@ copy_file "$SKILL_DIR/applescripts/open_notification_banner.applescript" "$DEST_
 copy_file "$SKILL_DIR/applescripts/click_notification_primary_button.applescript" "$DEST_APPROVAL/click_notification_primary_button.applescript"
 
 echo "--- Hooks ---"
-HOOKS_CONTENT='{
-  "version": 1,
-  "hooks": {
-    "beforeShellExecution": [
-      {
-        "command": "/usr/bin/python3 '"$DEST_APPROVAL"'/cursor_auto_approval.py hook-shell"
-      }
-    ]
-  }
-}'
+ensure_shell_hook "$DEST_HOOKS" "$DEST_APPROVAL/cursor_auto_approval.py"
 
-if [[ -f "$DEST_HOOKS" ]] && ! $FORCE; then
-    echo "  exists: $DEST_HOOKS (use --force to overwrite)"
-    echo "  NOTE: verify that hooks.json includes the beforeShellExecution hook pointing to:"
-    echo "        /usr/bin/python3 $DEST_APPROVAL/cursor_auto_approval.py hook-shell"
-else
-    write_file "$DEST_HOOKS" "$HOOKS_CONTENT"
-fi
-
-if [[ "$TARGET" != "global" ]]; then
-    echo "--- Skill Files (for repo-local Cursor discovery) ---"
-    copy_file "$SKILL_DIR/SKILL.md" "$DEST_SKILL/SKILL.md"
-    copy_file "$SKILL_DIR/reference.md" "$DEST_SKILL/reference.md"
-fi
+echo "--- Skill Files ---"
+copy_file "$SKILL_DIR/SKILL.md" "$DEST_SKILL/SKILL.md"
+copy_file "$SKILL_DIR/reference.md" "$DEST_SKILL/reference.md"
 
 echo ""
 echo "=== Verification ==="

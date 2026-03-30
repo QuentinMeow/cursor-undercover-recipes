@@ -1,8 +1,24 @@
-# Auto-Approve Reference
+# Auto-Approval Reference
+
+## Fresh Start
+
+Reset an existing global install:
+
+```bash
+bash "$(git rev-parse --show-toplevel)/.cursor/skills/cursor-autoapprove/scripts/reset.sh" --target global
+```
+
+Reinstall cleanly:
+
+```bash
+bash "$(git rev-parse --show-toplevel)/.cursor/skills/cursor-autoapprove/scripts/install.sh" --target global
+```
+
+For a repo-local install, replace `global` with `/path/to/repo`. Repo-local installs now keep their runtime files under that repo's `.cursor/auto-approval/`.
 
 ## Command Reference
 
-All commands use the controller script at `~/.cursor/auto-approval/cursor_auto_approval.py` (after installation).
+The commands below assume a global install at `~/.cursor/auto-approval/cursor_auto_approval.py`. For a repo-local install, use that repo's `.cursor/auto-approval/cursor_auto_approval.py` instead.
 
 | Command | What it does |
 |---------|-------------|
@@ -41,6 +57,22 @@ The shell hook does not know a Cursor chat ID or window ID. Shell auto-approval 
 ## Safe Fallback
 
 If window-scoped Accessibility proves unreliable for a particular prompt, keep the session for shell auto-approval and handle that prompt manually. Never reintroduce app-wide `Cmd+Return` injection.
+
+## Smoke Tests
+
+Fresh install should report an idle but healthy controller:
+
+```bash
+/usr/bin/python3 "$HOME/.cursor/auto-approval/cursor_auto_approval.py" status
+```
+
+Dedicated-instance activation should report `session_active: true`:
+
+```bash
+/usr/bin/python3 "$HOME/.cursor/auto-approval/cursor_auto_approval.py" activate --workspace "$PWD" --launch-dedicated
+```
+
+With an active session, a command inside the workspace should be auto-allowed; a command outside the workspace should fall back to manual approval and stop the session.
 
 ## Files Installed
 

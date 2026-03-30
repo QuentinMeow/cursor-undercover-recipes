@@ -17,7 +17,7 @@
 
 | Skill | Description |
 |-------|-------------|
-| `personal-cursor-autoapprove` | Set up safer Cursor command auto-approval for any repo. Includes hooks, window-scoped watcher, and install/sync scripts. |
+| `cursor-autoapprove` | Set up safer Cursor command auto-approval for any repo. Includes hooks, a window-scoped watcher, and install/reset scripts. |
 
 ## Adding a New Skill
 

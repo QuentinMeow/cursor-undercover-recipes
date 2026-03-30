@@ -27,14 +27,14 @@ ls .cursor/rules/
 ls .cursor/skills/
 
 # Run the auto-approval installer in dry-run mode
-.cursor/skills/personal-cursor-autoapprove/scripts/install.sh --dry-run --target global
+.cursor/skills/cursor-autoapprove/scripts/install.sh --dry-run --target global
 ```
 
 ## Guidance to AI Agent Tasks
 
 ### Read Order
 1. Read this file first for repo-level orientation.
-2. Read `.cursor/rules/global-enforcer/RULE.md` for the active rule chain.
+2. Read `.cursor/rules/repo-discovery/RULE.md` for the repo layout and active rule routing.
 3. Read the target skill's `SKILL.md` before modifying skill-specific content.
 4. Read the nearest `README.md` or `AGENTS.md` before editing docs at any level.
 

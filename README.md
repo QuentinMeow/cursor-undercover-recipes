@@ -27,10 +27,10 @@ Each skill under `.cursor/skills/<skill-name>/` includes its own setup instructi
 
 ```bash
 # Install the auto-approval skill into your personal global Cursor config
-.cursor/skills/personal-cursor-autoapprove/scripts/install.sh --target global
+.cursor/skills/cursor-autoapprove/scripts/install.sh --target global
 
 # Sync into another repo
-.cursor/skills/personal-cursor-autoapprove/scripts/install.sh --target /path/to/other-repo
+.cursor/skills/cursor-autoapprove/scripts/install.sh --target /path/to/other-repo
 ```
 
 ## Layout

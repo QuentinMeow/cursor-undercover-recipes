@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Any
 
 
-BASE_DIR = Path.home() / ".cursor" / "auto-approval"
+SCRIPT_PATH = Path(__file__).resolve()
+BASE_DIR = SCRIPT_PATH.parent
 STATE_PATH = BASE_DIR / "state.json"
 SESSION_PATH = BASE_DIR / "session.json"
 WATCHER_PID_PATH = BASE_DIR / "watcher.pid"
@@ -196,12 +197,15 @@ def get_state_list(state: dict[str, Any], key: str) -> "list[str]":
 
 
 def current_cursor_main_pids() -> "list[int]":
-    result = subprocess.run(
-        ["ps", "-ax", "-o", "pid=,args="],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["ps", "-ax", "-o", "pid=,args="],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return []
     if result.returncode != 0:
         return []
 
@@ -749,9 +753,16 @@ def status_payload() -> dict[str, Any]:
     watcher_pid = read_pid_file(WATCHER_PID_PATH)
     watcher_running = bool(watcher_pid and pid_is_alive(watcher_pid))
     reason = session_block_reason(session, state)
+    frontmost_pid: "int | None"
+    frontmost_error: "str | None" = None
+    try:
+        frontmost_pid = frontmost_cursor_pid()
+    except RuntimeError as exc:
+        frontmost_pid = None
+        frontmost_error = str(exc)
     payload = {
         "hook_enabled": bool(state.get("hook_enabled", True)),
-        "frontmost_cursor_pid": frontmost_cursor_pid(),
+        "frontmost_cursor_pid": frontmost_pid,
         "available_cursor_pids": current_cursor_main_pids(),
         "watcher_pid": watcher_pid if watcher_running else None,
         "watcher_running": watcher_running,
@@ -762,6 +773,8 @@ def status_payload() -> dict[str, Any]:
         "session_file": str(SESSION_PATH),
         "dedicated_profile_dir": str(DEDICATED_PROFILE_DIR),
     }
+    if frontmost_error is not None:
+        payload["frontmost_cursor_error"] = frontmost_error
     return payload
 
 
