@@ -1,0 +1,101 @@
+.cursor/rules/skill-learning/RULE.md
+  8ead99644524bce4 1-131
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.23",
+  "base_commit_sha": "75e67e0f7bd810ccb279d0d09ad31d6d78536229",
+  "prompts": {
+    "5844b7f305c9b485": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "f122c045-477a-48ff-be86-4a7b6c520a83",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "QuentinMeow <quentinmiao@outlook.com>",
+      "messages": [],
+      "total_additions": 55,
+      "total_deletions": 3,
+      "accepted_lines": 55,
+      "overriden_lines": 0
+    },
+    "7034c3de5c1b434c": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "c217419f-0ba3-4700-aab8-0999f60f36e5",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "QuentinMeow <quentinmiao@outlook.com>",
+      "messages": [],
+      "total_additions": 20,
+      "total_deletions": 1,
+      "accepted_lines": 20,
+      "overriden_lines": 0
+    },
+    "841959c7e7ec6593": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "abf909f5-6827-463e-88ba-efc19bbdcca9",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow <quentinmiao@outlook.com>",
+      "messages": [],
+      "total_additions": 225,
+      "total_deletions": 18,
+      "accepted_lines": 186,
+      "overriden_lines": 1
+    },
+    "8ead99644524bce4": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "7292a04b-64c9-4ffb-b573-1b06d25581ff",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow <quentinmiao@outlook.com>",
+      "messages": [],
+      "total_additions": 598,
+      "total_deletions": 61,
+      "accepted_lines": 580,
+      "overriden_lines": 0
+    },
+    "a9792fce7483dd3d": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "8d1bdc13-431f-4486-8449-3cc0173bd8ad",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "QuentinMeow <quentinmiao@outlook.com>",
+      "messages": [],
+      "total_additions": 53,
+      "total_deletions": 0,
+      "accepted_lines": 49,
+      "overriden_lines": 0
+    },
+    "b0f3d7811139cbea": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "b8fd3165-f8d2-41f4-bd64-ddfb7b88f14d",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "QuentinMeow <quentinmiao@outlook.com>",
+      "messages": [],
+      "total_additions": 28,
+      "total_deletions": 1,
+      "accepted_lines": 28,
+      "overriden_lines": 0
+    },
+    "d4d28b7effb6eb7f": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "4d0546a3-ccf6-4ed9-a41a-6c8c3b4a7100",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "QuentinMeow <quentinmiao@outlook.com>",
+      "messages": [],
+      "total_additions": 76,
+      "total_deletions": 34,
+      "accepted_lines": 74,
+      "overriden_lines": 0
+    }
+  }
+}
