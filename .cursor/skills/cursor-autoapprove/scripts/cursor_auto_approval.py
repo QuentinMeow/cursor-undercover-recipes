@@ -3,15 +3,280 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import ctypes.util
 import json
 import os
 import signal
 import subprocess
 import sys
 import time
+from ctypes import POINTER, byref, c_int32, c_void_p, c_uint64
 from pathlib import Path
 from typing import Any
 
+
+# ---------------------------------------------------------------------------
+# Native macOS Accessibility API via ctypes
+# Chromium/Electron apps only expose their full AX tree when
+# AXEnhancedUserInterface is set to true on the application element.
+# The AppleScript `entire contents of` approach is too slow for the
+# resulting large tree, so we use the C API directly.
+# ---------------------------------------------------------------------------
+
+_CF = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+_AX = ctypes.cdll.LoadLibrary(
+    "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
+)
+
+_CFTypeRef = c_void_p
+_CFStringRef = c_void_p
+_CFArrayRef = c_void_p
+_CFIndex = ctypes.c_long
+_AXUIElementRef = c_void_p
+_AXError = c_int32
+
+_kAXErrorSuccess = 0
+_kCFStringEncodingUTF8 = 0x08000100
+
+_CF.CFRelease.argtypes = [_CFTypeRef]
+_CF.CFRelease.restype = None
+_CF.CFStringCreateWithCString.argtypes = [c_void_p, ctypes.c_char_p, ctypes.c_uint32]
+_CF.CFStringCreateWithCString.restype = _CFStringRef
+_CF.CFStringGetLength.argtypes = [_CFStringRef]
+_CF.CFStringGetLength.restype = _CFIndex
+_CF.CFStringGetCString.argtypes = [_CFStringRef, ctypes.c_char_p, _CFIndex, ctypes.c_uint32]
+_CF.CFStringGetCString.restype = ctypes.c_bool
+_CF.CFArrayGetCount.argtypes = [_CFArrayRef]
+_CF.CFArrayGetCount.restype = _CFIndex
+_CF.CFArrayGetValueAtIndex.argtypes = [_CFArrayRef, _CFIndex]
+_CF.CFArrayGetValueAtIndex.restype = c_void_p
+_CF.CFGetTypeID.argtypes = [_CFTypeRef]
+_CF.CFGetTypeID.restype = c_uint64
+_CF.CFStringGetTypeID.argtypes = []
+_CF.CFStringGetTypeID.restype = c_uint64
+_CF.CFArrayGetTypeID.argtypes = []
+_CF.CFArrayGetTypeID.restype = c_uint64
+_CF.CFBooleanGetTypeID.argtypes = []
+_CF.CFBooleanGetTypeID.restype = c_uint64
+_CF.CFBooleanGetValue.argtypes = [_CFTypeRef]
+_CF.CFBooleanGetValue.restype = ctypes.c_bool
+
+_AX.AXUIElementCreateApplication.argtypes = [c_int32]
+_AX.AXUIElementCreateApplication.restype = _AXUIElementRef
+_AX.AXUIElementCopyAttributeValue.argtypes = [_AXUIElementRef, _CFStringRef, POINTER(_CFTypeRef)]
+_AX.AXUIElementCopyAttributeValue.restype = _AXError
+_AX.AXUIElementSetAttributeValue.argtypes = [_AXUIElementRef, _CFStringRef, _CFTypeRef]
+_AX.AXUIElementSetAttributeValue.restype = _AXError
+_AX.AXUIElementPerformAction.argtypes = [_AXUIElementRef, _CFStringRef]
+_AX.AXUIElementPerformAction.restype = _AXError
+_AX.AXUIElementCopyActionNames.argtypes = [_AXUIElementRef, POINTER(_CFArrayRef)]
+_AX.AXUIElementCopyActionNames.restype = _AXError
+
+_kCFBooleanTrue = c_void_p.in_dll(_CF, "kCFBooleanTrue")
+_STRING_TYPE_ID = _CF.CFStringGetTypeID()
+_ARRAY_TYPE_ID = _CF.CFArrayGetTypeID()
+_BOOL_TYPE_ID = _CF.CFBooleanGetTypeID()
+
+
+def _cfstr(s: str) -> _CFStringRef:
+    return _CF.CFStringCreateWithCString(None, s.encode("utf-8"), _kCFStringEncodingUTF8)
+
+
+def _cfstr_to_py(ref: _CFStringRef) -> str:
+    if not ref:
+        return ""
+    length = _CF.CFStringGetLength(ref)
+    buf_size = length * 4 + 1
+    buf = ctypes.create_string_buffer(buf_size)
+    if _CF.CFStringGetCString(ref, buf, buf_size, _kCFStringEncodingUTF8):
+        return buf.value.decode("utf-8", errors="replace")
+    return ""
+
+
+def _ax_get(element: _AXUIElementRef, attr: str):
+    cf_attr = _cfstr(attr)
+    value = _CFTypeRef()
+    err = _AX.AXUIElementCopyAttributeValue(element, cf_attr, byref(value))
+    _CF.CFRelease(cf_attr)
+    if err != _kAXErrorSuccess:
+        return None
+    return value.value
+
+
+def _ax_get_str(element: _AXUIElementRef, attr: str) -> str:
+    val = _ax_get(element, attr)
+    if val is None:
+        return ""
+    try:
+        if _CF.CFGetTypeID(val) == _STRING_TYPE_ID:
+            return _cfstr_to_py(val)
+    except Exception:
+        pass
+    return ""
+
+
+def _ax_get_bool(element: _AXUIElementRef, attr: str):
+    val = _ax_get(element, attr)
+    if val is None:
+        return None
+    try:
+        if _CF.CFGetTypeID(val) == _BOOL_TYPE_ID:
+            return _CF.CFBooleanGetValue(val)
+    except Exception:
+        pass
+    return None
+
+
+def _ax_children(element: _AXUIElementRef) -> list:
+    val = _ax_get(element, "AXChildren")
+    if val is None:
+        return []
+    try:
+        if _CF.CFGetTypeID(val) == _ARRAY_TYPE_ID:
+            count = _CF.CFArrayGetCount(val)
+            return [_CF.CFArrayGetValueAtIndex(val, i) for i in range(count)]
+    except Exception:
+        pass
+    return []
+
+
+def _ax_app(pid: int) -> _AXUIElementRef:
+    return _AX.AXUIElementCreateApplication(pid)
+
+
+def _ax_enable_enhanced_ui(pid: int) -> bool:
+    """Enable AXEnhancedUserInterface so Chromium exposes its full AX tree."""
+    app = _ax_app(pid)
+    if not app:
+        return False
+    attr = _cfstr("AXEnhancedUserInterface")
+    _AX.AXUIElementSetAttributeValue(app, attr, _kCFBooleanTrue)
+    _CF.CFRelease(attr)
+    return True
+
+
+def _ax_windows(pid: int) -> list:
+    app = _ax_app(pid)
+    if not app:
+        return []
+    val = _ax_get(app, "AXWindows")
+    if val is None:
+        return []
+    try:
+        if _CF.CFGetTypeID(val) == _ARRAY_TYPE_ID:
+            count = _CF.CFArrayGetCount(val)
+            return [_CF.CFArrayGetValueAtIndex(val, i) for i in range(count)]
+    except Exception:
+        pass
+    return []
+
+
+def _ax_find_window(pid: int, title_hint: str = "", index: int = 0):
+    """Find a window by title hint or index."""
+    windows = _ax_windows(pid)
+    if not windows:
+        return None
+    if title_hint:
+        for w in windows:
+            t = _ax_get_str(w, "AXTitle")
+            if title_hint in t:
+                return w
+    if 0 <= index < len(windows):
+        return windows[index]
+    return windows[0] if windows else None
+
+
+def _ax_has_press(element) -> bool:
+    """Check whether an element supports the AXPress action."""
+    names = _CFArrayRef()
+    err = _AX.AXUIElementCopyActionNames(element, ctypes.byref(names))
+    if err != _kAXErrorSuccess or not names.value:
+        return False
+    count = _CF.CFArrayGetCount(names)
+    for i in range(count):
+        item = _CF.CFArrayGetValueAtIndex(names, i)
+        if _CF.CFGetTypeID(item) == _STRING_TYPE_ID and _cfstr_to_py(item) == "AXPress":
+            _CF.CFRelease(names)
+            return True
+    _CF.CFRelease(names)
+    return False
+
+
+def _ax_find_pressable_ancestor(element, max_levels: int = 5):
+    """Walk up the parent chain to find the nearest ancestor with AXPress."""
+    current = element
+    for _ in range(max_levels):
+        parent = _ax_get(current, "AXParent")
+        if not parent:
+            return None
+        if _ax_has_press(parent):
+            return parent
+        current = parent
+    return None
+
+
+def _ax_scan_tree(element, max_depth: int = 25, _depth: int = 0) -> dict:
+    """Walk the AX tree under element, collecting buttons, texts, and clickable groups."""
+    result: dict = {
+        "buttons": [], "texts": [], "containers": [],
+        "_button_refs": [], "_clickable_texts": [],
+    }
+    if _depth > max_depth:
+        return result
+
+    role = _ax_get_str(element, "AXRole")
+    subrole = _ax_get_str(element, "AXSubrole")
+
+    if role == "AXButton":
+        label = _ax_get_str(element, "AXTitle") or _ax_get_str(element, "AXDescription")
+        if label:
+            result["buttons"].append(label)
+            result["_button_refs"].append((label, element))
+    elif role == "AXStaticText":
+        text = _ax_get_str(element, "AXValue") or _ax_get_str(element, "AXTitle")
+        if text:
+            result["texts"].append(text)
+            text_stripped = text.strip()
+            if len(text_stripped) > 2 and ord(text_stripped[0]) < 0xE000:
+                if _ax_has_press(element):
+                    result["_clickable_texts"].append((text, element, None))
+                else:
+                    ancestor = _ax_find_pressable_ancestor(element, max_levels=3)
+                    if ancestor:
+                        result["_clickable_texts"].append((text, element, ancestor))
+    elif role == "AXGroup":
+        label = _ax_get_str(element, "AXTitle") or _ax_get_str(element, "AXDescription")
+        if label and _ax_has_press(element):
+            result["buttons"].append(label)
+            result["_button_refs"].append((label, element))
+
+    if role in ("AXDialog", "AXSheet") or "Dialog" in subrole or "Sheet" in subrole:
+        result["containers"].append(f"{role}\t{subrole}")
+
+    for child in _ax_children(element):
+        if child:
+            sub = _ax_scan_tree(child, max_depth, _depth + 1)
+            result["buttons"].extend(sub["buttons"])
+            result["texts"].extend(sub["texts"])
+            result["containers"].extend(sub["containers"])
+            result["_button_refs"].extend(sub["_button_refs"])
+            result["_clickable_texts"].extend(sub["_clickable_texts"])
+
+    return result
+
+
+def _ax_press_button(button_ref: _AXUIElementRef) -> bool:
+    """Perform AXPress on a button element reference."""
+    action = _cfstr("AXPress")
+    err = _AX.AXUIElementPerformAction(button_ref, action)
+    _CF.CFRelease(action)
+    return err == _kAXErrorSuccess
+
+
+# ---------------------------------------------------------------------------
+# Path constants
+# ---------------------------------------------------------------------------
 
 SCRIPT_PATH = Path(__file__).resolve()
 BASE_DIR = SCRIPT_PATH.parent
@@ -35,6 +300,7 @@ DEFAULT_STATE = {
     "approval_button_labels": [
         "Run",
         "Run command",
+        "Run this time only",
         "Continue",
         "Allow",
         "Approve",
@@ -42,20 +308,18 @@ DEFAULT_STATE = {
         "Trust Workspace & Continue",
         "Open",
         "Install",
+        "Always allow",
     ],
     "prompt_text_keywords": [
-        "agent",
+        "agent wants",
         "allow",
         "approve",
-        "command",
-        "continue",
+        "are you sure",
+        "do you want",
         "permission",
-        "run",
-        "shell",
-        "terminal",
-        "tool",
         "trust",
-        "workspace",
+        "wants to run",
+        "wants to execute",
     ],
 }
 
@@ -387,154 +651,141 @@ def resolve_target_window(pid: int, fingerprint: dict[str, Any]) -> "dict[str, A
 
 
 def scan_window_elements(pid: int, window_index: int) -> dict[str, Any]:
-    script = f"""
-on joinLines(itemsList)
-    if (count of itemsList) is 0 then return ""
-    set oldTID to AppleScript's text item delimiters
-    set AppleScript's text item delimiters to linefeed
-    set joinedText to itemsList as text
-    set AppleScript's text item delimiters to oldTID
-    return joinedText
-end joinLines
+    """Scan a Cursor window for buttons, text, and dialog containers.
 
-on preferredText(elem)
-    try
-        set elemText to (name of elem as text)
-        if elemText is not "missing value" and elemText is not "" then return elemText
-    end try
-    try
-        set elemText to (description of elem as text)
-        if elemText is not "missing value" and elemText is not "" then return elemText
-    end try
-    try
-        set elemText to (value of elem as text)
-        if elemText is not "missing value" and elemText is not "" then return elemText
-    end try
-    return ""
-end preferredText
-
-tell application "System Events"
-    set targetProc to first application process whose unix id is {pid}
-    set targetWindow to window {window_index} of targetProc
-    set outputLines to {{}}
-
-    repeat with elem in entire contents of targetWindow
-        try
-            set elemRole to (role of elem as text)
-        on error
-            set elemRole to ""
-        end try
-
-        try
-            set elemSubrole to (subrole of elem as text)
-        on error
-            set elemSubrole to ""
-        end try
-
-        if elemRole is "AXButton" then
-            set buttonText to my preferredText(elem)
-            if buttonText is not "" then
-                set end of outputLines to "BUTTON" & tab & buttonText
-            end if
-        else if elemRole is "AXStaticText" then
-            set textValue to my preferredText(elem)
-            if textValue is not "" then
-                set end of outputLines to "TEXT" & tab & textValue
-            end if
-        end if
-
-        if elemRole is "AXDialog" or elemRole is "AXSheet" or elemSubrole contains "Dialog" or elemSubrole contains "Sheet" then
-            set end of outputLines to "CONTAINER" & tab & elemRole & tab & elemSubrole
-        end if
-    end repeat
-    return my joinLines(outputLines)
-end tell
-"""
-    output = run_osascript(script, timeout=15.0)
-    buttons: "list[str]" = []
-    texts: "list[str]" = []
-    containers: "list[str]" = []
-    for line in output.splitlines():
-        if not line.strip():
-            continue
-        parts = line.split("\t")
-        kind = parts[0]
-        if kind == "BUTTON" and len(parts) >= 2:
-            buttons.append(parts[1])
-        elif kind == "TEXT" and len(parts) >= 2:
-            texts.append(parts[1])
-        elif kind == "CONTAINER" and len(parts) >= 2:
-            containers.append("\t".join(parts[1:]))
+    Uses the native macOS Accessibility C API for speed.
+    AXEnhancedUserInterface must already be enabled on the target pid.
+    """
+    win = _ax_find_window(pid, index=window_index - 1)
+    if not win:
+        return {"buttons": [], "texts": [], "containers": [], "_button_refs": [], "_clickable_texts": []}
+    raw = _ax_scan_tree(win, max_depth=25)
     return {
-        "buttons": unique_non_empty(buttons),
-        "texts": unique_non_empty(texts),
-        "containers": unique_non_empty(containers),
+        "buttons": unique_non_empty(raw["buttons"]),
+        "texts": unique_non_empty(raw["texts"]),
+        "containers": unique_non_empty(raw["containers"]),
+        "_button_refs": raw["_button_refs"],
+        "_clickable_texts": raw["_clickable_texts"],
     }
 
 
-def choose_approval_button(snapshot: dict[str, Any], state: dict[str, Any]) -> "str | None":
+def choose_approval_button(snapshot: dict[str, Any], state: dict[str, Any]) -> "tuple[str, Any] | tuple[None, None]":
+    """Choose which button to click from a scan snapshot.
+
+    Returns (label, clickable_ref) where clickable_ref is an AXUIElementRef
+    that supports AXPress (either the button itself, a clickable text, or the
+    nearest pressable ancestor of a text label).
+
+    Safety gates:
+    - Either a modal container is visible, OR prompt keywords appear in the text
+    - The button/text label must match the known approval labels list
+    - Exact label matches like "Allow" are prioritised over prefix matches
+    """
     buttons = snapshot.get("buttons", [])
-    if not buttons:
-        return None
+    button_refs = snapshot.get("_button_refs", [])
+    clickable_texts = snapshot.get("_clickable_texts", [])
+
+    if not buttons and not clickable_texts:
+        return None, None
 
     text_blob = " ".join(text.lower() for text in snapshot.get("texts", []))
     prompt_keywords = get_state_list(state, "prompt_text_keywords")
     has_prompt_keyword = any(keyword.lower() in text_blob for keyword in prompt_keywords)
     has_modal_container = bool(snapshot.get("containers"))
 
-    if not has_modal_container and not has_prompt_keyword:
-        return None
+    approval_labels = get_state_list(state, "approval_button_labels")
+    approval_normalized = {normalize_text(label) for label in approval_labels}
+
+    has_approval_button = any(
+        normalize_text(b) in approval_normalized for b in buttons
+    )
+
+    has_approval_text = any(
+        _text_matches_approval(text, approval_normalized)
+        for text, _el, _ancestor in clickable_texts
+    )
+
+    if not has_modal_container and not has_prompt_keyword and not has_approval_button and not has_approval_text:
+        return None, None
+
+    ref_by_label: dict[str, Any] = {}
+    for label, ref in button_refs:
+        ref_by_label[label] = ref
 
     buttons_by_normalized = {normalize_text(button): button for button in buttons}
-    for preferred in get_state_list(state, "approval_button_labels"):
+
+    # 1. Exact AXButton match
+    for preferred in approval_labels:
         normalized = normalize_text(preferred)
         if normalized in buttons_by_normalized:
-            return buttons_by_normalized[normalized]
+            label = buttons_by_normalized[normalized]
+            return label, ref_by_label.get(label)
 
-    for preferred in get_state_list(state, "approval_button_labels"):
+    # 2. Clickable text match (AXStaticText with AXPress or pressable ancestor)
+    for preferred in approval_labels:
+        normalized = normalize_text(preferred)
+        for text, text_el, ancestor_el in clickable_texts:
+            if _text_matches_approval(text, {normalized}):
+                clickable = text_el if ancestor_el is None else ancestor_el
+                return text, clickable
+
+    # 3. Prefix match on AXButton labels
+    for preferred in approval_labels:
         normalized = normalize_text(preferred)
         for button in buttons:
             if normalize_text(button).startswith(normalized + " "):
-                return button
-    return None
+                return button, ref_by_label.get(button)
+
+    # 4. Prefix match on clickable text labels
+    for preferred in approval_labels:
+        normalized = normalize_text(preferred)
+        for text, text_el, ancestor_el in clickable_texts:
+            clean = normalize_text(_strip_keyboard_hint(text))
+            if clean.startswith(normalized + " ") or clean.startswith(normalized):
+                clickable = text_el if ancestor_el is None else ancestor_el
+                return text, clickable
+
+    return None, None
 
 
-def click_button(pid: int, window_index: int, button_label: str) -> bool:
-    script = f"""
-on preferredText(elem)
-    try
-        set elemText to (name of elem as text)
-        if elemText is not "missing value" and elemText is not "" then return elemText
-    end try
-    try
-        set elemText to (description of elem as text)
-        if elemText is not "missing value" and elemText is not "" then return elemText
-    end try
-    try
-        set elemText to (value of elem as text)
-        if elemText is not "missing value" and elemText is not "" then return elemText
-    end try
-    return ""
-end preferredText
+def _text_matches_approval(text: str, approval_normalized: set) -> bool:
+    """Check if a text label matches any approval pattern, ignoring keyboard hints."""
+    clean = normalize_text(_strip_keyboard_hint(text))
+    return clean in approval_normalized
 
-tell application "System Events"
-    set targetProc to first application process whose unix id is {pid}
-    set targetWindow to window {window_index} of targetProc
-    repeat with elem in entire contents of targetWindow
-        try
-            if (role of elem as text) is "AXButton" then
-                set elemText to my preferredText(elem)
-                if elemText is {applescript_string(button_label)} then
-                    perform action "AXPress" of elem
-                    return "clicked"
-                end if
-            end if
-        end try
-    end repeat
-    return "not_found"
-end tell
-"""
-    return run_osascript(script) == "clicked"
+
+def _strip_keyboard_hint(text: str) -> str:
+    """Remove trailing keyboard shortcut hints like '(⏎)' or '(Enter)'."""
+    text = text.strip()
+    if text.endswith(")"):
+        paren_idx = text.rfind("(")
+        if paren_idx > 0:
+            return text[:paren_idx].strip()
+    return text
+
+
+def click_button(pid: int, window_index: int, button_label: str, button_ref: Any = None) -> bool:
+    """Click a button by its AX element reference or by rescanning.
+
+    If button_ref is provided, performs AXPress directly (fast path).
+    Otherwise falls back to a rescan to find the button among both
+    AXButton elements and clickable text elements.
+    """
+    if button_ref is not None:
+        return _ax_press_button(button_ref)
+
+    win = _ax_find_window(pid, index=window_index - 1)
+    if not win:
+        return False
+    raw = _ax_scan_tree(win, max_depth=25)
+    for label, ref in raw["_button_refs"]:
+        if label == button_label:
+            return _ax_press_button(ref)
+    for text, text_el, ancestor_el in raw["_clickable_texts"]:
+        if text == button_label:
+            clickable = text_el if ancestor_el is None else ancestor_el
+            return _ax_press_button(clickable)
+    return False
 
 
 def run_applescript_file(path: Path) -> int:
@@ -792,16 +1043,18 @@ def hook_shell() -> int:
     state = load_state()
     session = load_session()
     reason = session_block_reason(session, state)
+    workspace_mismatch = False
 
     if reason is None and not path_matches_workspace(cwd, session.get("workspace_path")):
         reason = f"cwd outside active workspace: {cwd!r}"
+        workspace_mismatch = True
 
     if reason is None:
         touch_session("hook allow")
         log_event(f"hook allow command={command!r} cwd={cwd!r}")
         response = {"continue": True, "permission": "allow"}
     else:
-        if session.get("active") and reason != "hook disabled":
+        if session.get("active") and reason != "hook disabled" and not workspace_mismatch:
             mark_session_inactive(reason)
         log_event(f"hook ask command={command!r} cwd={cwd!r} reason={reason!r}")
         response = {
@@ -827,6 +1080,10 @@ def run_watch_loop() -> int:
         session["watcher_pid"] = os.getpid()
         save_session(session)
 
+    enhanced_ui_set = False
+    scan_count = 0
+    last_diagnostic_at = 0.0
+
     try:
         while not SHOULD_STOP:
             state = load_state()
@@ -838,14 +1095,49 @@ def run_watch_loop() -> int:
                 break
 
             target_pid = int(session["target_pid"])
+
+            if not enhanced_ui_set:
+                _ax_enable_enhanced_ui(target_pid)
+                enhanced_ui_set = True
+                time.sleep(0.5)
+                log_event(f"watcher enabled AXEnhancedUserInterface for pid {target_pid}")
+
             target_window = resolve_target_window(target_pid, session.get("target_window", {}))
             if target_window is None:
                 mark_session_inactive("target Cursor window disappeared", stop_watcher=False)
                 break
 
-            snapshot = scan_window_elements(target_pid, int(target_window["index"]))
-            button_label = choose_approval_button(snapshot, state)
-            if button_label and click_button(target_pid, int(target_window["index"]), button_label):
+            try:
+                snapshot = scan_window_elements(target_pid, int(target_window["index"]))
+            except Exception as exc:
+                log_event(f"watcher scan error: {exc}")
+                time.sleep(2)
+                continue
+
+            scan_count += 1
+            button_label, button_ref = choose_approval_button(snapshot, state)
+
+            now = now_ts()
+            if now - last_diagnostic_at >= 60.0:
+                btn_list = snapshot.get("buttons", [])
+                ct_list = snapshot.get("_clickable_texts", [])
+                approval_labels_lower = {normalize_text(l) for l in get_state_list(state, "approval_button_labels")}
+                notable_btns = [b for b in btn_list if normalize_text(b) in approval_labels_lower]
+                notable_texts = [
+                    t for t, _el, _anc in ct_list
+                    if _text_matches_approval(t, approval_labels_lower)
+                ]
+                log_event(
+                    f"watcher alive scans={scan_count} buttons={len(btn_list)}"
+                    f" clickable_texts={len(ct_list)}"
+                    f" texts={len(snapshot.get('texts', []))}"
+                    f" notable_btns={notable_btns!r}"
+                    f" notable_texts={notable_texts!r}"
+                    f" chosen={button_label!r}"
+                )
+                last_diagnostic_at = now
+
+            if button_label and click_button(target_pid, int(target_window["index"]), button_label, button_ref):
                 touch_session(f"clicked {button_label}")
                 log_event(
                     f"clicked button {button_label!r} in pid {target_pid} window {target_window.get('title', '')!r}"
@@ -905,6 +1197,8 @@ def command_activate(args: argparse.Namespace) -> int:
     if existing_session.get("active"):
         mark_session_inactive("replaced by new session")
 
+    _ax_enable_enhanced_ui(target_pid)
+
     target_window = wait_for_window(target_pid, launch_timeout_seconds)
     save_session(
         build_session_payload(
@@ -941,6 +1235,41 @@ def command_hook_off(_args: argparse.Namespace) -> int:
     mark_session_inactive("hook disabled by user")
     log_event("hook disabled")
     print("hook disabled")
+    return 0
+
+
+def command_scan_now(_args: argparse.Namespace) -> int:
+    """One-off scan of the bound Cursor window for debugging."""
+    session = load_session()
+    state = load_state()
+    target_pid = session.get("target_pid")
+    if not target_pid:
+        target_pid_raw = frontmost_cursor_pid()
+        if not target_pid_raw:
+            print("No Cursor PID found", file=sys.stderr)
+            return 1
+        target_pid = target_pid_raw
+
+    _ax_enable_enhanced_ui(target_pid)
+    time.sleep(0.3)
+
+    target_window = session.get("target_window", {})
+    win_index = int(target_window.get("index", 1))
+    snapshot = scan_window_elements(target_pid, win_index)
+    button_label, button_ref = choose_approval_button(snapshot, state)
+
+    result = {
+        "pid": target_pid,
+        "window_index": win_index,
+        "buttons": snapshot["buttons"],
+        "button_count": len(snapshot["buttons"]),
+        "text_count": len(snapshot["texts"]),
+        "texts_sample": snapshot["texts"][:20],
+        "containers": snapshot["containers"],
+        "chosen_button": button_label,
+        "chosen_ref_present": button_ref is not None,
+    }
+    print(json.dumps(result, indent=2))
     return 0
 
 
@@ -982,6 +1311,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_activate_parser(subparsers, "start")
     subparsers.add_parser("deactivate")
     subparsers.add_parser("stop")
+    subparsers.add_parser("scan-now")
     subparsers.add_parser("press-once")
     subparsers.add_parser("notification-banner-open")
     subparsers.add_parser("notification-alert-primary")
@@ -1002,6 +1332,7 @@ def main() -> int:
         "start": command_activate,
         "deactivate": command_deactivate,
         "stop": command_deactivate,
+        "scan-now": command_scan_now,
         "press-once": command_press_once,
         "notification-banner-open": command_notification_banner_open,
         "notification-alert-primary": command_notification_alert_primary,

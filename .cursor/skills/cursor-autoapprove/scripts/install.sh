@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SKILL_NAME="$(basename "$SKILL_DIR")"
+GLOBAL_SKILL_NAME="global-$SKILL_NAME"
+PERSONAL_SKILL_NAME="personal-$SKILL_NAME"
 
 usage() {
     cat <<EOF
@@ -12,7 +14,7 @@ Usage: $(basename "$0") [OPTIONS]
 Install the Cursor auto-approval skill into a target location.
 
 Options:
-  --target global          Install into ~/.cursor/ (personal global)
+  --target global          Install into ~/.cursor/ as skill name $GLOBAL_SKILL_NAME
   --target /path/to/repo   Install into a specific repo's .cursor/ directory
   --dry-run                Show what would be done without making changes
   --force                  Overwrite existing files without prompting
@@ -63,17 +65,19 @@ fi
 
 if [[ "$TARGET" == "global" ]]; then
     DEST_BASE="$HOME/.cursor"
+    DEST_SKILL_NAME="$GLOBAL_SKILL_NAME"
 else
     if [[ ! -d "$TARGET" ]]; then
         echo "Error: target directory does not exist: $TARGET" >&2
         exit 1
     fi
     DEST_BASE="$TARGET/.cursor"
+    DEST_SKILL_NAME="$SKILL_NAME"
 fi
 
 DEST_APPROVAL="$DEST_BASE/auto-approval"
 DEST_HOOKS="$DEST_BASE/hooks.json"
-DEST_SKILL="$DEST_BASE/skills/$SKILL_NAME"
+DEST_SKILL="$DEST_BASE/skills/$DEST_SKILL_NAME"
 
 copy_file() {
     local src="$1"
@@ -91,6 +95,71 @@ copy_file() {
         cp "$src" "$dst"
         echo "  copied: $dst"
     fi
+}
+
+remove_path() {
+    local path="$1"
+    if [[ ! -e "$path" ]]; then
+        return
+    fi
+    if $DRY_RUN; then
+        echo "[dry-run] remove $path"
+        return
+    fi
+    rm -rf "$path"
+    echo "  removed: $path"
+}
+
+render_skill_file() {
+    local src="$1"
+    local dst="$2"
+    local installed_name="$3"
+    if $DRY_RUN; then
+        echo "[dry-run] render $src -> $dst"
+        return
+    fi
+    local dst_dir
+    dst_dir="$(dirname "$dst")"
+    mkdir -p "$dst_dir"
+    if [[ -f "$dst" ]] && ! $FORCE; then
+        echo "  exists: $dst (use --force to overwrite)"
+        return
+    fi
+    /usr/bin/python3 - "$src" "$dst" "$installed_name" <<'PY'
+from pathlib import Path
+import sys
+
+src = Path(sys.argv[1])
+dst = Path(sys.argv[2])
+installed_name = sys.argv[3]
+lines = src.read_text(encoding="utf-8").splitlines(keepends=True)
+
+if lines and lines[0].strip() == "---":
+    for index in range(1, len(lines)):
+        if lines[index].strip() == "---":
+            break
+        if lines[index].startswith("name:"):
+            lines[index] = f"name: {installed_name}\n"
+            break
+
+dst.write_text("".join(lines), encoding="utf-8")
+PY
+    echo "  rendered: $dst"
+}
+
+cleanup_legacy_global_skill_dirs() {
+    local skills_dir="$1"
+    local current_skill_dir="$2"
+    local legacy_paths=(
+        "$skills_dir/$SKILL_NAME"
+        "$skills_dir/$PERSONAL_SKILL_NAME"
+    )
+    for legacy_path in "${legacy_paths[@]}"; do
+        if [[ "$legacy_path" == "$current_skill_dir" ]]; then
+            continue
+        fi
+        remove_path "$legacy_path"
+    done
 }
 
 write_file() {
@@ -200,7 +269,10 @@ echo "--- Hooks ---"
 ensure_shell_hook "$DEST_HOOKS" "$DEST_APPROVAL/cursor_auto_approval.py"
 
 echo "--- Skill Files ---"
-copy_file "$SKILL_DIR/SKILL.md" "$DEST_SKILL/SKILL.md"
+if [[ "$TARGET" == "global" ]]; then
+    cleanup_legacy_global_skill_dirs "$DEST_BASE/skills" "$DEST_SKILL"
+fi
+render_skill_file "$SKILL_DIR/SKILL.md" "$DEST_SKILL/SKILL.md" "$DEST_SKILL_NAME"
 copy_file "$SKILL_DIR/reference.md" "$DEST_SKILL/reference.md"
 
 echo ""
@@ -224,3 +296,6 @@ echo "2. Focus the Cursor window you want to auto-approve, then run:"
 echo "   /usr/bin/python3 $DEST_APPROVAL/cursor_auto_approval.py activate --workspace \"\$PWD\""
 echo "3. When done, stop with:"
 echo "   /usr/bin/python3 $DEST_APPROVAL/cursor_auto_approval.py deactivate"
+if [[ "$TARGET" == "global" ]]; then
+    echo "4. In Cursor, the global skill now appears as: /$DEST_SKILL_NAME"
+fi

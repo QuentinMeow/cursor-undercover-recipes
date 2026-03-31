@@ -1,0 +1,32 @@
+{
+  "approval_button_labels": [
+    "Run",
+    "Run command",
+    "Continue",
+    "Allow",
+    "Approve",
+    "Trust",
+    "Trust Workspace & Continue",
+    "Open",
+    "Install"
+  ],
+  "hook_enabled": true,
+  "idle_timeout_seconds": 1800.0,
+  "launch_timeout_seconds": 30.0,
+  "prompt_text_keywords": [
+    "agent",
+    "allow",
+    "approve",
+    "command",
+    "continue",
+    "permission",
+    "run",
+    "shell",
+    "terminal",
+    "tool",
+    "trust",
+    "workspace"
+  ],
+  "session_ttl_seconds": 14400.0,
+  "watch_interval_seconds": 1.0
+}

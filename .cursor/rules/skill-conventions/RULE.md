@@ -9,11 +9,20 @@ Every skill is a directory under `.cursor/skills/<skill-name>/` containing:
 
 | File | Required | Purpose |
 |------|----------|---------|
-| `SKILL.md` | Yes | Agent-facing entry point with YAML frontmatter (`name`, `description`) |
-| `reference.md` | No | Detailed reference material linked from SKILL.md |
+| `README.md` | Yes | Short human-facing overview for new users: what the skill does, how to use it, and how it works in short |
+| `AGENTS.md` | Yes | Agent-facing ownership, read order, edit rules, and verification expectations for this skill folder |
+| `SKILL.md` | Yes | Agent-facing entry point with YAML frontmatter (`name`, `description`) used for skill discovery and invocation |
+| `reference.md` | No | Detailed reference material linked from `README.md` or `SKILL.md` |
 | `examples.md` | No | Concrete usage examples |
 | `scripts/` | No | Utility scripts owned by the skill |
 | `logs/<run-id>/` | No | Local artifacts from skill runs (gitignored) |
+
+## Audience Split
+
+- `README.md` is public and human-facing. Keep it brief and precise.
+- Every skill `README.md` should include: what the skill does, how to use it, and how it works internally in short form.
+- `AGENTS.md` is agent-only. Put folder ownership, read order, guardrails, and verification steps there.
+- `SKILL.md` remains the executable skill entrypoint for the agent. Link to deeper docs instead of copying large sections of public-facing content.
 
 ## SKILL.md Frontmatter
 
@@ -35,6 +44,8 @@ The `description` drives skill discovery -- the agent uses it to decide when to 
 
 ## Authoring Guidelines
 
+- Keep `README.md` concise and skimmable; push deep troubleshooting and edge cases into `reference.md`.
+- Keep `AGENTS.md` focused on maintenance guidance rather than user onboarding.
 - Keep `SKILL.md` under 500 lines. Offload detail to `reference.md`.
 - Keep file references one level deep from SKILL.md (no nested chains).
 - Assume the agent is smart -- only add context it would not already have.
@@ -64,9 +75,12 @@ Skills that support cross-repo installation should include a `scripts/install.sh
 
 1. Read `.cursor/skills/README.md` for the skill library overview.
 2. Read `.cursor/skills/AGENTS.md` for edit/ownership rules.
-3. Read the target skill's `SKILL.md` before modifying anything inside that skill folder.
+3. Read the target skill's `README.md` before editing public-facing skill docs.
+4. Read the target skill's `AGENTS.md` before modifying anything inside that skill folder.
+5. Read the target skill's `SKILL.md` before changing skill behavior or invocation instructions.
 
 ## Maintenance
 
 - Update `.cursor/skills/README.md` when adding or removing a skill.
 - Update `.cursor/skills/AGENTS.md` when changing edit or artifact conventions.
+- Create or backfill `README.md` and `AGENTS.md` for legacy skill folders when touching them.

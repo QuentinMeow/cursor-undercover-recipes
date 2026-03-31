@@ -36,13 +36,16 @@ Then run the install script to set up everything in your home directory:
 bash "$(git rev-parse --show-toplevel)/.cursor/skills/cursor-autoapprove/scripts/install.sh" --target global
 ```
 
-This copies the controller, AppleScripts, hooks config, and skill docs into `~/.cursor/auto-approval/`, `~/.cursor/hooks.json`, and `~/.cursor/skills/cursor-autoapprove/`.
+This copies the controller, AppleScripts, hooks config, and skill docs into `~/.cursor/auto-approval/`, `~/.cursor/hooks.json`, and `~/.cursor/skills/global-cursor-autoapprove/`.
+The installed global skill is renamed to `/global-cursor-autoapprove` so it stays visually distinct from a repo-local `/cursor-autoapprove`.
 
 To install into a specific repo instead:
 
 ```bash
 bash "$(git rev-parse --show-toplevel)/.cursor/skills/cursor-autoapprove/scripts/install.sh" --target /path/to/repo
 ```
+
+Repo-local installs keep the original skill name and land under `/path/to/repo/.cursor/skills/cursor-autoapprove/`.
 
 ### Verify Installation
 
