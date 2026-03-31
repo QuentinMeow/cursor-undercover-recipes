@@ -242,9 +242,11 @@ def _ax_scan_tree(element, max_depth: int = 25, _depth: int = 0) -> dict:
                 if _ax_has_press(element):
                     result["_clickable_texts"].append((text, element, None))
                 else:
-                    ancestor = _ax_find_pressable_ancestor(element, max_levels=3)
+                    ancestor = _ax_find_pressable_ancestor(element, max_levels=7)
                     if ancestor:
                         result["_clickable_texts"].append((text, element, ancestor))
+                    elif len(text_stripped) <= 30:
+                        result["_clickable_texts"].append((text, element, None))
     elif role == "AXGroup":
         label = _ax_get_str(element, "AXTitle") or _ax_get_str(element, "AXDescription")
         if label and _ax_has_press(element):
@@ -298,17 +300,15 @@ DEFAULT_STATE = {
     "idle_timeout_seconds": 1800.0,
     "launch_timeout_seconds": 30.0,
     "approval_button_labels": [
-        "Run",
-        "Run command",
         "Run this time only",
-        "Continue",
+        "Run command",
         "Allow",
+        "Always allow",
         "Approve",
+        "Continue",
         "Trust",
         "Trust Workspace & Continue",
-        "Open",
         "Install",
-        "Always allow",
     ],
     "prompt_text_keywords": [
         "agent wants",
@@ -650,6 +650,15 @@ def resolve_target_window(pid: int, fingerprint: dict[str, Any]) -> "dict[str, A
     return windows[0]
 
 
+def _merge_scan_results(target: dict[str, Any], source: dict[str, Any]) -> None:
+    """Merge source scan results into target in-place."""
+    target["buttons"].extend(source["buttons"])
+    target["texts"].extend(source["texts"])
+    target["containers"].extend(source["containers"])
+    target["_button_refs"].extend(source["_button_refs"])
+    target["_clickable_texts"].extend(source["_clickable_texts"])
+
+
 def scan_window_elements(pid: int, window_index: int) -> dict[str, Any]:
     """Scan a Cursor window for buttons, text, and dialog containers.
 
@@ -659,7 +668,7 @@ def scan_window_elements(pid: int, window_index: int) -> dict[str, Any]:
     win = _ax_find_window(pid, index=window_index - 1)
     if not win:
         return {"buttons": [], "texts": [], "containers": [], "_button_refs": [], "_clickable_texts": []}
-    raw = _ax_scan_tree(win, max_depth=25)
+    raw = _ax_scan_tree(win, max_depth=35)
     return {
         "buttons": unique_non_empty(raw["buttons"]),
         "texts": unique_non_empty(raw["texts"]),
@@ -667,6 +676,34 @@ def scan_window_elements(pid: int, window_index: int) -> dict[str, Any]:
         "_button_refs": raw["_button_refs"],
         "_clickable_texts": raw["_clickable_texts"],
     }
+
+
+def scan_all_windows(pid: int, primary_index: int) -> dict[str, Any]:
+    """Scan the primary window deeply, plus lightweight scans of sibling windows.
+
+    Sub-agent approval prompts can appear in the main window's chat panel
+    (deeply nested) or in separate AXWindow elements for sub-agent tasks.
+    The primary window gets a deep scan; sibling windows get a shallower scan
+    focused on finding approval buttons without polluting the safety gate
+    with unrelated content.
+    """
+    combined: dict[str, Any] = {
+        "buttons": [], "texts": [], "containers": [],
+        "_button_refs": [], "_clickable_texts": [],
+    }
+    windows = _ax_windows(pid)
+    for i, win in enumerate(windows):
+        if not win:
+            continue
+        is_primary = (i == primary_index - 1)
+        depth = 35 if is_primary else 35
+        raw = _ax_scan_tree(win, max_depth=depth)
+        _merge_scan_results(combined, raw)
+
+    combined["buttons"] = unique_non_empty(combined["buttons"])
+    combined["texts"] = unique_non_empty(combined["texts"])
+    combined["containers"] = unique_non_empty(combined["containers"])
+    return combined
 
 
 def choose_approval_button(snapshot: dict[str, Any], state: dict[str, Any]) -> "tuple[str, Any] | tuple[None, None]":
@@ -729,22 +766,6 @@ def choose_approval_button(snapshot: dict[str, Any], state: dict[str, Any]) -> "
                 clickable = text_el if ancestor_el is None else ancestor_el
                 return text, clickable
 
-    # 3. Prefix match on AXButton labels
-    for preferred in approval_labels:
-        normalized = normalize_text(preferred)
-        for button in buttons:
-            if normalize_text(button).startswith(normalized + " "):
-                return button, ref_by_label.get(button)
-
-    # 4. Prefix match on clickable text labels
-    for preferred in approval_labels:
-        normalized = normalize_text(preferred)
-        for text, text_el, ancestor_el in clickable_texts:
-            clean = normalize_text(_strip_keyboard_hint(text))
-            if clean.startswith(normalized + " ") or clean.startswith(normalized):
-                clickable = text_el if ancestor_el is None else ancestor_el
-                return text, clickable
-
     return None, None
 
 
@@ -797,12 +818,22 @@ def run_applescript_file(path: Path) -> int:
     return result.returncode
 
 
-def path_matches_workspace(cwd: str, workspace_path: "str | None") -> bool:
-    if not workspace_path:
-        return True
-    if not cwd:
-        return False
-    cwd_path = Path(cwd).expanduser()
+def _extract_cd_path(command: str) -> "str | None":
+    """Extract the target directory from a leading 'cd <path>' in a compound command."""
+    stripped = command.strip()
+    if not stripped.startswith("cd "):
+        return None
+    rest = stripped[3:].lstrip()
+    for sep in ("&&", ";", "\n", "|"):
+        idx = rest.find(sep)
+        if idx >= 0:
+            rest = rest[:idx]
+    path = rest.strip().strip("'\"")
+    return path if path else None
+
+
+def _path_is_under_workspace(candidate: str, workspace_path: str) -> bool:
+    cwd_path = Path(candidate).expanduser()
     workspace = Path(workspace_path).expanduser()
     try:
         cwd_path = cwd_path.resolve()
@@ -819,6 +850,17 @@ def path_matches_workspace(cwd: str, workspace_path: "str | None") -> bool:
         return True
     except ValueError:
         return False
+
+
+def path_matches_workspace(cwd: str, workspace_path: "str | None", command: str = "") -> bool:
+    if not workspace_path:
+        return True
+    if cwd:
+        return _path_is_under_workspace(cwd, workspace_path)
+    cd_path = _extract_cd_path(command) if command else None
+    if cd_path:
+        return _path_is_under_workspace(cd_path, workspace_path)
+    return False
 
 
 def session_block_reason(session: dict[str, Any], state: dict[str, Any]) -> "str | None":
@@ -1045,7 +1087,7 @@ def hook_shell() -> int:
     reason = session_block_reason(session, state)
     workspace_mismatch = False
 
-    if reason is None and not path_matches_workspace(cwd, session.get("workspace_path")):
+    if reason is None and not path_matches_workspace(cwd, session.get("workspace_path"), command):
         reason = f"cwd outside active workspace: {cwd!r}"
         workspace_mismatch = True
 
@@ -1083,6 +1125,8 @@ def run_watch_loop() -> int:
     enhanced_ui_set = False
     scan_count = 0
     last_diagnostic_at = 0.0
+    click_cooldown: "dict[str, float]" = {}
+    CLICK_COOLDOWN_SECONDS = 5.0
 
     try:
         while not SHOULD_STOP:
@@ -1108,7 +1152,7 @@ def run_watch_loop() -> int:
                 break
 
             try:
-                snapshot = scan_window_elements(target_pid, int(target_window["index"]))
+                snapshot = scan_all_windows(target_pid, int(target_window["index"]))
             except Exception as exc:
                 log_event(f"watcher scan error: {exc}")
                 time.sleep(2)
@@ -1137,11 +1181,17 @@ def run_watch_loop() -> int:
                 )
                 last_diagnostic_at = now
 
-            if button_label and click_button(target_pid, int(target_window["index"]), button_label, button_ref):
-                touch_session(f"clicked {button_label}")
-                log_event(
-                    f"clicked button {button_label!r} in pid {target_pid} window {target_window.get('title', '')!r}"
-                )
+            if button_label and button_ref is not None:
+                label_key = normalize_text(button_label)
+                last_click = click_cooldown.get(label_key, 0.0)
+                if now - last_click >= CLICK_COOLDOWN_SECONDS:
+                    if _ax_press_button(button_ref):
+                        click_cooldown[label_key] = now
+                        touch_session(f"clicked {button_label}")
+                        log_event(
+                            f"clicked button {button_label!r} in pid {target_pid}"
+                            f" window {target_window.get('title', '')!r}"
+                        )
 
             interval = float(state.get("watch_interval_seconds", DEFAULT_STATE["watch_interval_seconds"]))
             time.sleep(max(0.2, interval))
@@ -1239,7 +1289,7 @@ def command_hook_off(_args: argparse.Namespace) -> int:
 
 
 def command_scan_now(_args: argparse.Namespace) -> int:
-    """One-off scan of the bound Cursor window for debugging."""
+    """One-off scan of all Cursor windows for the target pid."""
     session = load_session()
     state = load_state()
     target_pid = session.get("target_pid")
@@ -1255,16 +1305,21 @@ def command_scan_now(_args: argparse.Namespace) -> int:
 
     target_window = session.get("target_window", {})
     win_index = int(target_window.get("index", 1))
-    snapshot = scan_window_elements(target_pid, win_index)
+    snapshot = scan_all_windows(target_pid, win_index)
     button_label, button_ref = choose_approval_button(snapshot, state)
+
+    clickable_text_labels = [t for t, _el, _anc in snapshot.get("_clickable_texts", [])]
 
     result = {
         "pid": target_pid,
         "window_index": win_index,
+        "window_count": len(_ax_windows(target_pid)),
         "buttons": snapshot["buttons"],
         "button_count": len(snapshot["buttons"]),
+        "clickable_text_count": len(clickable_text_labels),
+        "clickable_texts_sample": clickable_text_labels[:20],
         "text_count": len(snapshot["texts"]),
-        "texts_sample": snapshot["texts"][:20],
+        "texts_sample": snapshot["texts"][:30],
         "containers": snapshot["containers"],
         "chosen_button": button_label,
         "chosen_ref_present": button_ref is not None,
