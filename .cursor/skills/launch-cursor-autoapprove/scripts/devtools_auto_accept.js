@@ -15,6 +15,8 @@
 
   const LOG_PREFIX = "[autoAccept]";
   const SCRIPT_HASH = globalThis.__cursorAutoAcceptScriptHash || "unknown";
+  const REPO_SLUG = globalThis.__cursorAutoAcceptRepoSlug || "workspace";
+  const TITLE_SYNC_INTERVAL = 3000;
 
   const APPROVAL_PATTERNS = [
     { pattern: "accept all", id: "accept_all" },
@@ -31,9 +33,11 @@
 
   const state = {
     scriptHash: SCRIPT_HASH,
+    repoSlug: REPO_SLUG,
     interval: 2000,
     running: false,
     timer: null,
+    titleTimer: null,
     totalClicks: 0,
     clicks: [],
     enableResume: true,
@@ -176,6 +180,24 @@
     );
   }
 
+  function _syncTitle() {
+    const emoji = state.running ? "\u2705" : "\u23F8";
+    const title = `autoapprove ${emoji} ${REPO_SLUG}`;
+    document.title = title;
+    const titleButton = document.querySelector(
+      '[id="workbench.parts.titlebar"] .window-title-text'
+    );
+    if (titleButton) {
+      titleButton.textContent = title;
+      titleButton.title = title;
+      titleButton.setAttribute("aria-label", title);
+    }
+    const titleContainer = document.querySelector(
+      '[id="workbench.parts.titlebar"] .window-title'
+    );
+    if (titleContainer) titleContainer.title = title;
+  }
+
   function checkAndClick() {
     const buttons = findApprovalButtons();
     if (buttons.length === 0) return;
@@ -199,6 +221,7 @@
     if (typeof interval === "number" && interval > 0) state.interval = interval;
     state.running = true;
     state.timer = setInterval(checkAndClick, state.interval);
+    _syncTitle();
     console.log(`${LOG_PREFIX} started (interval ${state.interval}ms)`);
   }
 
@@ -210,12 +233,14 @@
     clearInterval(state.timer);
     state.timer = null;
     state.running = false;
+    _syncTitle();
     console.log(`${LOG_PREFIX} stopped (total clicks: ${state.totalClicks})`);
   }
 
   function status() {
     const s = {
       scriptHash: state.scriptHash,
+      repoSlug: state.repoSlug,
       running: state.running,
       interval: state.interval,
       totalClicks: state.totalClicks,
@@ -224,6 +249,9 @@
     console.log(`${LOG_PREFIX} status`, JSON.stringify(s, null, 2));
     return s;
   }
+
+  state.titleTimer = setInterval(_syncTitle, TITLE_SYNC_INTERVAL);
+  _syncTitle();
 
   globalThis.__cursorAutoAccept = { start, stop, status, state };
   globalThis.startAccept = start;
