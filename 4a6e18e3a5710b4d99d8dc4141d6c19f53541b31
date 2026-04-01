@@ -1,0 +1,256 @@
+.cursor/skills/launch-cursor-autoapprove/LESSONS.md
+  bdf5719455f8858e 1-9
+.cursor/skills/launch-cursor-autoapprove/references/manual-testing.md
+  bdf5719455f8858e 1-149
+.cursor/skills/launch-cursor-autoapprove/references/retired-approaches.md
+  bdf5719455f8858e 1-115
+.cursor/skills/launch-cursor-autoapprove/references/implementation.md
+  bdf5719455f8858e 1-158
+.cursor/skills/launch-cursor-autoapprove/issues/001-running-window-keeps-stale-injector.md
+  bdf5719455f8858e 1-39
+.cursor/skills/launch-cursor-autoapprove/scripts/launcher.py
+  bdf5719455f8858e 17,80-108,266,291-294,300-303,306,308,313-315,466-467,470-471,498-514,522-523,578,585
+  483f1e0df6c1e97e 1-16,18-79,109-265,267-290,295-299,304-305,307,309-312,316-465,468-469,472-497,515-521,524-577,579-584,586-657
+.cursor/skills/launch-cursor-autoapprove/AGENTS.md
+  483f1e0df6c1e97e 1-6,9-15,21,24-28,35-38,46-47,50
+  bdf5719455f8858e 7-8,16-20,22-23,29-34,39-45,48-49,51-57
+.cursor/skills/launch-cursor-autoapprove/README.md
+  483f1e0df6c1e97e 1-2,4,9,12,14-23,25-26,29,36-37,39-40,42-43,45,48,50-51,56-59
+  bdf5719455f8858e 3,5-8,10-11,13,24,27-28,30-35,38,41,44,46-47,49,52-55,60-73
+.cursor/skills/launch-cursor-autoapprove/scripts/devtools_auto_accept.js
+  bdf5719455f8858e 3-5,17,22-23,33,188-190,218,233
+.cursor/skills/launch-cursor-autoapprove/SKILL.md
+  483f1e0df6c1e97e 1-12,22-25,27-37,48-68,70-86,90,92,95,107
+  bdf5719455f8858e 13-21,26,38-47,69,87-89,91,93-94,96-106,108-110
+.cursor/skills/launch-cursor-autoapprove/scripts/install.sh
+  bdf5719455f8858e 25,98-129,134-136,188,190-191,200,203,226
+  483f1e0df6c1e97e 1-24,26-97,130-133,137-187,189,192-199,201-202,204-225,227-233
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.3",
+  "base_commit_sha": "4a6e18e3a5710b4d99d8dc4141d6c19f53541b31",
+  "prompts": {
+    "39b746d95689c81e": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "ce2ea268-67fb-42ab-a42d-53c951810287",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 1895,
+      "total_deletions": 14,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "483f1e0df6c1e97e": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "68f7a6ca-3f72-49bb-8435-d52f32e19574",
+        "model": "gpt-5.4-xhigh"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 1875,
+      "total_deletions": 117,
+      "accepted_lines": 906,
+      "overriden_lines": 0
+    },
+    "5844b7f305c9b485": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "f122c045-477a-48ff-be86-4a7b6c520a83",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "QuentinMeow <quentinmiao@outlook.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "60fdbde6c38ac838": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "8f41b459-dd9c-4b29-874c-b12b2668c666",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 528,
+      "total_deletions": 27,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "63bdde93001ac73e": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "60f66864-1339-4380-9ec3-7c09ef297f85",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 75,
+      "total_deletions": 22,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "65a8887c802280ea": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "02fbd004-7134-40db-a1f9-a1cbb62b471c",
+        "model": "gpt-5.4-xhigh"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 888,
+      "total_deletions": 397,
+      "accepted_lines": 21,
+      "overriden_lines": 0
+    },
+    "7034c3de5c1b434c": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "c217419f-0ba3-4700-aab8-0999f60f36e5",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "QuentinMeow <quentinmiao@outlook.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "841959c7e7ec6593": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "abf909f5-6827-463e-88ba-efc19bbdcca9",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow <quentinmiao@outlook.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "8ead99644524bce4": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "7292a04b-64c9-4ffb-b573-1b06d25581ff",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow <quentinmiao@outlook.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "a9792fce7483dd3d": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "8d1bdc13-431f-4486-8449-3cc0173bd8ad",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "QuentinMeow <quentinmiao@outlook.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "b0f3d7811139cbea": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "b8fd3165-f8d2-41f4-bd64-ddfb7b88f14d",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "QuentinMeow <quentinmiao@outlook.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "b10a1e49be4502c9": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "9b3613f1-cbc6-48a9-96c7-5a0bd6837373",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 265,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "bdf5719455f8858e": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "8d906728-dabc-4f2b-961f-28214a4a0205",
+        "model": "gpt-5.4-xhigh"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 875,
+      "total_deletions": 3373,
+      "accepted_lines": 716,
+      "overriden_lines": 0
+    },
+    "d4d28b7effb6eb7f": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "4d0546a3-ccf6-4ed9-a41a-6c8c3b4a7100",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "QuentinMeow <quentinmiao@outlook.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "e3752f529d1a90c8": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "7591626a-5670-4c9a-bca8-2fcf8160afe0",
+        "model": "gpt-5.4-xhigh"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 67,
+      "total_deletions": 10,
+      "accepted_lines": 44,
+      "overriden_lines": 0
+    },
+    "e59877a5f607a434": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "756a610b-cf4c-4b5e-a291-3d9d557288aa",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 643,
+      "total_deletions": 13,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "f80725e4b096dcda": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "69c1780c-bf7f-4b09-aff0-d0de7223f189",
+        "model": "gpt-5.4-xhigh"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 393,
+      "total_deletions": 39,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    }
+  }
+}
