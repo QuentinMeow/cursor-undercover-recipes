@@ -1,0 +1,29 @@
+.cursor/skills/launch-cursor-autoapprove/scripts/launcher.py
+  ec9207235c61c6d8 22,48-49,99-104,112,118-140,338-339,347-348,446-448,504-505,545,554
+.cursor/skills/launch-cursor-autoapprove/references/implementation.md
+  ec9207235c61c6d8 24-25,28-29,39-41,71-75,79-85,90-104,122-142
+.cursor/skills/launch-cursor-autoapprove/scripts/devtools_auto_accept.js
+  ec9207235c61c6d8 18-19,36,40,183-200,224,236,243,253-255
+.cursor/skills/launch-cursor-autoapprove/SKILL.md
+  ec9207235c61c6d8 77-79,81-87,89,91,95-98
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.3",
+  "base_commit_sha": "be6208bdfa2636011ff8e1bcfd3936df9cd0911f",
+  "prompts": {
+    "ec9207235c61c6d8": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "1e565e9b-79bd-4ddb-8085-270c4f7e9e35",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 146,
+      "total_deletions": 23,
+      "accepted_lines": 146,
+      "overriden_lines": 0
+    }
+  }
+}
