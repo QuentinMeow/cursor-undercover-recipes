@@ -19,6 +19,7 @@ import http.client
 import json
 import os
 import re
+import shutil
 import signal
 import socket
 import struct
@@ -43,6 +44,8 @@ PROFILE_DIR = RUNTIME_DIR / "dedicated-profile"
 SCRIPT_DIR = Path(__file__).resolve().parent
 DOM_INJECTOR_PATH = SCRIPT_DIR / "devtools_auto_accept.js"
 INSTALLED_DOM_INJECTOR_PATH = RUNTIME_DIR / "devtools_auto_accept.js"
+
+CURSOR_DEFAULT_USER_DATA = Path.home() / "Library" / "Application Support" / "Cursor"
 
 CDP_DEFAULT_PORT = 9222
 LAUNCH_TIMEOUT = 30.0
@@ -93,8 +96,12 @@ def _clear_injector_expression() -> str:
     return """
 (() => {
   try {
-    if (globalThis.__cursorAutoAccept && typeof globalThis.__cursorAutoAccept.stop === "function") {
-      globalThis.__cursorAutoAccept.stop();
+    if (globalThis.__cursorAutoAccept) {
+      if (typeof globalThis.__cursorAutoAccept.stop === "function") {
+        globalThis.__cursorAutoAccept.stop();
+      }
+      const st = globalThis.__cursorAutoAccept.state;
+      if (st && st.titleTimer) clearInterval(st.titleTimer);
     }
   } catch (_) {}
   delete globalThis.__cursorAutoAccept;
@@ -102,8 +109,33 @@ def _clear_injector_expression() -> str:
   delete globalThis.stopAccept;
   delete globalThis.acceptStatus;
   delete globalThis.__cursorAutoAcceptScriptHash;
+  delete globalThis.__cursorAutoAcceptRepoSlug;
 })()
 """.strip()
+
+
+# ---------------------------------------------------------------------------
+# Settings sync
+# ---------------------------------------------------------------------------
+
+
+def _sync_user_settings() -> None:
+    """Copy settings.json and keybindings.json from default Cursor profile."""
+    src_user = CURSOR_DEFAULT_USER_DATA / "User"
+    dst_user = PROFILE_DIR / "User"
+
+    if not src_user.is_dir():
+        print(f"  Default Cursor profile not found at {src_user}, skipping settings sync.")
+        return
+
+    dst_user.mkdir(parents=True, exist_ok=True)
+
+    for filename in ("settings.json", "keybindings.json"):
+        src = src_user / filename
+        dst = dst_user / filename
+        if src.is_file():
+            shutil.copy2(src, dst)
+            print(f"  Synced {filename} from default profile")
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +335,8 @@ def _format_injector_hash(script_hash: str | None) -> str:
     return script_hash or "unknown"
 
 
-def _cdp_inject(port: int, auto_start: bool = True, force_reload: bool = False) -> bool:
+def _cdp_inject(port: int, auto_start: bool = True, force_reload: bool = False,
+                 repo_slug: str = "workspace") -> bool:
     """Inject the DOM auto-accept script via CDP. Returns True on success."""
     js_path = _dom_injector_path()
     if not js_path.exists():
@@ -311,6 +344,8 @@ def _cdp_inject(port: int, auto_start: bool = True, force_reload: bool = False) 
         return False
 
     script, _script_hash, _ = _load_dom_injector_script()
+    slug_preamble = f"globalThis.__cursorAutoAcceptRepoSlug = {json.dumps(repo_slug)};\n"
+    script = slug_preamble + script
     if force_reload:
         script = _clear_injector_expression() + "\n" + script
     if auto_start:
@@ -408,6 +443,9 @@ def cmd_launch(args: argparse.Namespace) -> int:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
 
+    print("Syncing user settings from default Cursor profile...")
+    _sync_user_settings()
+
     try:
         cdp_port = _cdp_find_port()
     except RuntimeError as exc:
@@ -463,7 +501,8 @@ def cmd_launch(args: argparse.Namespace) -> int:
     print(f"Cursor started (PID {pid}). Waiting for CDP to become ready...")
     time.sleep(CDP_INJECT_DELAY)
 
-    if _cdp_inject(cdp_port, auto_start=False, force_reload=True):
+    slug = _repo_slug(workspace)
+    if _cdp_inject(cdp_port, auto_start=False, force_reload=True, repo_slug=slug):
         result = _cdp_gate(cdp_port, "on", title=enabled_title)
         print("\nAuto-approve ON.")
         print(f"Window title target: {enabled_title}")
@@ -503,6 +542,7 @@ def cmd_on(_args: argparse.Namespace) -> int:
 
     current_hash = check.get("scriptHash") if isinstance(check, dict) else None
     needs_reload = check is None or (expected_hash is not None and current_hash != expected_hash)
+    slug = _repo_slug(workspace)
     if needs_reload:
         if check is None:
             print("CDP not reachable or injector missing. Re-injecting DOM script...")
@@ -511,7 +551,7 @@ def cmd_on(_args: argparse.Namespace) -> int:
                 "Reloading DOM script to match the installed injector copy "
                 f"(window={_format_injector_hash(current_hash)}, local={expected_hash})."
             )
-        if not _cdp_inject(port, auto_start=False, force_reload=True):
+        if not _cdp_inject(port, auto_start=False, force_reload=True, repo_slug=slug):
             print("Injection failed.", file=sys.stderr)
             return 1
 

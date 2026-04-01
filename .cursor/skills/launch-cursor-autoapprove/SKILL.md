@@ -74,19 +74,28 @@ lifecycle with `on`/`off`/`stop`.
 
 ## How It Works
 
-1. `launch` starts a new Cursor process with `--remote-debugging-port` and
+1. `launch` syncs `settings.json` and `keybindings.json` from your default
+   Cursor profile so editor preferences carry over to the dedicated window.
+2. `launch` starts a new Cursor process with `--remote-debugging-port` and
    `--user-data-dir` (separate profile).
-2. The launcher injects `devtools_auto_accept.js` via CDP `Runtime.evaluate`.
-3. The injector polls for approval buttons every 2s and clicks matches.
-4. `on`/`off` call `startAccept()`/`stopAccept()` via CDP -- no manual
+3. The launcher injects `devtools_auto_accept.js` via CDP `Runtime.evaluate`,
+   passing the repo slug so the script knows the project name.
+4. The injector polls for approval buttons every 2s and clicks matches.
+5. The injector continuously maintains the window title
+   (`autoapprove ✅ <repo>` or `autoapprove ⏸ <repo>`) via a 3-second
+   interval, so the title self-heals if Cursor resets it.
+6. `on`/`off` call `startAccept()`/`stopAccept()` via CDP -- no manual
    DevTools interaction needed.
-5. Process-level isolation: the dedicated window is a separate OS process,
+7. Process-level isolation: the dedicated window is a separate OS process,
    so auto-clicking cannot leak to your normal Cursor windows.
-6. The launcher also renames both the OS window title and the in-app top title
-   to `autoapprove ✅ <repo>` or `autoapprove ⏸ <repo>`.
-7. If the installed injector changed after the window was launched, `on`
+8. If the installed injector changed after the window was launched, `on`
    reloads the in-window script so the running window picks up the latest
    pattern fixes.
+
+**Note on Cursor-specific preferences**: Model selection, agent mode, and
+similar UI state live in `state.vscdb` (a per-profile SQLite database) and
+are not synced. The dedicated profile persists between launches, so set these
+once in the dedicated window and they will stick.
 
 ## Testing
 

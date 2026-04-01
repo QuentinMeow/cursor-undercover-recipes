@@ -21,9 +21,12 @@ repo.
 The launcher owns process lifecycle and CDP communication:
 
 - `launch` starts a new Cursor process with its own `--user-data-dir`
+- `launch` syncs `settings.json` and `keybindings.json` from the default
+  Cursor profile before starting the process
 - `on` / `off` / `status` / `stop` talk back to that same process
 - state is stored in `~/.cursor/launch-autoapprove/state.json`
-- the launcher updates the window title so the gate state is visible
+- the launcher passes the repo slug to the injector so the script can
+  self-maintain the window title
 
 ### `scripts/devtools_auto_accept.js`
 
@@ -33,6 +36,9 @@ The DOM injector runs inside the dedicated Cursor window's renderer process:
 - looks for visible, clickable approval elements
 - clicks them with pointer, mouse, focus, and Enter events
 - tracks click count plus recent click history
+- continuously maintains the window title (`autoapprove ✅/⏸ <repo>`)
+  via a separate 3-second interval, so title recovers automatically if
+  Cursor resets it
 
 ### `scripts/install.sh`
 
@@ -62,21 +68,40 @@ After a global install, the relevant files are:
 When you run `aa launch ~/code/my-project`, the launcher:
 
 1. Finds a free CDP port near `9222`.
-2. Records the set of current Cursor main-process PIDs.
-3. Launches a new Cursor process with:
+2. Syncs `settings.json` and `keybindings.json` from the default Cursor profile
+   (`~/Library/Application Support/Cursor/User/`) into the dedicated profile so
+   editor preferences carry over.
+3. Records the set of current Cursor main-process PIDs.
+4. Launches a new Cursor process with:
    - `--remote-debugging-port=<port>`
    - `--user-data-dir ~/.cursor/launch-autoapprove/dedicated-profile`
    - the requested workspace path
-4. Waits for a new Cursor main PID to appear.
-5. Saves the PID, port, workspace, and timestamp to `state.json`.
-6. Loads `devtools_auto_accept.js`, computes a short content hash, and injects
-   that hash into the page before the script runs.
-7. Injects the script via CDP `Runtime.evaluate`.
-8. Calls `startAccept()` and updates the window title to
-   `autoapprove ✅ <repo>`.
+5. Waits for a new Cursor main PID to appear.
+6. Saves the PID, port, workspace, and timestamp to `state.json`.
+7. Loads `devtools_auto_accept.js`, computes a short content hash, prepends the
+   hash and the repo slug as globals, and injects the script via CDP
+   `Runtime.evaluate`.
+8. Calls `startAccept()`. The injected script continuously maintains the window
+   title to `autoapprove ✅ <repo>` (or `⏸` when paused).
 
 The dedicated profile is important. It keeps the launched window separate from
 your normal Cursor profile and makes the process boundary obvious.
+
+## Settings Sync
+
+The dedicated Cursor instance uses a separate `--user-data-dir`, which means it
+starts with a blank profile. To avoid losing your editor preferences, the
+launcher copies these files from your default Cursor profile at each launch:
+
+- `User/settings.json` (editor preferences, terminal config, git path, etc.)
+- `User/keybindings.json`
+
+Cursor-specific state like model preferences and agent mode live in
+`User/globalStorage/state.vscdb`, a SQLite database that also holds auth tokens
+and workspace-specific state. This database is **not** copied because merging it
+is fragile and risks auth conflicts. The dedicated profile persists between
+launches, so once you set your model preference or agent mode in the dedicated
+window, it stays.
 
 ## Why `on` Can Refresh Stale Code
 
@@ -93,6 +118,27 @@ To fix that drift, `launcher.py on` now:
 
 This gives you a clean way to refresh a running dedicated window after a skill
 update without manually opening DevTools and pasting code again.
+
+## Continuous Title Maintenance
+
+Cursor's own title management resets `document.title` on file changes, workspace
+switches, and focus events. A one-shot title update via CDP would be overwritten
+within seconds.
+
+To solve this, the injected script runs a separate `setInterval` (every 3s) that
+continuously sets the window title based on its own running/paused state:
+
+- `autoapprove ✅ <repo>` when the approval timer is running
+- `autoapprove ⏸ <repo>` when paused
+
+The repo slug is passed from the launcher as
+`globalThis.__cursorAutoAcceptRepoSlug` during injection. The title interval
+starts on script load (even before `startAccept()` is called), so the window
+always shows its auto-approve status. `start()` and `stop()` also call
+`_syncTitle()` immediately for instant visual feedback.
+
+On cleanup (`force_reload` or manual clear), the title interval is stopped
+alongside the approval timer.
 
 ## DOM Matching Strategy
 
