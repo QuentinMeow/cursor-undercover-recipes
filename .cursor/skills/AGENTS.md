@@ -11,7 +11,8 @@ Use this file when editing anything under `.cursor/skills/`. This is the canonic
 - `<skill-name>/README.md` -- short public overview for new users.
 - `<skill-name>/AGENTS.md` -- skill-specific agent maintenance guide.
 - `<skill-name>/SKILL.md` -- one skill's agent instructions.
-- `<skill-name>/reference.md` -- deeper material linked from SKILL.md.
+- `<skill-name>/reference.md` -- a single deeper reference doc for smaller skills.
+- `<skill-name>/references/` -- load-on-demand docs for skills with multiple deep guides or references.
 - `<skill-name>/scripts/` -- utility scripts owned by that skill.
 - `<skill-name>/logs/<run-id>/` -- local artifacts (gitignored).
 
@@ -35,7 +36,8 @@ ls .cursor/skills/
 - Every skill directory should include `README.md`, `AGENTS.md`, and `SKILL.md`.
 - Keep each skill `README.md` short and public-facing: what it does, how to use it, and how it works in short.
 - Keep each skill `AGENTS.md` agent-only: ownership, read order, edit guardrails, and verification.
-- Keep `SKILL.md` under 500 lines; use `reference.md` for overflow.
+- Keep `SKILL.md` under 500 lines; use `reference.md` for a single overflow doc
+  or `references/` when the skill has multiple deep docs.
 - Keep file references one level deep from SKILL.md.
 - Update `README.md` when adding or removing a skill.
 - Do not restate the same policy in multiple places.

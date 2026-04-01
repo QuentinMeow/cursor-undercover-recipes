@@ -12,9 +12,11 @@ Every skill is a directory under `.cursor/skills/<skill-name>/` containing:
 | `README.md` | Yes | Short human-facing overview for new users: what the skill does, how to use it, and how it works in short |
 | `AGENTS.md` | Yes | Agent-facing ownership, read order, edit rules, and verification expectations for this skill folder |
 | `SKILL.md` | Yes | Agent-facing entry point with YAML frontmatter (`name`, `description`) used for skill discovery and invocation |
-| `reference.md` | No | Detailed reference material linked from `README.md` or `SKILL.md` |
+| `reference.md` | No | A single detailed reference doc linked from `README.md` or `SKILL.md` |
+| `references/` | No | Load-on-demand docs when a skill grows multiple deep guides or references |
 | `examples.md` | No | Concrete usage examples |
 | `scripts/` | No | Utility scripts owned by the skill |
+| `tests/` | No | Validation scripts and fixtures for skills with automated coverage |
 | `logs/<run-id>/` | No | Local artifacts from skill runs (gitignored) |
 
 ## Audience Split
@@ -37,6 +39,18 @@ description: >-
 
 The `description` drives skill discovery -- the agent uses it to decide when to apply the skill. Include both WHAT it does and WHEN to use it.
 
+## Testing Declaration
+
+Every skill's `SKILL.md` should include a short `## Testing` section that does
+one of the following:
+
+1. Lists the canonical automated test command(s) or script location and when to
+   run them.
+2. Says `No automated tests required for this skill.` and gives a short reason.
+
+This section is the canonical place for future agents to decide whether to run
+tests or ask the user about adding them.
+
 ## Naming
 
 - Use lowercase kebab-case for directory names.
@@ -44,9 +58,11 @@ The `description` drives skill discovery -- the agent uses it to decide when to 
 
 ## Authoring Guidelines
 
-- Keep `README.md` concise and skimmable; push deep troubleshooting and edge cases into `reference.md`.
+- Keep `README.md` concise and skimmable; push deep troubleshooting and edge
+  cases into `reference.md` or `references/`.
 - Keep `AGENTS.md` focused on maintenance guidance rather than user onboarding.
-- Keep `SKILL.md` under 500 lines. Offload detail to `reference.md`.
+- Keep `SKILL.md` under 500 lines. Offload detail to `reference.md` for a
+  single deep doc, or to `references/` when the skill has multiple deep docs.
 - Keep file references one level deep from SKILL.md (no nested chains).
 - Assume the agent is smart -- only add context it would not already have.
 - Provide concrete examples over abstract explanations.
@@ -60,6 +76,7 @@ Put essential instructions in SKILL.md. Link to deeper material:
 ```markdown
 ## Additional Reference
 - For full API details, see [reference.md](reference.md)
+- For multi-guide skills, it is also fine to link to [references/foo.md](references/foo.md)
 - For usage examples, see [examples.md](examples.md)
 ```
 
@@ -84,3 +101,5 @@ Skills that support cross-repo installation should include a `scripts/install.sh
 - Update `.cursor/skills/README.md` when adding or removing a skill.
 - Update `.cursor/skills/AGENTS.md` when changing edit or artifact conventions.
 - Create or backfill `README.md` and `AGENTS.md` for legacy skill folders when touching them.
+- Backfill a `## Testing` section in `SKILL.md` when touching a legacy skill
+  that lacks one.

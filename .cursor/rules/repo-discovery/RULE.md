@@ -7,7 +7,7 @@ alwaysApply: true
 | Path | What lives here |
 |------|-----------------|
 | `.cursor/rules/<name>/RULE.md` | Cursor project rules (always-on or glob-scoped) |
-| `.cursor/skills/<name>/SKILL.md` | Shared skills with optional `reference.md`, `scripts/`, `logs/` |
+| `.cursor/skills/<name>/SKILL.md` | Shared skills with optional `reference.md` or `references/`, plus `scripts/` and `logs/` |
 | `.agents/inputs/` | Seed material, conversation exports, design notes |
 | `.agents/worklog/` | Per-conversation artifacts and reports (gitignored) |
 | `README.md` | Human-facing docs at any level |

@@ -1,5 +1,5 @@
 ---
-description: Skill learning framework — automated issue tracking, testing, and lesson extraction for all skills
+description: Skill learning framework — testing policy, issue tracking, and lesson extraction for all skills
 globs: ".cursor/skills/**"
 alwaysApply: false
 ---
@@ -12,17 +12,34 @@ must record what happened, why, and what general principle prevents recurrence.
 This creates a feedback loop that makes each skill more reliable without human
 intervention.
 
-## Required Directories
+## Required Skill Feedback Files
 
-Every skill under `.cursor/skills/<skill-name>/` must include:
+Every skill under `.cursor/skills/<skill-name>/` should account for these
+feedback files:
 
 | Path | Purpose |
 |------|---------|
-| `tests/` | Validation scripts, fixtures, and expected-output files |
+| `tests/` | Validation scripts, fixtures, and expected-output files for skills with automated coverage |
 | `issues/` | Structured issue records (one file per issue) |
 | `LESSONS.md` | Accumulated generic lessons extracted from resolved issues |
 
-Create these directories when first working on any skill that lacks them.
+Do not add placeholder tests just to satisfy structure. If a skill intentionally
+has no automated coverage, document that in `SKILL.md` instead.
+
+## Testing Declaration
+
+Every skill's `SKILL.md` must include a short `## Testing` section with one of
+these outcomes:
+
+1. The canonical automated test command(s) or script location and when to run
+   them.
+2. `No automated tests required for this skill.` plus a short reason.
+
+If you touch a skill and it has neither documented tests nor an explicit
+exemption, ask the user whether they want tests added. Do not silently decide.
+
+If the user says no tests are needed, record that decision in the skill's
+`SKILL.md` in the same change so future agents can bypass the question.
 
 ## Issue Recording
 
@@ -65,8 +82,11 @@ The generic principle extracted (copied verbatim into LESSONS.md when resolved).
 
 ## Test Expectations
 
-- `tests/` must contain at least one runnable validation script per skill.
-- After making changes to a skill, run its tests. Record failures as issues.
+- Skills with automated coverage should keep at least one runnable validation
+  script under `tests/`.
+- After making behavior or script changes to a skill with documented tests, run
+  the documented tests. Record failures as issues.
+- Documentation-only edits may skip tests unless the user asks for validation.
 - Tests should produce machine-readable output (JSON, exit codes) so agents
   can programmatically verify pass/fail rather than interpreting prose.
 
@@ -128,4 +148,5 @@ lessons.
 1. Check `LESSONS.md` before modifying a skill — it contains hard-won
    operational knowledge.
 2. Check `issues/` for open issues before starting new work on a skill.
-3. Run `tests/` after making changes to verify nothing regressed.
+3. Run the documented tests after making changes when the skill has automated
+   coverage.

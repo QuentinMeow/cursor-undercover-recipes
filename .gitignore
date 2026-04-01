@@ -15,6 +15,7 @@
 
 # Skill-local logs/artifacts (must come after the whitelist)
 .cursor/skills/**/logs/
+.cursor/skills/**/runtime/
 
 # Legacy .mdc rule files (deprecated format)
 .cursor/rules/*.mdc
