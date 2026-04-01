@@ -11,7 +11,7 @@ This repo is a library of reusable Cursor rules and skills. It is the versioned 
 | `.cursor/rules/<name>/RULE.md` | Committed Cursor project rules |
 | `.cursor/skills/<name>/SKILL.md` | Committed shared skills |
 | `.cursor/skills/<name>/scripts/` | Utility scripts owned by a skill |
-| `.cursor/skills/<name>/reference.md` | Detailed reference for a skill |
+| `.cursor/skills/<name>/reference.md` or `.cursor/skills/<name>/references/` | Detailed reference material for a skill |
 | `.agents/inputs/` | Seed material, conversation exports, design notes |
 | `.agents/worklog/<timestamp>-<slug>.md` | Per-conversation artifacts (gitignored) |
 | `README.md` | Human-facing repo overview |
@@ -26,8 +26,8 @@ ls .cursor/rules/
 # List all skills
 ls .cursor/skills/
 
-# Run the auto-approval installer in dry-run mode
-.cursor/skills/cursor-autoapprove/scripts/install.sh --dry-run --target global
+# Run the supported auto-approval installer in dry-run mode
+.cursor/skills/launch-cursor-autoapprove/scripts/install.sh --dry-run --target global
 ```
 
 ## Guidance to AI Agent Tasks

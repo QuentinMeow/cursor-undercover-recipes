@@ -26,11 +26,11 @@ Cursor automatically picks up rules from `.cursor/rules/` and skills from `.curs
 Each skill under `.cursor/skills/<skill-name>/` includes its own setup instructions in `SKILL.md`. Skills that support cross-repo installation ship an `install.sh` helper:
 
 ```bash
-# Install the auto-approval skill into your personal global Cursor config
-.cursor/skills/cursor-autoapprove/scripts/install.sh --target global
+# Install the supported auto-approval skill into your personal global Cursor config
+.cursor/skills/launch-cursor-autoapprove/scripts/install.sh --target global --force
 
 # Sync into another repo
-.cursor/skills/cursor-autoapprove/scripts/install.sh --target /path/to/other-repo
+.cursor/skills/launch-cursor-autoapprove/scripts/install.sh --target /path/to/other-repo --force
 ```
 
 ## Layout
