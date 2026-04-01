@@ -1,0 +1,55 @@
+.cursor/skills/README.md
+  bdf5719455f8858e 26-30
+  65a8887c802280ea 5-7,17-18,38-39
+README.md
+  bdf5719455f8858e 29-30,33
+AGENTS.md
+  65a8887c802280ea 14
+  bdf5719455f8858e 29-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.3",
+  "base_commit_sha": "152eb891c9b13c4cc3bea703c5869ff00e7a2134",
+  "prompts": {
+    "65a8887c802280ea": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "02fbd004-7134-40db-a1f9-a1cbb62b471c",
+        "model": "gpt-5.4-xhigh"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 21,
+      "overriden_lines": 0
+    },
+    "bdf5719455f8858e": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "8d906728-dabc-4f2b-961f-28214a4a0205",
+        "model": "gpt-5.4-xhigh"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 10,
+      "overriden_lines": 0
+    },
+    "e3752f529d1a90c8": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "7591626a-5670-4c9a-bca8-2fcf8160afe0",
+        "model": "gpt-5.4-xhigh"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 44,
+      "overriden_lines": 0
+    }
+  }
+}
