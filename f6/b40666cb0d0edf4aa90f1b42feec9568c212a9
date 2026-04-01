@@ -1,0 +1,45 @@
+.cursor/skills/AGENTS.md
+  65a8887c802280ea 14-15,39-40
+.cursor/rules/skill-learning/RULE.md
+  e3752f529d1a90c8 2,15,17-18,22,26-27,29-42,85-89,151-152
+.cursor/rules/skill-conventions/RULE.md
+  65a8887c802280ea 15-16,61-62,64-65,79
+  e3752f529d1a90c8 19,42-53,104-105
+.gitignore
+  65a8887c802280ea 18
+.cursor/rules/repo-discovery/RULE.md
+  65a8887c802280ea 10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.3",
+  "base_commit_sha": "f6b40666cb0d0edf4aa90f1b42feec9568c212a9",
+  "prompts": {
+    "65a8887c802280ea": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "02fbd004-7134-40db-a1f9-a1cbb62b471c",
+        "model": "gpt-5.4-xhigh"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 13,
+      "overriden_lines": 0
+    },
+    "e3752f529d1a90c8": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "7591626a-5670-4c9a-bca8-2fcf8160afe0",
+        "model": "gpt-5.4-xhigh"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 44,
+      "overriden_lines": 0
+    }
+  }
+}
