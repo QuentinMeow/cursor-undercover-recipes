@@ -1,0 +1,57 @@
+.cursor/rules/repo-discovery/RULE.md
+  7b661cdd2424c524 31
+.cursor/rules/memory-keeper/RULE.md
+  7b661cdd2424c524 1-78
+.gitignore
+  7b661cdd2424c524 16-18
+.cursor/rules/memory-keeper/install.sh
+  7b661cdd2424c524 1-214
+.cursor/rules/memory-keeper/templates/MEMORY.md
+  7b661cdd2424c524 1-38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "5af0af585ccaa2d2aadba6efb01d8cbb88352a00",
+  "prompts": {
+    "57c356a212c798a0": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "3156e616-0777-4a70-aa5e-4b1eb6e915aa",
+        "model": "gpt-5.4-medium"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 23,
+      "total_deletions": 23,
+      "accepted_lines": 21,
+      "overriden_lines": 0
+    },
+    "7b661cdd2424c524": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "73f3cc23-e102-414b-906e-7d2955dc59eb",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 334,
+      "total_deletions": 0,
+      "accepted_lines": 334,
+      "overriden_lines": 0
+    },
+    "82c81204708ce937": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "75c80821-aa55-4852-86e9-e73025e38152",
+        "model": "gpt-5.4-xhigh"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 665,
+      "total_deletions": 160,
+      "accepted_lines": 583,
+      "overriden_lines": 6
+    }
+  }
+}
