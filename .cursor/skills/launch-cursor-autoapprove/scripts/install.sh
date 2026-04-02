@@ -33,6 +33,11 @@ FORCE=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --target)
+            if [[ $# -lt 2 || "$2" == -* ]]; then
+                echo "Error: --target requires 'global' or /path/to/repo" >&2
+                usage >&2
+                exit 1
+            fi
             TARGET="$2"
             shift 2
             ;;
@@ -193,40 +198,49 @@ copy_tree "$SKILL_DIR/references" "$DEST_SKILL/references"
 echo ""
 echo "=== Verification ==="
 if $DRY_RUN; then
+    echo "[dry-run] would run: /usr/bin/python3 $DEST_LAUNCHER/launcher.py help"
     echo "[dry-run] would run: /usr/bin/python3 $DEST_LAUNCHER/launcher.py status"
 else
-    if /usr/bin/python3 "$DEST_LAUNCHER/launcher.py" status 2>/dev/null; then
+    if /usr/bin/python3 "$DEST_LAUNCHER/launcher.py" help >/dev/null && \
+       /usr/bin/python3 "$DEST_LAUNCHER/launcher.py" status; then
         echo ""
-        echo "Installation successful. Launcher status command ran."
+        echo "Installation successful. Launcher help/status commands ran."
     else
         echo ""
-        echo "WARNING: launcher status command failed. Check that Python 3.9+ is available at /usr/bin/python3"
+        echo "WARNING: launcher help/status verification failed. Check that Python 3.10+ is available at /usr/bin/python3"
     fi
 fi
 
 echo ""
 echo "=== Next Steps ==="
 if [[ "$TARGET" == "global" ]]; then
+    LAUNCH_STEP=2
+    TOGGLE_STEP=3
+    ALIAS_STEP=4
     echo "1. In Cursor, invoke the global skill as: /$DEST_SKILL_NAME"
     echo "   This tells the agent to open the dedicated auto-approve window for you."
     echo ""
-    echo "2. Or launch directly from a terminal:"
+    echo "$LAUNCH_STEP. Or launch directly from a terminal:"
 else
-    echo "1. Launch directly from a terminal:"
+    LAUNCH_STEP=1
+    TOGGLE_STEP=2
+    ALIAS_STEP=3
+    echo "$LAUNCH_STEP. Launch directly from a terminal:"
 fi
 echo "   /usr/bin/python3 $DEST_LAUNCHER/launcher.py launch ~/code/my-project"
 echo ""
-echo "3. Toggle the dedicated window gate on/off:"
+echo "$TOGGLE_STEP. Toggle the dedicated window gate, inspect state, or open command help:"
 echo "   /usr/bin/python3 $DEST_LAUNCHER/launcher.py on"
 echo "   /usr/bin/python3 $DEST_LAUNCHER/launcher.py off"
 echo "   /usr/bin/python3 $DEST_LAUNCHER/launcher.py status"
 echo "   /usr/bin/python3 $DEST_LAUNCHER/launcher.py stop"
+echo "   /usr/bin/python3 $DEST_LAUNCHER/launcher.py help"
 echo ""
-echo "4. For quick access, add this alias to your ~/.zshrc or ~/.bashrc:"
-echo "   alias aa='/usr/bin/python3 \"$DEST_LAUNCHER/launcher.py\"'"
+echo "$ALIAS_STEP. For quick access, add this alias to your ~/.zshrc or ~/.bashrc:"
+echo "   alias caa='/usr/bin/python3 \"$DEST_LAUNCHER/launcher.py\"'"
 echo ""
-echo "   Then use:  aa launch ~/code/my-project"
-echo "              aa on  |  aa off  |  aa status  |  aa stop"
+echo "   Then use:  caa launch ~/code/my-project"
+echo "              caa on  |  caa off  |  caa status  |  caa stop  |  caa help"
 if [[ "$TARGET" == "global" ]]; then
     echo ""
     echo "5. The global slash-command name is: /$DEST_SKILL_NAME"

@@ -13,6 +13,10 @@ window is actually clicking real Cursor approval prompts.
 bash "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/scripts/install.sh" --target global --force
 ```
 
+These repo-local install commands assume you are running from this repo
+checkout, since they use `git rev-parse --show-toplevel` to locate the repo
+root.
+
 2. Define the installed launcher path:
 
 ```bash
@@ -36,6 +40,18 @@ You should see:
 - `Gate: ON`
 - an `Injector:` hash
 - a window title like `autoapprove ✅ <repo>`
+
+5. Smoke-test the command help:
+
+```bash
+/usr/bin/python3 "$LAUNCHER" help
+/usr/bin/python3 "$LAUNCHER" help off
+```
+
+Expected result:
+
+- `help` shows example commands plus deeper doc paths
+- `help off` shows the `off` usage plus examples
 
 ## Important Testing Note
 
@@ -122,6 +138,55 @@ Expected result:
 - the task completes without a manual click
 - `status` shows new `Allow` or `Run` entries under `Recent`
 
+## Test 4: Interactive Session Picker
+
+Launch a second workspace so two sessions are active, then verify ambiguous
+commands open the picker instead of failing immediately:
+
+1. Pick a second existing workspace, then run:
+
+```bash
+SECOND_WORKSPACE="$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/references"
+/usr/bin/python3 "$LAUNCHER" launch "$SECOND_WORKSPACE"
+```
+
+2. Confirm both sessions are visible:
+
+```bash
+/usr/bin/python3 "$LAUNCHER" status
+```
+
+3. Run each of these from an interactive terminal and use arrow keys plus Enter
+   to choose a session:
+
+```bash
+/usr/bin/python3 "$LAUNCHER" off
+/usr/bin/python3 "$LAUNCHER" on
+/usr/bin/python3 "$LAUNCHER" stop
+```
+
+4. Re-launch a stopped session if needed, then try cancelling the picker with
+   `q` or `Esc`.
+
+5. Verify the non-interactive fallback does not hang:
+
+```bash
+printf '' | /usr/bin/python3 "$LAUNCHER" off
+```
+
+Expected result:
+
+- the picker appears for ambiguous `on` / `off` / `stop`
+- arrow keys move the selection and Enter runs the chosen action
+- `q` or `Esc` cancels without changing session state
+- bare `status` still shows all sessions
+- if you intentionally create duplicate slugs, `status -w <slug>` also uses the
+  picker
+- with multiple running sessions, the piped `off` command exits quickly with a
+  session list and guidance to use `-w` or an interactive terminal
+- with exactly one running session, the piped `off` command succeeds without a
+  picker
+
 ## Best Evidence
 
 Run `/usr/bin/python3 "$LAUNCHER" status` after each burst and compare:
@@ -153,7 +218,7 @@ Expected result:
 - `status` still reports `Gate: ON`
 - the `Injector:` hash matches the newly installed script
 
-## Optional Test 4: Panel/Alternate Surface Prompt Coverage
+## Optional Test 5: Panel/Alternate Surface Prompt Coverage
 
 If your workflow surfaces prompts outside the main chat area (for example panel
 or alternate composer surfaces), verify one such prompt while gate is ON.
