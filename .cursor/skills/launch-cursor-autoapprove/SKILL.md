@@ -31,6 +31,12 @@ details.
 bash "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/scripts/install.sh" --target global --force
 ```
 
+Useful flags:
+
+- `--target global` or `--target /path/to/repo`
+- `--force` to overwrite existing installed files
+- `--dry-run` to preview install actions
+
 Global installs appear in Cursor as `/global-launch-cursor-autoapprove`.
 The runtime helper stays at `~/.cursor/launch-autoapprove/launcher.py`; `aa` is
 the optional short alias for later `on`/`off`/`status`/`stop` toggles.
@@ -66,11 +72,13 @@ lifecycle with `on`/`off`/`stop`.
 
 | Command | What it does |
 |---------|-------------|
-| `launch [--workspace PATH] [PATH]` | Open dedicated Cursor, inject DOM script, gate ON |
-| `on` | Resume auto-clicking (`startAccept()` via CDP) |
-| `off` | Pause auto-clicking (`stopAccept()` via CDP) |
-| `status` | Show gate state and click count |
-| `stop` | Pause gate and close the dedicated Cursor |
+| `launch [--workspace PATH] [PATH]` | Open dedicated Cursor, inject DOM script, gate ON. Exits if another dedicated session is active; run `stop` first. |
+| `on` | Resume auto-clicking (`startAccept()` via CDP). Reloads stale in-window injector code when hash differs. |
+| `off` | Pause auto-clicking (`stopAccept()` via CDP) while keeping the dedicated window open. |
+| `status` | Show PID, CDP port, workspace, gate state, click count, injector hash, and recent clicks. |
+| `stop` | Pause gate, close dedicated Cursor process, and clear launcher session state. |
+
+`inject` / `--restart` are not part of this supported launcher surface.
 
 ## How It Works
 
@@ -96,6 +104,11 @@ lifecycle with `on`/`off`/`stop`.
 similar UI state live in `state.vscdb` (a per-profile SQLite database) and
 are not synced. The dedicated profile persists between launches, so set these
 once in the dedicated window and they will stick.
+
+If you previously used the retired `cursor-autoapprove` approach, remove stale
+global artifacts (`~/.cursor/skills/global-cursor-autoapprove/`,
+`~/.cursor/auto-approval/`, and old `beforeShellExecution` hook entries in
+`~/.cursor/hooks.json`) to avoid conflicts.
 
 ## Testing
 

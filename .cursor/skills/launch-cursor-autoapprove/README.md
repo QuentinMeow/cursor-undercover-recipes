@@ -2,13 +2,12 @@
 
 ## Summary
 
-`launch-cursor-autoapprove` is the supported auto-approval skill in this repo.
-It opens a dedicated Cursor window, injects a DOM-based auto-clicker via the
-Chrome DevTools Protocol (CDP), and lets you pause or resume that window with
-simple `on` / `off` commands.
+`launch-cursor-autoapprove` is the supported auto-approval workflow in this
+repo. It launches a dedicated Cursor process, injects a DOM auto-accept script
+via CDP, and lets you toggle the gate with simple `on` / `off` commands.
 
-Because the dedicated window is its own Cursor process, auto-clicking stays
-isolated from your normal editing windows.
+The dedicated window is isolated at process level, so auto-clicking does not
+spill into your normal Cursor windows.
 
 ## Quick Start
 
@@ -24,13 +23,15 @@ isolated from your normal editing windows.
 bash "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/scripts/install.sh" --target global --force
 ```
 
-Global installs appear in Cursor as `/global-launch-cursor-autoapprove`. The
-runtime helper lives at `~/.cursor/launch-autoapprove/launcher.py`.
+Global installs appear in Cursor as `/global-launch-cursor-autoapprove`.
+Runtime files live under `~/.cursor/launch-autoapprove/`.
 
-Repo-local installs are also supported with `--target /path/to/repo`. That
-copies the skill docs plus a launcher entrypoint into that repo's `.cursor/`,
-while the dedicated runtime state and profile remain under
-`~/.cursor/launch-autoapprove/`.
+Useful install flags:
+
+- `--target global` installs for your user profile.
+- `--target /path/to/repo` installs docs/entrypoint into another repo.
+- `--force` overwrites existing installed files.
+- `--dry-run` shows planned changes without writing files.
 
 ### Optional Alias
 
@@ -38,33 +39,60 @@ while the dedicated runtime state and profile remain under
 alias aa='/usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py"'
 ```
 
-### Launch a Dedicated Window
+### Launch and Control
 
 ```bash
-/usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py" launch ~/code/my-project
+/usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py" launch --workspace ~/code/my-project
 ```
 
-If you added the alias above, `aa launch ~/code/my-project` works too.
-
-### Toggle the Gate Later
+If you set the alias:
 
 ```bash
-/usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py" on
-/usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py" off
-/usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py" status
-/usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py" stop
+aa launch ~/code/my-project
+aa on
+aa off
+aa status
+aa stop
 ```
 
-## How It Works
+### Command Reference
 
-1. `launch` starts a new Cursor process with its own `--user-data-dir` and
-   `--remote-debugging-port`.
-2. The launcher injects `devtools_auto_accept.js` into that window's renderer
-   and starts polling for approval buttons like `Run`, `Allow`, `Accept`, and
-   `Apply`.
-3. Later `on` / `off` / `status` calls talk to the same window over CDP. If the
-   installed injector changed since the window was launched, `on` reloads the
-   in-window script so the window picks up the latest fixes.
+| Command | Behavior |
+|---|---|
+| `launch [--workspace PATH] [PATH]` | Start dedicated Cursor process, inject script, gate ON. If a dedicated session is already active, this exits and asks you to `stop` first. |
+| `on` | Turn gate ON. Reloads injector code when in-window hash differs from the current injector file. |
+| `off` | Turn gate OFF without closing the dedicated window. |
+| `status` | Show PID, CDP port, workspace, gate state, click count, injector hash, current title, recent clicks. |
+| `stop` | Turn gate OFF, close the dedicated Cursor process, and clear local session state. |
+
+## Important Behavior
+
+- Uses a dedicated profile at `~/.cursor/launch-autoapprove/dedicated-profile/`.
+- Copies only `settings.json` and `keybindings.json` from your default profile.
+- Does **not** copy `state.vscdb` (chat history/account/model state remain profile-specific).
+- There is no `inject --restart` command in this supported launcher.
+- `stop` ends the session and closes the dedicated process; the dedicated profile
+  folder persists for reuse on the next `launch`.
+
+## Safety and Limits
+
+- Matching now uses exact normalized labels (not substring matching), with
+  keyboard-hint stripping and excluded zones for explorer/editor to reduce
+  false clicks.
+- The script still relies on Cursor's DOM structure; major UI changes can break
+  matching or require pattern updates.
+- Keep the gate OFF (`aa off`) when doing sensitive UI actions in the dedicated
+  window that are unrelated to approvals.
+
+## Migration Note (Retired Approach Cleanup)
+
+If you previously used the retired `cursor-autoapprove` workflow, remove stale
+artifacts to avoid conflicts:
+
+- `~/.cursor/skills/global-cursor-autoapprove/`
+- `~/.cursor/auto-approval/`
+- old `beforeShellExecution` entries in `~/.cursor/hooks.json` that point to
+  `~/.cursor/auto-approval/cursor_auto_approval.py`
 
 ## Deep Dive
 
