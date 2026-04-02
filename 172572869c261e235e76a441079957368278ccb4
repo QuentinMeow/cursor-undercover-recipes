@@ -1,0 +1,27 @@
+.cursor/skills/personal-gh-account-switch/README.md
+  57c356a212c798a0 1-20
+.cursor/skills/personal-gh-account-switch/AGENTS.md
+  57c356a212c798a0 1-29
+.cursor/skills/personal-gh-account-switch/SKILL.md
+  57c356a212c798a0 1-58
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "172572869c261e235e76a441079957368278ccb4",
+  "prompts": {
+    "57c356a212c798a0": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "3156e616-0777-4a70-aa5e-4b1eb6e915aa",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 107,
+      "total_deletions": 0,
+      "accepted_lines": 107,
+      "overriden_lines": 0
+    }
+  }
+}
