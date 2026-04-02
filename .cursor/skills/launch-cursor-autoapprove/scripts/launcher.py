@@ -8,24 +8,29 @@ Subcommands:
     off     Pause auto-clicking (stopAccept via CDP)
     status  Show gate state and click count
     stop    Pause gate and end session
+    help    Show usage examples and deeper docs
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import hashlib
 import http.client
 import json
 import os
 import re
+import select
 import shutil
 import signal
 import socket
 import struct
 import subprocess
 import sys
+import termios
 import time
+import tty
 import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,7 +44,7 @@ CURSOR_EXECUTABLE = CURSOR_APP_PATH / "Contents" / "MacOS" / "Cursor"
 
 RUNTIME_DIR = Path.home() / ".cursor" / "launch-autoapprove"
 STATE_PATH = RUNTIME_DIR / "state.json"
-PROFILE_DIR = RUNTIME_DIR / "dedicated-profile"
+GLOBAL_SKILL_DIR = Path.home() / ".cursor" / "skills" / "global-launch-cursor-autoapprove"
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DOM_INJECTOR_PATH = SCRIPT_DIR / "devtools_auto_accept.js"
@@ -57,27 +62,60 @@ CDP_INJECT_RETRIES = 6
 # ---------------------------------------------------------------------------
 
 
+def _profile_dir(slug: str) -> Path:
+    """Per-workspace dedicated profile directory."""
+    return RUNTIME_DIR / f"dedicated-profile-{slug}"
+
+
 def _load_state() -> dict:
-    if STATE_PATH.exists():
-        try:
-            return json.loads(STATE_PATH.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            pass
-    return {}
+    """Load multi-session state. Auto-migrates legacy single-session format."""
+    if not STATE_PATH.exists():
+        return {"sessions": {}}
+    try:
+        raw = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {"sessions": {}}
+    if "sessions" in raw:
+        return raw
+    # Legacy single-session format: wrap into multi-session and migrate profile dir
+    if "pid" in raw and "workspace" in raw:
+        ws = raw["workspace"]
+        slug = _repo_slug(ws)
+        raw["slug"] = slug
+        new_state = {"sessions": {ws: raw}}
+        legacy_profile = RUNTIME_DIR / "dedicated-profile"
+        target_profile = _profile_dir(slug)
+        if legacy_profile.is_dir() and not target_profile.exists():
+            legacy_profile.rename(target_profile)
+        _save_state(new_state)
+        return new_state
+    return {"sessions": {}}
 
 
 def _save_state(state: dict) -> None:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    tmp = STATE_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    tmp.replace(STATE_PATH)
 
 
-def _clear_state() -> None:
+def _remove_session(workspace: str) -> None:
+    """Remove a single session entry from state."""
+    state = _load_state()
+    state["sessions"].pop(workspace, None)
+    if state["sessions"]:
+        _save_state(state)
+    else:
+        _clear_all_state()
+
+
+def _clear_all_state() -> None:
     try:
         STATE_PATH.unlink()
     except FileNotFoundError:
         pass
     except OSError:
-        _save_state({})
+        _save_state({"sessions": {}})
 
 
 def _dom_injector_path() -> Path:
@@ -120,15 +158,129 @@ def _clear_injector_expression() -> str:
 """.strip()
 
 
+def _skill_doc_dir() -> Path | None:
+    local_skill_dir = SCRIPT_DIR.parent
+    if (local_skill_dir / "SKILL.md").is_file():
+        return local_skill_dir
+    repo_target_skill_dir = SCRIPT_DIR.parent / "skills" / "launch-cursor-autoapprove"
+    if (repo_target_skill_dir / "SKILL.md").is_file():
+        return repo_target_skill_dir
+    if (GLOBAL_SKILL_DIR / "SKILL.md").is_file():
+        return GLOBAL_SKILL_DIR
+    return None
+
+
+def _help_doc_lines() -> list[str]:
+    lines = [
+        "Dive deeper:",
+        "  caa <command> --help",
+    ]
+    doc_dir = _skill_doc_dir()
+    if doc_dir:
+        lines.extend([
+            f"  README: {doc_dir / 'README.md'}",
+            f"  Implementation: {doc_dir / 'references' / 'implementation.md'}",
+            f"  Manual testing: {doc_dir / 'references' / 'manual-testing.md'}",
+            f"  Skill guide: {doc_dir / 'SKILL.md'}",
+        ])
+    else:
+        lines.append(
+            "  Skill docs: repo/.cursor/skills/launch-cursor-autoapprove/ "
+            "or ~/.cursor/skills/global-launch-cursor-autoapprove/"
+        )
+    return lines
+
+
+def _help_examples(topic: str | None = None) -> list[str]:
+    topic_examples = {
+        "launch": [
+            "Examples:",
+            "  caa launch ~/code/my-project",
+            "  caa launch -w ~/code/another-project",
+        ],
+        "on": [
+            "Examples:",
+            "  caa on",
+            "  caa on -w my-project",
+        ],
+        "off": [
+            "Examples:",
+            "  caa off",
+            "  caa off -w my-project",
+        ],
+        "status": [
+            "Examples:",
+            "  caa status",
+            "  caa status -w my-project",
+        ],
+        "stop": [
+            "Examples:",
+            "  caa stop",
+            "  caa stop --all",
+        ],
+        "help": [
+            "Examples:",
+            "  caa help",
+            "  caa help off",
+        ],
+    }
+    if topic in topic_examples:
+        return topic_examples[topic]
+    return [
+        "Examples:",
+        "  caa launch ~/code/my-project",
+        "  caa off",
+        "  caa on -w my-project",
+        "  caa status",
+        "  caa stop --all",
+        "  caa help off",
+        "",
+        "Multi-session behavior:",
+        "  - 'on', 'off', and 'stop' open an arrow-key picker in an interactive terminal",
+        "  - 'status -w <slug>' also uses the picker when that slug matches multiple sessions",
+        "  - use -w <slug> or -w <full-path> to skip the picker",
+        "",
+        'If you do not use the alias, replace "caa" with:',
+        '  /usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py"',
+    ]
+
+
+def _print_help_block(lines: list[str]) -> None:
+    for line in lines:
+        print(line)
+
+
+def cmd_help(args: argparse.Namespace) -> int:
+    parser: argparse.ArgumentParser = args.parser
+    command_parsers: dict[str, argparse.ArgumentParser] = args.command_parsers
+    topic = getattr(args, "topic", None)
+
+    if topic:
+        target = command_parsers.get(topic)
+        if target is None:
+            print(f"Unknown help topic '{topic}'.", file=sys.stderr)
+            print("Available topics: launch, on, off, status, stop, help", file=sys.stderr)
+            return 1
+        target.print_help()
+    else:
+        parser.print_help()
+
+    print()
+    _print_help_block(_help_examples(topic))
+    print()
+    _print_help_block(_help_doc_lines())
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Settings sync
 # ---------------------------------------------------------------------------
 
 
-def _sync_user_settings() -> None:
+def _sync_user_settings(profile_dir: Path) -> None:
     """Copy settings.json and keybindings.json from default Cursor profile."""
     src_user = CURSOR_DEFAULT_USER_DATA / "User"
-    dst_user = PROFILE_DIR / "User"
+    dst_user = profile_dir / "User"
 
     if not src_user.is_dir():
         print(f"  Default Cursor profile not found at {src_user}, skipping settings sync.")
@@ -157,6 +309,14 @@ def _pid_is_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
+
+
+def _pid_is_cursor(pid: int) -> bool:
+    """Check if a PID belongs to a Cursor main process."""
+    for p, _ in _cursor_main_processes():
+        if p == pid:
+            return True
+    return False
 
 
 def _cursor_main_processes() -> list[tuple[int, str]]:
@@ -201,6 +361,9 @@ def _wait_for_new_pid(existing: set[int], timeout: float, required_args: list[st
 
 
 def _terminate_pid(pid: int, timeout: float = 5.0) -> bool:
+    if not _pid_is_cursor(pid):
+        return not _pid_is_alive(pid)
+
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -340,7 +503,7 @@ def _cdp_evaluate_ws(ws_url: str, expression: str, timeout: float = 10.0) -> dic
 
 
 def _cdp_evaluate(port: int, expression: str, timeout: float = 10.0) -> dict:
-    """Evaluate JS in the first usable page target via CDP websocket."""
+    """Evaluate JS in the main workbench page target via CDP websocket."""
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
     conn.request("GET", "/json")
     resp = conn.getresponse()
@@ -348,16 +511,24 @@ def _cdp_evaluate(port: int, expression: str, timeout: float = 10.0) -> dict:
     conn.close()
 
     page_targets = [
-        t.get("webSocketDebuggerUrl")
-        for t in targets
+        t for t in targets
         if t.get("type") == "page" and t.get("webSocketDebuggerUrl")
     ]
     if not page_targets:
         raise RuntimeError(f"No page target found on CDP port {port}")
+
+    def _is_workbench(t: dict) -> bool:
+        url = (t.get("url") or "").lower()
+        title = (t.get("title") or "").lower()
+        return "workbench" in url or "workbench" in title
+
+    preferred = [t for t in page_targets if _is_workbench(t)]
+    ordered = preferred + [t for t in page_targets if t not in preferred]
+
     last_error: RuntimeError | None = None
-    for ws_url in page_targets:
+    for t in ordered:
         try:
-            return _cdp_evaluate_ws(ws_url, expression, timeout=timeout)
+            return _cdp_evaluate_ws(t["webSocketDebuggerUrl"], expression, timeout=timeout)
         except RuntimeError as exc:
             last_error = exc
             continue
@@ -461,26 +632,358 @@ def _cdp_gate(port: int, action: str, title: str | None = None) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# Session resolution helpers
+# ---------------------------------------------------------------------------
+
+
+def _matching_sessions(state: dict, require_alive: bool = True) -> dict[str, dict]:
+    sessions = state.get("sessions", {})
+    if not require_alive:
+        return sessions
+    return {
+        ws: session
+        for ws, session in sessions.items()
+        if session.get("pid") and _pid_is_alive(session["pid"])
+    }
+
+
+def _session_summary(session: dict) -> str:
+    workspace = session.get("workspace", "unknown")
+    slug = session.get("slug", _repo_slug(workspace))
+    pid = session.get("pid") or "none"
+    alive = _pid_is_alive(session["pid"]) if session.get("pid") else False
+    state = "running" if alive else "stopped"
+    return f"{slug:30s} {workspace} ({state}, PID {pid})"
+
+
+def _picker_stream() -> object:
+    if sys.stderr.isatty():
+        return sys.stderr
+    if sys.stdout.isatty():
+        return sys.stdout
+    return sys.stderr
+
+
+def _print_session_choices(sessions: dict[str, dict], *,
+                           heading: str = "Matching sessions:",
+                           stream: object | None = None) -> None:
+    if stream is None:
+        stream = _picker_stream()
+    print(heading, file=stream)
+    for _, session in _ordered_session_items(sessions):
+        print(f"  {_session_summary(session)}", file=stream)
+
+
+def _ordered_session_items(sessions: dict[str, dict]) -> list[tuple[str, dict]]:
+    return sorted(
+        sessions.items(),
+        key=lambda item: (item[1].get("slug", _repo_slug(item[0])), item[0]),
+    )
+
+
+def _terminal_size(stream: object) -> os.terminal_size:
+    try:
+        fd = stream.fileno()
+    except (AttributeError, OSError, ValueError):
+        return os.terminal_size((100, 20))
+    try:
+        return os.get_terminal_size(fd)
+    except OSError:
+        return os.terminal_size((100, 20))
+
+
+def _interactive_picker_supported() -> bool:
+    if not sys.stdin.isatty():
+        return False
+    stream = _picker_stream()
+    if not hasattr(stream, "isatty") or not stream.isatty():
+        return False
+    return os.environ.get("TERM", "").lower() != "dumb"
+
+
+@contextlib.contextmanager
+def _raw_terminal(fd: int):
+    previous = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        yield
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, previous)
+
+
+def _picker_key(fd: int) -> str:
+    chunk = os.read(fd, 1)
+    if not chunk:
+        return "quit"
+    if chunk in (b"\r", b"\n"):
+        return "enter"
+    if chunk == b"\x03":
+        raise KeyboardInterrupt
+    if chunk in (b"q", b"Q"):
+        return "quit"
+    if chunk in (b"j", b"J"):
+        return "down"
+    if chunk in (b"k", b"K"):
+        return "up"
+    if chunk != b"\x1b":
+        return "other"
+
+    seq = b""
+    deadline = time.time() + 0.05
+    while time.time() < deadline:
+        ready, _, _ = select.select([fd], [], [], max(0.0, deadline - time.time()))
+        if not ready:
+            break
+        seq += os.read(fd, 1)
+        if seq in (b"[A", b"OA"):
+            return "up"
+        if seq in (b"[B", b"OB"):
+            return "down"
+        if seq.startswith((b"[", b"O")) and seq[-1:] in (b"A", b"B"):
+            return "up" if seq.endswith(b"A") else "down"
+        if len(seq) >= 8:
+            break
+
+    if not seq:
+        return "quit"
+    return "other"
+
+
+def _fit_terminal_line(text: str, width: int) -> str:
+    if width <= 0:
+        return ""
+    if len(text) <= width:
+        return text
+    if width <= 3:
+        return text[:width]
+    return text[: width - 3] + "..."
+
+
+def _render_picker(lines: list[str], previous_lines: int) -> int:
+    stream = _picker_stream()
+    width = max(_terminal_size(stream).columns - 1, 1)
+    if previous_lines:
+        stream.write(f"\x1b[{previous_lines}A\r")
+    for line in lines:
+        fitted = _fit_terminal_line(line, width)
+        stream.write("\r" + fitted.ljust(width) + "\x1b[K\n")
+    stream.flush()
+    return len(lines)
+
+
+def _clear_picker(previous_lines: int) -> None:
+    if previous_lines <= 0:
+        return
+    stream = _picker_stream()
+    width = max(_terminal_size(stream).columns - 1, 1)
+    stream.write(f"\x1b[{previous_lines}A\r")
+    for _ in range(previous_lines):
+        stream.write(" " * width + "\x1b[K\n")
+    stream.write(f"\x1b[{previous_lines}A\r")
+    stream.flush()
+
+
+def _pick_session_interactively(command_name: str,
+                                sessions: dict[str, dict]) -> dict | None:
+    options = [session for _, session in _ordered_session_items(sessions)]
+    if len(options) <= 1:
+        return options[0] if options else None
+    if not _interactive_picker_supported():
+        return None
+
+    selected = 0
+    previous_lines = 0
+    fd = sys.stdin.fileno()
+    hint = "Use arrow keys to choose, Enter to confirm, q or Esc to cancel."
+
+    try:
+        with _raw_terminal(fd):
+            while True:
+                lines = [f"Select a session for '{command_name}'. {hint}"]
+                for index, session in enumerate(options):
+                    prefix = ">" if index == selected else " "
+                    lines.append(f"{prefix} {_session_summary(session)}")
+                lines.append("Hint: use -w <slug|path> next time to skip the picker.")
+                previous_lines = _render_picker(lines, previous_lines)
+                key = _picker_key(fd)
+                if key == "up":
+                    selected = (selected - 1) % len(options)
+                elif key == "down":
+                    selected = (selected + 1) % len(options)
+                elif key == "enter":
+                    _clear_picker(previous_lines)
+                    return options[selected]
+                elif key == "quit":
+                    _clear_picker(previous_lines)
+                    print("Selection cancelled.", file=_picker_stream())
+                    return None
+    except KeyboardInterrupt:
+        _clear_picker(previous_lines)
+        print("\nSelection cancelled.", file=_picker_stream())
+        return None
+
+
+def _resolve_session(args: argparse.Namespace, state: dict,
+                     require_alive: bool = True,
+                     allow_interactive: bool = False,
+                     command_name: str = "command") -> dict | None:
+    """Find the target session from -w flag, positional slug, or auto-detect.
+
+    Returns the session dict or None (prints diagnostics to stderr).
+    """
+    sessions = _matching_sessions(state, require_alive=require_alive)
+    diag_stream = _picker_stream()
+
+    workspace_arg = getattr(args, "workspace", None)
+    if workspace_arg:
+        workspace_path = Path(workspace_arg).expanduser()
+        path_like = (
+            workspace_arg.startswith(("~", ".", "..")) or
+            os.sep in workspace_arg or
+            workspace_path.exists()
+        )
+        matches = {
+            ws: s for ws, s in sessions.items()
+            if s.get("slug") == workspace_arg or _repo_slug(ws) == workspace_arg
+        }
+        if not path_like and len(matches) == 1:
+            return next(iter(matches.values()))
+        if not path_like and len(matches) > 1:
+            if allow_interactive:
+                picked = _pick_session_interactively(command_name, matches)
+                if picked is not None:
+                    return picked
+            print(
+                f"Multiple sessions match '{workspace_arg}'. "
+                "Use the full workspace path or pick interactively.",
+                file=diag_stream,
+            )
+            _print_session_choices(matches)
+            return None
+        resolved = str(workspace_path.resolve())
+        if resolved in sessions:
+            return sessions[resolved]
+        session_label = "active session" if require_alive else "matching session"
+        print(f"No {session_label} for '{workspace_arg}'.", file=diag_stream)
+        if sessions:
+            _print_session_choices(sessions)
+        return None
+
+    if len(sessions) == 1:
+        return next(iter(sessions.values()))
+
+    if not sessions:
+        print("No active sessions. Run 'launch' first.", file=diag_stream)
+        return None
+
+    if allow_interactive:
+        picked = _pick_session_interactively(command_name, sessions)
+        if picked is not None:
+            return picked
+
+    print(
+        f"Multiple matching sessions for '{command_name}' ({len(sessions)}). "
+        "Use -w <slug|path> or re-run in an interactive terminal for a picker.",
+        file=diag_stream,
+    )
+    _print_session_choices(sessions)
+    return None
+
+
+def _print_session_status(session: dict) -> None:
+    """Print status for a single session."""
+    pid = session.get("pid")
+    port = session.get("cdp_port")
+    workspace = session.get("workspace", "unknown")
+    slug = session.get("slug", _repo_slug(workspace))
+    alive = _pid_is_alive(pid) if pid else False
+
+    print(f"Session:   {slug}")
+    print(f"PID:       {pid or 'none'} ({'running' if alive else 'stopped'})")
+    print(f"CDP port:  {port or 'none'}")
+    print(f"Workspace: {workspace}")
+    print(f"Launched:  {session.get('launched_at', 'unknown')}")
+
+    if alive and port:
+        gate = _cdp_gate(port, "status")
+        if gate:
+            running = gate.get("running", False)
+            clicks = gate.get("totalClicks", 0)
+            label = "ON" if running else "OFF"
+            title = _cdp_title(port)
+            print(f"Gate:      {label}")
+            print(f"Clicks:    {clicks}")
+            print(f"Injector:  {_format_injector_hash(gate.get('scriptHash'))}")
+            if title:
+                print(f"Window:    {title}")
+            recent = gate.get("recentClicks", [])
+            if recent:
+                print(f"Recent:    {json.dumps(recent[-3:])}")
+        else:
+            print("Gate:      unknown (CDP or injector status unavailable)")
+    elif not alive:
+        print("Gate:      N/A (process not running)")
+
+
+def _stop_session(session: dict) -> bool:
+    """Stop a single session's Cursor process.
+
+    Returns True when the session can be removed from state.
+    """
+    port = session.get("cdp_port")
+    pid = session.get("pid")
+    workspace = session.get("workspace", "workspace")
+    slug = session.get("slug", _repo_slug(workspace))
+    disabled_title = _window_title(workspace, gate_on=False)
+
+    if pid and _pid_is_alive(pid):
+        if port:
+            _cdp_gate(port, "off", title=disabled_title)
+        if _terminate_pid(pid):
+            print(f"[{slug}] Auto-approve OFF. Dedicated Cursor (PID {pid}) closed.")
+            return True
+        print(f"[{slug}] Auto-approve OFF, but Cursor (PID {pid}) is still running.")
+        print("Close it manually if you want a fully clean stop.")
+        return False
+    if pid and not _pid_is_alive(pid):
+        print(f"[{slug}] Dedicated Cursor (PID {pid}) already exited.")
+        return True
+    print(f"[{slug}] No active process.")
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Subcommands
 # ---------------------------------------------------------------------------
 
 
 def cmd_launch(args: argparse.Namespace) -> int:
     workspace = Path(args.workspace).expanduser().resolve() if args.workspace else Path.cwd()
+    ws_key = str(workspace)
+    slug = _repo_slug(workspace)
     enabled_title = _window_title(workspace, gate_on=True)
 
     state = _load_state()
-    existing_pid = state.get("pid")
-    if existing_pid and _pid_is_alive(existing_pid):
-        print(f"A dedicated Cursor is already running (PID {existing_pid}).")
-        print("Use 'on'/'off' to toggle, or 'stop' first to start a new one.")
+    sessions = state.get("sessions", {})
+
+    existing = sessions.get(ws_key)
+    if existing and existing.get("pid") and _pid_is_alive(existing["pid"]):
+        print(f"A dedicated Cursor is already running for {slug} (PID {existing['pid']}).")
+        print("Use 'on'/'off' to toggle, or 'stop -w' first to relaunch.")
         return 1
 
+    # Handle slug collision with a different workspace
+    for ws, s in sessions.items():
+        if ws != ws_key and s.get("slug") == slug and s.get("pid") and _pid_is_alive(s["pid"]):
+            slug = slug + "-" + hashlib.sha256(ws_key.encode()).hexdigest()[:6]
+            break
+
+    profile = _profile_dir(slug)
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    profile.mkdir(parents=True, exist_ok=True)
 
     print("Syncing user settings from default Cursor profile...")
-    _sync_user_settings()
+    _sync_user_settings(profile)
 
     try:
         cdp_port = _cdp_find_port()
@@ -492,13 +995,13 @@ def cmd_launch(args: argparse.Namespace) -> int:
     required_args = [
         f"--remote-debugging-port={cdp_port}",
         "--user-data-dir",
-        str(PROFILE_DIR),
+        str(profile),
     ]
 
     command = [
         "open", "-na", str(CURSOR_APP_PATH), "--args",
         f"--remote-debugging-port={cdp_port}",
-        "--user-data-dir", str(PROFILE_DIR),
+        "--user-data-dir", str(profile),
         str(workspace),
     ]
     subprocess.Popen(
@@ -518,7 +1021,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
         subprocess.Popen(
             [str(CURSOR_EXECUTABLE),
              f"--remote-debugging-port={cdp_port}",
-             "--user-data-dir", str(PROFILE_DIR),
+             "--user-data-dir", str(profile),
              str(workspace)],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -532,17 +1035,19 @@ def cmd_launch(args: argparse.Namespace) -> int:
             print("Failed to detect new Cursor process.", file=sys.stderr)
             return 1
 
-    _save_state({
+    sessions[ws_key] = {
         "pid": pid,
         "cdp_port": cdp_port,
-        "workspace": str(workspace),
+        "workspace": ws_key,
+        "slug": slug,
         "launched_at": datetime.now(timezone.utc).isoformat(),
-    })
+    }
+    state["sessions"] = sessions
+    _save_state(state)
 
     print(f"Cursor started (PID {pid}). Waiting for CDP to become ready...")
     time.sleep(CDP_INJECT_DELAY)
 
-    slug = _repo_slug(workspace)
     if _cdp_inject(cdp_port, auto_start=False, force_reload=True, repo_slug=slug):
         result = _cdp_gate(cdp_port, "on", title=enabled_title)
         print("\nAuto-approve ON.")
@@ -550,27 +1055,33 @@ def cmd_launch(args: argparse.Namespace) -> int:
         if result and result.get("scriptHash"):
             print(f"Injector hash: {result['scriptHash']}")
     else:
-        print("\nCDP injection failed. You can retry with: aa on", file=sys.stderr)
+        print(
+            "\nCDP injection failed. Retry by running this launcher with 'on' "
+            "(for example: caa on).",
+            file=sys.stderr,
+        )
         print("Or paste the DOM script manually into DevTools.", file=sys.stderr)
 
-    print("  'aa off'    pause auto-clicking")
-    print("  'aa on'     resume auto-clicking")
-    print("  'aa status' check state")
-    print("  'aa stop'   end session")
+    print("  'caa off'    pause auto-clicking")
+    print("  'caa on'     resume auto-clicking")
+    print("  'caa status' check state")
+    print("  'caa stop'   end session")
+    print("  'caa help'   usage examples and docs")
     return 0
 
 
-def cmd_on(_args: argparse.Namespace) -> int:
+def cmd_on(args: argparse.Namespace) -> int:
     state = _load_state()
-    port = state.get("cdp_port")
-    pid = state.get("pid")
-    workspace = state.get("workspace", "workspace")
+    session = _resolve_session(args, state, allow_interactive=True, command_name="on")
+    if not session:
+        return 1
+
+    port = session["cdp_port"]
+    pid = session["pid"]
+    workspace = session["workspace"]
     enabled_title = _window_title(workspace, gate_on=True)
 
-    if not port:
-        print("No active session. Run 'launch' first.", file=sys.stderr)
-        return 1
-    if pid and not _pid_is_alive(pid):
+    if not _pid_is_alive(pid):
         print(f"Dedicated Cursor (PID {pid}) is no longer running.", file=sys.stderr)
         return 1
 
@@ -584,7 +1095,7 @@ def cmd_on(_args: argparse.Namespace) -> int:
 
     current_hash = check.get("scriptHash") if isinstance(check, dict) else None
     needs_reload = check is None or (expected_hash is not None and current_hash != expected_hash)
-    slug = _repo_slug(workspace)
+    slug = session.get("slug", _repo_slug(workspace))
     if needs_reload:
         if check is None:
             print(
@@ -613,17 +1124,18 @@ def cmd_on(_args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_off(_args: argparse.Namespace) -> int:
+def cmd_off(args: argparse.Namespace) -> int:
     state = _load_state()
-    port = state.get("cdp_port")
-    pid = state.get("pid")
-    workspace = state.get("workspace", "workspace")
+    session = _resolve_session(args, state, allow_interactive=True, command_name="off")
+    if not session:
+        return 1
+
+    port = session["cdp_port"]
+    pid = session["pid"]
+    workspace = session["workspace"]
     disabled_title = _window_title(workspace, gate_on=False)
 
-    if not port:
-        print("No active session. Run 'launch' first.", file=sys.stderr)
-        return 1
-    if pid and not _pid_is_alive(pid):
+    if not _pid_is_alive(pid):
         print(f"Dedicated Cursor (PID {pid}) is no longer running.", file=sys.stderr)
         return 1
 
@@ -637,65 +1149,86 @@ def cmd_off(_args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_status(_args: argparse.Namespace) -> int:
+def cmd_status(args: argparse.Namespace) -> int:
     state = _load_state()
-    if not state:
+    sessions = state.get("sessions", {})
+
+    if not sessions:
+        print("No active sessions.")
+        return 0
+
+    workspace_arg = getattr(args, "workspace", None)
+    if workspace_arg:
+        session = _resolve_session(args, state, require_alive=False, allow_interactive=True, command_name="status")
+        if not session:
+            return 1
+        _print_session_status(session)
+        return 0
+
+    alive_count = 0
+    for i, (ws, session) in enumerate(sessions.items()):
+        if i > 0:
+            print()
+        _print_session_status(session)
+        if session.get("pid") and _pid_is_alive(session["pid"]):
+            alive_count += 1
+
+    if len(sessions) > 1:
+        print(f"\nTotal: {len(sessions)} session(s), {alive_count} running.")
+    return 0
+
+
+def cmd_stop(args: argparse.Namespace) -> int:
+    state = _load_state()
+    sessions = state.get("sessions", {})
+
+    if getattr(args, "all", False):
+        if getattr(args, "workspace", None):
+            print("Do not combine --all with -w or a positional workspace.", file=sys.stderr)
+            return 1
+        if not sessions:
+            print("No active sessions.")
+            return 0
+        remaining: dict[str, dict] = {}
+        for ws, session in list(sessions.items()):
+            if not _stop_session(session):
+                remaining[ws] = session
+        if remaining:
+            _save_state({"sessions": remaining})
+            return 1
+        _clear_all_state()
+        return 0
+
+    if not sessions:
         print("No active session.")
         return 0
 
-    pid = state.get("pid")
-    port = state.get("cdp_port")
-    alive = _pid_is_alive(pid) if pid else False
-
-    print(f"PID:       {pid or 'none'} ({'running' if alive else 'stopped'})")
-    print(f"CDP port:  {port or 'none'}")
-    print(f"Workspace: {state.get('workspace', 'unknown')}")
-    print(f"Launched:  {state.get('launched_at', 'unknown')}")
-
-    if alive and port:
-        gate = _cdp_gate(port, "status")
-        if gate:
-            running = gate.get("running", False)
-            clicks = gate.get("totalClicks", 0)
-            label = "ON" if running else "OFF"
-            title = _cdp_title(port)
-            print(f"Gate:      {label}")
-            print(f"Clicks:    {clicks}")
-            print(f"Injector:  {_format_injector_hash(gate.get('scriptHash'))}")
-            if title:
-                print(f"Window:    {title}")
-            recent = gate.get("recentClicks", [])
-            if recent:
-                print(f"Recent:    {json.dumps(recent[-3:])}")
-        else:
-            print("Gate:      unknown (CDP or injector status unavailable)")
-    elif not alive:
-        print("Gate:      N/A (process not running)")
-
-    return 0
-
-
-def cmd_stop(_args: argparse.Namespace) -> int:
-    state = _load_state()
-    port = state.get("cdp_port")
-    pid = state.get("pid")
-    workspace = state.get("workspace", "workspace")
-    disabled_title = _window_title(workspace, gate_on=False)
-
-    if port and pid and _pid_is_alive(pid):
-        _cdp_gate(port, "off", title=disabled_title)
-        if _terminate_pid(pid):
-            print(f"Auto-approve OFF. Dedicated Cursor (PID {pid}) closed.")
-        else:
-            print(f"Auto-approve OFF, but dedicated Cursor (PID {pid}) is still running.")
-            print("Close it manually if you want a fully clean stop.")
-    elif pid and not _pid_is_alive(pid):
-        print(f"Dedicated Cursor (PID {pid}) already exited.")
+    workspace_arg = getattr(args, "workspace", None)
+    if workspace_arg:
+        session = _resolve_session(
+            args,
+            state,
+            require_alive=False,
+            allow_interactive=True,
+            command_name="stop",
+        )
     else:
-        print("No active session.")
+        live_candidates = _matching_sessions(state, require_alive=True)
+        candidate_state = {"sessions": live_candidates or sessions}
+        session = _resolve_session(
+            args,
+            candidate_state,
+            require_alive=False,
+            allow_interactive=True,
+            command_name="stop",
+        )
+    if not session:
+        return 1
 
-    _clear_state()
-    return 0
+    if _stop_session(session):
+        _remove_session(session["workspace"])
+        return 0
+    return 1
 
 
 # ---------------------------------------------------------------------------
@@ -703,37 +1236,70 @@ def cmd_stop(_args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
-def main() -> None:
+def build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentParser]]:
     parser = argparse.ArgumentParser(
-        description="Launch and control a dedicated auto-approve Cursor instance",
+        description="Launch and control dedicated auto-approve Cursor instances",
     )
     sub = parser.add_subparsers(dest="command")
+    command_parsers: dict[str, argparse.ArgumentParser] = {}
+
+    ws_help = "Workspace path or slug (auto-detected if only one session)"
 
     p_launch = sub.add_parser("launch", help="Open dedicated Cursor with auto-approve")
     p_launch.add_argument("--workspace", "-w", help="Workspace path (default: cwd)")
     p_launch.add_argument("workspace_pos", nargs="?", help="Workspace path (positional)")
     p_launch.set_defaults(func=cmd_launch)
+    command_parsers["launch"] = p_launch
 
     p_on = sub.add_parser("on", help="Resume auto-clicking")
+    p_on.add_argument("--workspace", "-w", help=ws_help)
+    p_on.add_argument("workspace_pos", nargs="?", help=ws_help)
     p_on.set_defaults(func=cmd_on)
+    command_parsers["on"] = p_on
 
     p_off = sub.add_parser("off", help="Pause auto-clicking")
+    p_off.add_argument("--workspace", "-w", help=ws_help)
+    p_off.add_argument("workspace_pos", nargs="?", help=ws_help)
     p_off.set_defaults(func=cmd_off)
+    command_parsers["off"] = p_off
 
     p_status = sub.add_parser("status", help="Show gate state and click count")
+    p_status.add_argument("--workspace", "-w", help="Workspace path or slug (shows all if omitted)")
+    p_status.add_argument("workspace_pos", nargs="?", help="Workspace path or slug")
     p_status.set_defaults(func=cmd_status)
+    command_parsers["status"] = p_status
 
     p_stop = sub.add_parser("stop", help="Pause gate and end session")
+    p_stop.add_argument("--workspace", "-w", help=ws_help)
+    p_stop.add_argument("workspace_pos", nargs="?", help=ws_help)
+    p_stop.add_argument("--all", action="store_true", help="Stop all active sessions")
     p_stop.set_defaults(func=cmd_stop)
+    command_parsers["stop"] = p_stop
+
+    p_help = sub.add_parser("help", help="Show examples and deeper docs", add_help=False)
+    p_help.add_argument("-h", "--help", action="store_true", help="Show examples and deeper docs")
+    p_help.add_argument("topic", nargs="?", help="Optional command name")
+    p_help.set_defaults(func=cmd_help, parser=parser, command_parsers=command_parsers)
+    command_parsers["help"] = p_help
+
+    return parser, command_parsers
+
+
+def main() -> None:
+    parser, _ = build_parser()
 
     args = parser.parse_args()
 
     if not hasattr(args, "func"):
         parser.print_help()
+        print("\nRun this launcher with 'help' for examples and deeper docs.")
         sys.exit(1)
 
-    # Allow positional workspace for launch
-    if args.command == "launch" and not args.workspace and args.workspace_pos:
+    if hasattr(args, "workspace_pos") and args.workspace and args.workspace_pos:
+        print("Do not pass both -w/--workspace and a positional workspace.", file=sys.stderr)
+        sys.exit(1)
+
+    if hasattr(args, "workspace_pos") and not args.workspace and args.workspace_pos:
         args.workspace = args.workspace_pos
 
     sys.exit(args.func(args))

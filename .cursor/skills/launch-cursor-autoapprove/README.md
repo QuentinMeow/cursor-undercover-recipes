@@ -14,7 +14,7 @@ spill into your normal Cursor windows.
 ### Prerequisites
 
 - macOS
-- Python 3.9+
+- Python 3.10+
 - Cursor IDE
 
 ### Install
@@ -22,6 +22,9 @@ spill into your normal Cursor windows.
 ```bash
 bash "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/scripts/install.sh" --target global --force
 ```
+
+These install snippets assume you are running from this repo checkout, since
+they use `git rev-parse --show-toplevel` to locate the repo root.
 
 Global installs appear in Cursor as `/global-launch-cursor-autoapprove`.
 Runtime files live under `~/.cursor/launch-autoapprove/`.
@@ -36,7 +39,7 @@ Useful install flags:
 ### Optional Alias
 
 ```bash
-alias aa='/usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py"'
+alias caa='/usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py"'
 ```
 
 ### Launch and Control
@@ -48,31 +51,39 @@ alias aa='/usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py"'
 If you set the alias:
 
 ```bash
-aa launch ~/code/my-project
-aa on
-aa off
-aa status
-aa stop
+caa launch ~/code/my-project
+caa on
+caa off
+caa status
+caa stop
+caa help
 ```
+
+Use `caa --help` (or the full launcher path with `--help`) for the short
+built-in usage summary, `caa help` for examples and doc paths, or
+`caa <command> --help` for command flags.
 
 ### Command Reference
 
 | Command | Behavior |
 |---|---|
-| `launch [--workspace PATH] [PATH]` | Start dedicated Cursor process, inject script, gate ON. If a dedicated session is already active, this exits and asks you to `stop` first. |
-| `on` | Turn gate ON. Reloads injector code when in-window hash differs from the current injector file. |
-| `off` | Turn gate OFF without closing the dedicated window. |
-| `status` | Show PID, CDP port, workspace, gate state, click count, injector hash, current title, recent clicks. |
-| `stop` | Turn gate OFF, close the dedicated Cursor process, and clear local session state. |
+| `launch [--workspace PATH] [PATH]` | Start dedicated Cursor process, inject script, gate ON. Blocks only if the same workspace is already running; other workspaces can run in parallel. |
+| `on` | Turn gate ON. Reloads injector code when in-window hash differs from the current injector file. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
+| `off` | Turn gate OFF without closing the dedicated window. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
+| `status` | Show PID, CDP port, workspace, gate state, click count, injector hash, current title, and recent clicks. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
+| `stop` | Turn gate OFF, close the dedicated Cursor process, and clear local session state when shutdown succeeds. Without `-w`, it prefers running sessions when any are alive; if none are running, it falls back to stale entries for cleanup. Use `--all` to stop every session, and do not combine `--all` with `-w` or a positional workspace. |
+| `help [COMMAND]` | Show usage examples, command-specific help, and deeper doc paths. |
 
 ## Important Behavior
 
-- Uses a dedicated profile at `~/.cursor/launch-autoapprove/dedicated-profile/`.
+- Uses a dedicated profile at `~/.cursor/launch-autoapprove/dedicated-profile-<slug>/`.
 - Copies only `settings.json` and `keybindings.json` from your default profile.
 - Does **not** copy `state.vscdb` (chat history/account/model state remain profile-specific).
 - There is no `inject --restart` command in this supported launcher.
 - `stop` ends the session and closes the dedicated process; the dedicated profile
   folder persists for reuse on the next `launch`.
+- If two sessions share the same folder name, use `-w <full-path>` instead of a
+  slug to avoid ambiguity.
 
 ## Safety and Limits
 
@@ -81,7 +92,7 @@ aa stop
   false clicks.
 - The script still relies on Cursor's DOM structure; major UI changes can break
   matching or require pattern updates.
-- Keep the gate OFF (`aa off`) when doing sensitive UI actions in the dedicated
+- Keep the gate OFF (`caa off`) when doing sensitive UI actions in the dedicated
   window that are unrelated to approvals.
 
 ## Migration Note (Retired Approach Cleanup)
