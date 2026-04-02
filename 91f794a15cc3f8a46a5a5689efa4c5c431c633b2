@@ -1,0 +1,51 @@
+.cursor/skills/launch-cursor-autoapprove/LESSONS.md
+  f6a2a66ad9f8e05d 3-31
+  57c356a212c798a0 45-46,49-65,69-77
+.cursor/skills/launch-cursor-autoapprove/scripts/devtools_auto_accept.js
+  57c356a212c798a0 38-41,46,50,100,132,134-135,181,213,217-230,278
+.cursor/skills/launch-cursor-autoapprove/scripts/launcher.py
+  57c356a212c798a0 194-201,244-246,386,394,399-407,409,411
+  f6a2a66ad9f8e05d 59-63,65-86,91-94,96-103,106,112,160,163,515-613,621-622,626-631,634-640,642,645,657,663,683,697,700-701,703-705,727,729-735,738,752,781,783-789,792,806,808,810-811,814-820,822-828,830-831,835,837-846,848-855,857-865,876,880-881,888-889,893-894,898-899,903-905,914
+.cursor/skills/launch-cursor-autoapprove/issues/004-dedicated-profile-loses-chat-history-and-ui-state.md
+  f6a2a66ad9f8e05d 1-76
+.cursor/skills/launch-cursor-autoapprove/SKILL.md
+  f6a2a66ad9f8e05d 11-24,89-97,106-107
+.cursor/skills/launch-cursor-autoapprove/AGENTS.md
+  f6a2a66ad9f8e05d 47-55
+.cursor/skills/launch-cursor-autoapprove/references/implementation.md
+  f6a2a66ad9f8e05d 10-12,24-28,32-36,57-58,61,63-79,85-91,93,95-98,206-207,219
+  57c356a212c798a0 105-108,135,138,157-160,166-169,171
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "91f794a15cc3f8a46a5a5689efa4c5c431c633b2",
+  "prompts": {
+    "57c356a212c798a0": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "3156e616-0777-4a70-aa5e-4b1eb6e915aa",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 94,
+      "total_deletions": 45,
+      "accepted_lines": 94,
+      "overriden_lines": 0
+    },
+    "f6a2a66ad9f8e05d": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "ca8f56e7-8ba2-44cb-bf82-1684a5ef3324",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 448,
+      "total_deletions": 137,
+      "accepted_lines": 441,
+      "overriden_lines": 0
+    }
+  }
+}
