@@ -1,6 +1,7 @@
 // Cursor Auto-Accept DOM Injector
-// Paste into DevTools console of a dedicated agent Cursor window.
+// Injected by launcher.py via CDP Runtime.evaluate.
 // Canonical DOM injector for the launch-cursor-autoapprove skill.
+// Manual DevTools paste is emergency fallback only.
 // Originally adapted from ivalsaraj/true-yolo-cursor-auto-accept-full-agentic-mode,
 // then narrowed to Cursor approval surfaces with structured logging.
 //
@@ -23,11 +24,37 @@
     { pattern: "accept", id: "accept" },
     { pattern: "always allow", id: "always_allow" },
     { pattern: "allow", id: "allow" },
+    { pattern: "run this time only", id: "run_this_time" },
     { pattern: "run command", id: "run_command" },
     { pattern: "run", id: "run" },
     { pattern: "apply", id: "apply" },
     { pattern: "execute", id: "execute" },
+    { pattern: "continue", id: "continue" },
   ];
+
+  const EXCLUDED_ZONES = [
+    '[id="workbench.parts.sidebar"]',
+    '[id="workbench.parts.editor"]',
+  ];
+  const BUTTON_SELECTORS = [
+    "button",
+    '[role="button"]',
+    'div[class*="button"]',
+    'div[style*="cursor: pointer"]',
+    'div[style*="cursor:pointer"]',
+    '[class*="primary-button"]',
+    '[class*="secondary-button"]',
+    '[class*="text-button"]',
+  ];
+  const PROMPT_ROOT_SELECTORS = [
+    '[role="dialog"]',
+    '[role="alertdialog"]',
+    '[aria-modal="true"]',
+    '[class*="dialog"]',
+    '[class*="popover"]',
+    '[class*="dropdown"]',
+  ];
+  const DISMISS_PATTERNS = new Set(["skip", "cancel", "dismiss", "deny", "not now", "close"]);
 
   const RESUME_DATA_LINK = "command:composer.resumeCurrentChat";
 
@@ -61,58 +88,104 @@
     return s.pointerEvents !== "none" && !el.disabled;
   }
 
+  function isInExcludedZone(el) {
+    for (const sel of EXCLUDED_ZONES) {
+      if (el.closest(sel)) return true;
+    }
+    return false;
+  }
+
+  function stripKeyboardHints(text) {
+    return text
+      .replace(/\s*\(.*?\)\s*$/, "")
+      .replace(/[\s\u21A9\u23CE\u21E7\u2318\u2325\u238B\u232B\u2326\u21E5]+$/, "")
+      .trim();
+  }
+
+  function normalizeLabel(text) {
+    return stripKeyboardHints(text.toLowerCase().trim());
+  }
+
   function matchesApproval(el) {
     if (!el || !el.textContent) return null;
-    const text = el.textContent.toLowerCase().trim();
+    const raw = el.textContent.trim();
+    if (raw.length > 60) return null;
+    if (isInExcludedZone(el)) return null;
+    const stripped = normalizeLabel(raw);
     for (const { pattern, id } of APPROVAL_PATTERNS) {
-      if (text.includes(pattern) && isVisible(el) && isClickable(el)) {
-        return { id, text: el.textContent.trim() };
+      if (stripped === pattern && isVisible(el) && isClickable(el)) {
+        return { id, text: raw };
       }
     }
     return null;
   }
 
-  function findButtonsInElement(root) {
-    const selectors = [
-      "button",
-      'div[class*="button"]',
-      'div[style*="cursor: pointer"]',
-      'div[style*="cursor:pointer"]',
-      '[class*="primary-button"]',
-      '[class*="secondary-button"]',
-      '[class*="text-button"]',
-    ];
-    const results = [];
-    for (const sel of selectors) {
+  function matchesDismissal(el) {
+    if (!el || !el.textContent) return false;
+    const raw = el.textContent.trim();
+    if (!raw || raw.length > 40) return false;
+    if (!isVisible(el) || !isClickable(el) || isInExcludedZone(el)) return false;
+    return DISMISS_PATTERNS.has(normalizeLabel(raw));
+  }
+
+  function hasNearbyDismissal(el) {
+    let node = el;
+    for (let depth = 0; node && depth < 6; depth++) {
+      for (const sel of BUTTON_SELECTORS) {
+        for (const candidate of node.querySelectorAll(sel)) {
+          if (candidate === el) continue;
+          if (matchesDismissal(candidate)) return true;
+        }
+      }
+      node = node.parentElement;
+    }
+    return false;
+  }
+
+  function collectApprovalMatches(root, out, seen) {
+    for (const sel of BUTTON_SELECTORS) {
       for (const el of root.querySelectorAll(sel)) {
+        if (seen.has(el)) continue;
+        seen.add(el);
         const m = matchesApproval(el);
-        if (m) results.push({ el, ...m });
+        if (m) out.push({ el, kind: "approval", ...m });
       }
     }
-    const m = matchesApproval(root);
-    if (m) results.push({ el: root, ...m });
-    return results;
+    if (!seen.has(root)) {
+      seen.add(root);
+      const m = matchesApproval(root);
+      if (m) out.push({ el: root, kind: "approval", ...m });
+    }
   }
 
   function findApprovalButtons() {
     const buttons = [];
+    const seen = new Set();
 
     const inputBox = document.querySelector("div.full-input-box");
     if (inputBox) {
       let sib = inputBox.previousElementSibling;
       let depth = 0;
       while (sib && depth < 5) {
-        buttons.push(...findButtonsInElement(sib));
+        collectApprovalMatches(sib, buttons, seen);
         sib = sib.previousElementSibling;
         depth++;
       }
     }
 
     if (buttons.length === 0) {
-      const all = document.querySelectorAll("button, div[class*='button']");
-      for (const el of all) {
-        const m = matchesApproval(el);
-        if (m) buttons.push({ el, ...m });
+      const promptRoots = document.querySelectorAll(PROMPT_ROOT_SELECTORS.join(", "));
+      for (const root of promptRoots) {
+        collectApprovalMatches(root, buttons, seen);
+      }
+    }
+
+    if (buttons.length === 0 && inputBox) {
+      const composerRoot = inputBox.closest(
+        '[class*="composer"], [class*="chat"], [class*="conversation"], [id*="composer"]'
+      );
+      if (composerRoot) {
+        collectApprovalMatches(composerRoot, buttons, seen);
       }
     }
 
@@ -121,8 +194,13 @@
         `a[data-link="${RESUME_DATA_LINK}"], [class*="markdown-link"][data-link="${RESUME_DATA_LINK}"]`
       );
       for (const el of resumeLinks) {
-        if (isVisible(el)) {
-          buttons.push({ el, id: "resume_conversation", text: el.textContent.trim() });
+        if (isVisible(el) && isClickable(el) && !isInExcludedZone(el)) {
+          buttons.push({
+            el,
+            kind: "resume",
+            id: "resume_conversation",
+            text: el.textContent.trim(),
+          });
         }
       }
     }
@@ -132,6 +210,7 @@
         '[class*="dropdown"], [class*="popover"], [class*="dialog"]'
       );
       for (const container of containers) {
+        if (isInExcludedZone(container)) continue;
         const text = container.textContent.toLowerCase();
         if (
           text.includes("connection failed") ||
@@ -144,6 +223,7 @@
               if (isVisible(btn) && isClickable(btn)) {
                 buttons.push({
                   el: btn,
+                  kind: "connection",
                   id: t === "resume" ? "connection_resume" : "connection_try_again",
                   text: btn.textContent.trim(),
                 });
@@ -158,26 +238,19 @@
   }
 
   function clickEl(el) {
+    if (el.focus) el.focus();
+    try {
+      if (typeof el.click === "function") {
+        el.click();
+        return;
+      }
+    } catch (_) {}
+
     const r = el.getBoundingClientRect();
     const x = r.left + r.width / 2;
     const y = r.top + r.height / 2;
     const opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y };
-
-    try {
-      el.dispatchEvent(new PointerEvent("pointerdown", { ...opts, pointerType: "mouse" }));
-    } catch (_) {}
-    el.dispatchEvent(new MouseEvent("mousedown", opts));
-    el.click();
     el.dispatchEvent(new MouseEvent("click", opts));
-    el.dispatchEvent(new MouseEvent("mouseup", opts));
-    try {
-      el.dispatchEvent(new PointerEvent("pointerup", { ...opts, pointerType: "mouse" }));
-    } catch (_) {}
-
-    if (el.focus) el.focus();
-    el.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true })
-    );
   }
 
   function _syncTitle() {
@@ -201,11 +274,16 @@
   function checkAndClick() {
     const buttons = findApprovalButtons();
     if (buttons.length === 0) return;
+    const priority = { approval: 0, connection: 1, resume: 2 };
+    const eligible = buttons
+      .filter((btn) => btn.kind !== "approval" || hasNearbyDismissal(btn.el))
+      .sort((a, b) => (priority[a.kind || "approval"] ?? 9) - (priority[b.kind || "approval"] ?? 9));
+    if (eligible.length === 0) return;
 
-    const btn = buttons[0];
+    const btn = eligible[0];
     clickEl(btn.el);
     state.totalClicks++;
-    const entry = { ts: new Date().toISOString(), id: btn.id, text: btn.text };
+    const entry = { ts: new Date().toISOString(), kind: btn.kind || "approval", id: btn.id, text: btn.text };
     state.clicks.push(entry);
     if (state.clicks.length > 100) {
       state.clicks = state.clicks.slice(-100);

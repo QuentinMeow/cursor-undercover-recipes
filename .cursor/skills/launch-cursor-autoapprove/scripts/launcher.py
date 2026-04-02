@@ -81,7 +81,13 @@ def _clear_state() -> None:
 
 
 def _dom_injector_path() -> Path:
-    return INSTALLED_DOM_INJECTOR_PATH if INSTALLED_DOM_INJECTOR_PATH.exists() else DOM_INJECTOR_PATH
+    # Installed launcher should prefer installed injector copy.
+    # Repo launcher should prefer repo-local injector for development/testing.
+    if SCRIPT_DIR == RUNTIME_DIR and INSTALLED_DOM_INJECTOR_PATH.exists():
+        return INSTALLED_DOM_INJECTOR_PATH
+    if DOM_INJECTOR_PATH.exists():
+        return DOM_INJECTOR_PATH
+    return INSTALLED_DOM_INJECTOR_PATH
 
 
 def _load_dom_injector_script() -> tuple[str, str, Path]:
@@ -153,8 +159,8 @@ def _pid_is_alive(pid: int) -> bool:
         return True
 
 
-def _cursor_main_pids() -> list[int]:
-    """Find Cursor main process PIDs, excluding helper/GPU/renderer children."""
+def _cursor_main_processes() -> list[tuple[int, str]]:
+    """Find Cursor main processes as (pid, args)."""
     try:
         result = subprocess.run(
             ["ps", "-ax", "-o", "pid=,args="],
@@ -165,22 +171,30 @@ def _cursor_main_pids() -> list[int]:
     if result.returncode != 0:
         return []
     exe = str(CURSOR_EXECUTABLE)
-    pids: list[int] = []
+    processes: list[tuple[int, str]] = []
     for line in result.stdout.splitlines():
         parts = line.strip().split(None, 1)
         if len(parts) != 2 or not parts[0].isdigit():
             continue
         args = parts[1]
         if args == exe or (args.startswith(exe + " ") and "--type=" not in args):
-            pids.append(int(parts[0]))
-    return sorted(pids)
+            processes.append((int(parts[0]), args))
+    return sorted(processes, key=lambda pair: pair[0])
 
 
-def _wait_for_new_pid(existing: set[int], timeout: float) -> int:
+def _cursor_main_pids() -> list[int]:
+    """Find Cursor main process PIDs, excluding helper/GPU/renderer children."""
+    return [pid for pid, _ in _cursor_main_processes()]
+
+
+def _wait_for_new_pid(existing: set[int], timeout: float, required_args: list[str] | None = None) -> int:
+    required_args = required_args or []
     deadline = time.time() + timeout
     while time.time() < deadline:
-        for pid in _cursor_main_pids():
+        for pid, args in _cursor_main_processes():
             if pid not in existing:
+                if required_args and not all(token in args for token in required_args):
+                    continue
                 return pid
         time.sleep(0.5)
     raise RuntimeError("Timed out waiting for dedicated Cursor process")
@@ -277,22 +291,8 @@ def _ws_recv_text(sock: socket.socket) -> str:
     return bytes(raw).decode("utf-8")
 
 
-def _cdp_evaluate(port: int, expression: str, timeout: float = 10.0) -> dict:
-    """Evaluate JS in the first page target via CDP websocket."""
-    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
-    conn.request("GET", "/json")
-    resp = conn.getresponse()
-    targets = json.loads(resp.read().decode("utf-8"))
-    conn.close()
-
-    ws_url = None
-    for t in targets:
-        if t.get("type") == "page":
-            ws_url = t.get("webSocketDebuggerUrl")
-            break
-    if not ws_url:
-        raise RuntimeError(f"No page target found on CDP port {port}")
-
+def _cdp_evaluate_ws(ws_url: str, expression: str, timeout: float = 10.0) -> dict:
+    """Evaluate JS against a specific websocket debugger target."""
     parsed = urllib.parse.urlparse(ws_url)
     sock = socket.create_connection((parsed.hostname, parsed.port), timeout=timeout)
     sock.settimeout(timeout)
@@ -320,15 +320,50 @@ def _cdp_evaluate(port: int, expression: str, timeout: float = 10.0) -> dict:
             "params": {"expression": expression, "returnByValue": True},
         })
         _ws_send_text(sock, msg)
-        while True:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
             payload = json.loads(_ws_recv_text(sock))
-            if payload.get("id") == 1:
-                return payload
+            if payload.get("id") != 1:
+                continue
+            if payload.get("error"):
+                message = payload["error"].get("message", "CDP evaluate error")
+                raise RuntimeError(message)
+            return payload
+    except socket.timeout as exc:
+        raise RuntimeError("Timed out waiting for CDP response") from exc
     finally:
         try:
             sock.close()
         except OSError:
             pass
+    raise RuntimeError("Timed out waiting for CDP response")
+
+
+def _cdp_evaluate(port: int, expression: str, timeout: float = 10.0) -> dict:
+    """Evaluate JS in the first usable page target via CDP websocket."""
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    conn.request("GET", "/json")
+    resp = conn.getresponse()
+    targets = json.loads(resp.read().decode("utf-8"))
+    conn.close()
+
+    page_targets = [
+        t.get("webSocketDebuggerUrl")
+        for t in targets
+        if t.get("type") == "page" and t.get("webSocketDebuggerUrl")
+    ]
+    if not page_targets:
+        raise RuntimeError(f"No page target found on CDP port {port}")
+    last_error: RuntimeError | None = None
+    for ws_url in page_targets:
+        try:
+            return _cdp_evaluate_ws(ws_url, expression, timeout=timeout)
+        except RuntimeError as exc:
+            last_error = exc
+            continue
+    raise RuntimeError(
+        f"No usable page target on CDP port {port}: {last_error or 'unknown error'}"
+    )
 
 
 def _format_injector_hash(script_hash: str | None) -> str:
@@ -343,7 +378,7 @@ def _cdp_inject(port: int, auto_start: bool = True, force_reload: bool = False,
         print(f"DOM injector not found at {js_path}", file=sys.stderr)
         return False
 
-    script, _script_hash, _ = _load_dom_injector_script()
+    script, _script_hash, script_path = _load_dom_injector_script()
     slug_preamble = f"globalThis.__cursorAutoAcceptRepoSlug = {json.dumps(repo_slug)};\n"
     script = slug_preamble + script
     if force_reload:
@@ -358,6 +393,7 @@ def _cdp_inject(port: int, auto_start: bool = True, force_reload: bool = False,
             if exc:
                 print(f"DOM injection error: {exc.get('text', '')}", file=sys.stderr)
                 return False
+            print(f"Injected script from {script_path}")
             return True
         except (ConnectionRefusedError, OSError, RuntimeError):
             if attempt < CDP_INJECT_RETRIES - 1:
@@ -453,6 +489,11 @@ def cmd_launch(args: argparse.Namespace) -> int:
         return 1
 
     existing_pids = set(_cursor_main_pids())
+    required_args = [
+        f"--remote-debugging-port={cdp_port}",
+        "--user-data-dir",
+        str(PROFILE_DIR),
+    ]
 
     command = [
         "open", "-na", str(CURSOR_APP_PATH), "--args",
@@ -471,7 +512,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
     print(f"Launching dedicated Cursor for {workspace} (CDP port {cdp_port})...")
 
     try:
-        pid = _wait_for_new_pid(existing_pids, LAUNCH_TIMEOUT)
+        pid = _wait_for_new_pid(existing_pids, LAUNCH_TIMEOUT, required_args=required_args)
     except RuntimeError:
         print("Falling back to direct executable launch...")
         subprocess.Popen(
@@ -486,7 +527,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
             close_fds=True,
         )
         try:
-            pid = _wait_for_new_pid(existing_pids, LAUNCH_TIMEOUT)
+            pid = _wait_for_new_pid(existing_pids, LAUNCH_TIMEOUT, required_args=required_args)
         except RuntimeError:
             print("Failed to detect new Cursor process.", file=sys.stderr)
             return 1
@@ -535,8 +576,9 @@ def cmd_on(_args: argparse.Namespace) -> int:
 
     check = _cdp_gate(port, "status")
     expected_hash: str | None = None
+    expected_path: Path | None = None
     try:
-        _, expected_hash, _ = _load_dom_injector_script()
+        _, expected_hash, expected_path = _load_dom_injector_script()
     except OSError:
         pass
 
@@ -545,11 +587,15 @@ def cmd_on(_args: argparse.Namespace) -> int:
     slug = _repo_slug(workspace)
     if needs_reload:
         if check is None:
-            print("CDP not reachable or injector missing. Re-injecting DOM script...")
+            print(
+                "Could not read injector status via CDP "
+                "(unreachable, wrong target, or missing injector). Re-injecting DOM script..."
+            )
         else:
             print(
-                "Reloading DOM script to match the installed injector copy "
-                f"(window={_format_injector_hash(current_hash)}, local={expected_hash})."
+                "Reloading DOM script to match the current injector file "
+                f"(window={_format_injector_hash(current_hash)}, local={expected_hash}, "
+                f"path={expected_path})."
             )
         if not _cdp_inject(port, auto_start=False, force_reload=True, repo_slug=slug):
             print("Injection failed.", file=sys.stderr)

@@ -113,3 +113,17 @@ Use only:
 
 If you need stronger confidence, keep the dedicated-window model and use the
 manual validation flow from [`manual-testing.md`](manual-testing.md).
+
+## Migration Cleanup (If You Used Retired Skills)
+
+If you previously installed the retired `cursor-autoapprove` stack globally,
+remove stale runtime artifacts so they cannot conflict with this skill:
+
+- `~/.cursor/skills/global-cursor-autoapprove/`
+- `~/.cursor/auto-approval/`
+- any `beforeShellExecution` hook entries in `~/.cursor/hooks.json` that call:
+  - `~/.cursor/auto-approval/cursor_auto_approval.py hook-shell`
+
+The supported global skill name for this approach is:
+
+- `/global-launch-cursor-autoapprove`
