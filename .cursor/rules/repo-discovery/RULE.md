@@ -28,3 +28,4 @@ Use these supporting rules as the task demands:
 1. `.cursor/rules/readme-and-agents-guide/RULE.md` when editing any `README.md` or `AGENTS.md`.
 2. `.cursor/rules/worklog-enforcer/RULE.md` for substantive conversations that create, modify, or analyze code/docs.
 3. `.cursor/rules/skill-conventions/RULE.md` when working inside `.cursor/skills/**`.
+4. `.cursor/rules/memory-keeper/RULE.md` for reading and updating persistent cross-session knowledge in `MEMORY.md`.

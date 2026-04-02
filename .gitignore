@@ -13,6 +13,9 @@
 !.cursor/skills/
 !.cursor/skills/**
 
+# Local memory file (personal, not committed)
+.cursor/MEMORY.md
+
 # Skill-local logs/artifacts (must come after the whitelist)
 .cursor/skills/**/logs/
 .cursor/skills/**/runtime/
