@@ -1,0 +1,31 @@
+.cursor/skills/launch-cursor-autoapprove/SKILL.md
+  7b656d34f57cff4a 4-7,12-13,15-20,58,61,63-65,67-68,77-78,81-82,84,86-90,95-96,98-104,118-122
+.cursor/skills/launch-cursor-autoapprove/scripts/launcher.py
+  7b656d34f57cff4a 3,6-7,11,234-275,475-640,739,742,787,790,811,814,819-822,851,855-862,864,866-876,889,893-908,931-933
+.cursor/skills/launch-cursor-autoapprove/scripts/test_inject.sh
+  7b656d34f57cff4a 1-51
+.cursor/skills/launch-cursor-autoapprove/README.md
+  7b656d34f57cff4a 6-8,10,12-15,36,44-49,52,55,58-59,61-65,67,70-73,78-86
+.cursor/skills/launch-cursor-autoapprove/references/implementation.md
+  7b656d34f57cff4a 5,7-11,13,21-24,31,60-61,64-84,86,101-134,136-145,147,149-150,152-154,156-157,172-173,247-248,251
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.3",
+  "base_commit_sha": "f1d89de7fd4bcf109f08410985bbf170d559ffe3",
+  "prompts": {
+    "7b656d34f57cff4a": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "0e050263-4eb0-4b45-bca7-5702fa0f303c",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 498,
+      "total_deletions": 122,
+      "accepted_lines": 497,
+      "overriden_lines": 0
+    }
+  }
+}
