@@ -31,6 +31,23 @@ At the end of every **substantive** conversation (multi-step work, new discoveri
 
 Trivial conversations (single-line answers, typo fixes) do not require updates.
 
+### Pre-Final Checklist (Required)
+
+Before sending the final user response for a substantive conversation, complete
+this checklist in order:
+
+1. Re-read `~/.cursor/MEMORY.md` and `.cursor/MEMORY.md` (if present) so edits
+   are based on the latest file state.
+2. Decide whether there are new durable entries and/or stale entries to remove.
+3. Apply memory updates (or intentionally skip because no entries passed quality
+   gates).
+4. Record the outcome in the conversation worklog:
+   - which MEMORY file(s) were updated, or
+   - why no memory update was made.
+
+Do not skip this checklist. Missing memory maintenance on substantive work is a
+process failure.
+
 ## Quality Gates
 
 Every new entry must pass **all three** gates before being added:
@@ -44,6 +61,10 @@ Every new entry must pass **all three** gates before being added:
 ## File Creation
 
 If a MEMORY.md does not exist and you have entries that pass the quality gates, create it using the seed template at `.cursor/rules/memory-keeper/templates/MEMORY.md`. For global installs, see the install script.
+
+For the repo-local file (`.cursor/MEMORY.md`), check existence during every
+substantive conversation. If it is missing and at least one local entry passes
+quality gates, create it in the same conversation before final response.
 
 ## Section Format
 
