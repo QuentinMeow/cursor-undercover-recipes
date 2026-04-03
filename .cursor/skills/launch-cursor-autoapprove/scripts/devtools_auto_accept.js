@@ -30,29 +30,33 @@
     { pattern: "apply", id: "apply" },
     { pattern: "execute", id: "execute" },
     { pattern: "continue", id: "continue" },
+    { pattern: "switch", id: "switch_mode" },
+    { pattern: "switch mode", id: "switch_mode_explicit" },
+    { pattern: "change mode", id: "change_mode" },
+    { pattern: "confirm", id: "confirm" },
   ];
 
   const EXCLUDED_ZONES = [
     '[id="workbench.parts.sidebar"]',
     '[id="workbench.parts.editor"]',
+    '[id="workbench.parts.panel"]',
+    '[id="workbench.parts.statusbar"]',
+    '[id="workbench.parts.activitybar"]',
+    '[id="workbench.parts.auxiliarybar"]',
   ];
   const BUTTON_SELECTORS = [
     "button",
     '[role="button"]',
-    'div[class*="button"]',
-    'div[style*="cursor: pointer"]',
-    'div[style*="cursor:pointer"]',
+    'a[role="button"]',
     '[class*="primary-button"]',
     '[class*="secondary-button"]',
     '[class*="text-button"]',
+    '[class*="action-label"]',
   ];
   const PROMPT_ROOT_SELECTORS = [
     '[role="dialog"]',
     '[role="alertdialog"]',
     '[aria-modal="true"]',
-    '[class*="dialog"]',
-    '[class*="popover"]',
-    '[class*="dropdown"]',
   ];
   const DISMISS_PATTERNS = new Set(["skip", "cancel", "dismiss", "deny", "not now", "close"]);
 
@@ -97,7 +101,7 @@
 
   function stripKeyboardHints(text) {
     return text
-      .replace(/\s*\(.*?\)\s*$/, "")
+      .replace(/\s*\([⌃⌥⇧⌘⎋⏎↩\s\w]{1,6}\)\s*$/, "")
       .replace(/[\s\u21A9\u23CE\u21E7\u2318\u2325\u238B\u232B\u2326\u21E5]+$/, "")
       .trim();
   }
@@ -129,8 +133,10 @@
   }
 
   function hasNearbyDismissal(el) {
+    const PART_BOUNDARY = /^workbench\.parts\./;
     let node = el;
-    for (let depth = 0; node && depth < 6; depth++) {
+    for (let depth = 0; node && depth < 3; depth++) {
+      if (node.id && PART_BOUNDARY.test(node.id)) break;
       for (const sel of BUTTON_SELECTORS) {
         for (const candidate of node.querySelectorAll(sel)) {
           if (candidate === el) continue;
@@ -176,6 +182,7 @@
     if (buttons.length === 0) {
       const promptRoots = document.querySelectorAll(PROMPT_ROOT_SELECTORS.join(", "));
       for (const root of promptRoots) {
+        if (isInExcludedZone(root)) continue;
         collectApprovalMatches(root, buttons, seen);
       }
     }
@@ -207,27 +214,24 @@
 
     if (state.enableConnectionRetry) {
       const containers = document.querySelectorAll(
-        '[class*="dropdown"], [class*="popover"], [class*="dialog"]'
+        '[role="dialog"], [role="alertdialog"], [aria-modal="true"]'
       );
       for (const container of containers) {
         if (isInExcludedZone(container)) continue;
-        const text = container.textContent.toLowerCase();
-        if (
-          text.includes("connection failed") ||
-          text.includes("internet") ||
-          text.includes("vpn")
-        ) {
-          for (const btn of container.querySelectorAll("button")) {
-            const t = btn.textContent.toLowerCase().trim();
-            if (t === "resume" || t === "try again") {
-              if (isVisible(btn) && isClickable(btn)) {
-                buttons.push({
-                  el: btn,
-                  kind: "connection",
-                  id: t === "resume" ? "connection_resume" : "connection_try_again",
-                  text: btn.textContent.trim(),
-                });
-              }
+        const text = container.textContent;
+        if (text.length > 500) continue;
+        const lower = text.toLowerCase();
+        if (!lower.includes("connection failed") && !lower.includes("connection error")) continue;
+        for (const btn of container.querySelectorAll("button")) {
+          const t = btn.textContent.toLowerCase().trim();
+          if (t === "resume" || t === "try again" || t === "retry") {
+            if (isVisible(btn) && isClickable(btn)) {
+              buttons.push({
+                el: btn,
+                kind: "connection",
+                id: t === "resume" ? "connection_resume" : "connection_try_again",
+                text: btn.textContent.trim(),
+              });
             }
           }
         }
@@ -238,7 +242,6 @@
   }
 
   function clickEl(el) {
-    if (el.focus) el.focus();
     try {
       if (typeof el.click === "function") {
         el.click();
@@ -276,7 +279,7 @@
     if (buttons.length === 0) return;
     const priority = { approval: 0, connection: 1, resume: 2 };
     const eligible = buttons
-      .filter((btn) => btn.kind !== "approval" || hasNearbyDismissal(btn.el))
+      .filter((btn) => btn.kind === "resume" || hasNearbyDismissal(btn.el))
       .sort((a, b) => (priority[a.kind || "approval"] ?? 9) - (priority[b.kind || "approval"] ?? 9));
     if (eligible.length === 0) return;
 
