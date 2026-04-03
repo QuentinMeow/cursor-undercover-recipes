@@ -1,3 +1,8 @@
+---
+description: 
+alwaysApply: true
+---
+
 # Launch Cursor Auto-Approve Agent Guide
 
 ## Summary
