@@ -1,0 +1,29 @@
+.cursor/skills/launch-cursor-autoapprove/scripts/devtools_auto_accept.js
+  53e6f209b25dc3aa 70,130-134,144-148,312-319,374-383,396-404
+.cursor/skills/launch-cursor-autoapprove/references/manual-testing.md
+  53e6f209b25dc3aa 489-554
+.cursor/skills/launch-cursor-autoapprove/LESSONS.md
+  53e6f209b25dc3aa 5-10,12-17,19-22,24-27,31-36,38-42,44-47,49-52,56-61,232-233
+.cursor/skills/launch-cursor-autoapprove/issues/011-auxiliarybar-chat-surface-blocked-by-excluded-zones.md
+  53e6f209b25dc3aa 1-113
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "e99543b0e0dd11b294825d2670ac73d436249710",
+  "prompts": {
+    "53e6f209b25dc3aa": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "849c6261-8f22-4b94-b3e7-a26cc17dc254",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 365,
+      "total_deletions": 38,
+      "accepted_lines": 335,
+      "overriden_lines": 0
+    }
+  }
+}
