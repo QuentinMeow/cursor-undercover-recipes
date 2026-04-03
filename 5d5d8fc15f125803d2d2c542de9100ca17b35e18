@@ -1,0 +1,31 @@
+.cursor/skills/github-manager/SKILL.md
+  5948fc637907ad74 56-61,76-81
+.cursor/skills/github-manager/references/review-checklist.md
+  5948fc637907ad74 29-30
+.cursor/skills/github-manager/LESSONS.md
+  5948fc637907ad74 11-17
+.cursor/skills/github-manager/references/pr-workflows.md
+  5948fc637907ad74 20-21,41-59,69-93,111-115,118-119
+.cursor/skills/github-manager/AGENTS.md
+  5948fc637907ad74 53-62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "5d5d8fc15f125803d2d2c542de9100ca17b35e18",
+  "prompts": {
+    "5948fc637907ad74": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "54227be8-6eea-48e4-b24f-b4a85d7aa6a3",
+        "model": "gpt-5.4-xhigh"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 88,
+      "total_deletions": 37,
+      "accepted_lines": 88,
+      "overriden_lines": 0
+    }
+  }
+}
