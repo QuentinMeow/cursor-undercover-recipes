@@ -1,0 +1,35 @@
+.cursor/skills/launch-cursor-autoapprove/references/manual-testing.md
+  239c682f06be74c8 73-76,106-124,473-474
+.cursor/skills/launch-cursor-autoapprove/issues/010-plain-text-esc-shortcut-suffix-blocked-shell-command-cards.md
+  239c682f06be74c8 1-53
+.cursor/skills/launch-cursor-autoapprove/scripts/stress_test.py
+  239c682f06be74c8 168-169,174,294-308,348,555
+.cursor/skills/launch-cursor-autoapprove/tests/fixtures/real-prompts/run-command-skip-esc.json
+  239c682f06be74c8 1-16
+.cursor/skills/launch-cursor-autoapprove/LESSONS.md
+  239c682f06be74c8 83-88,126-131
+.cursor/skills/launch-cursor-autoapprove/references/implementation.md
+  239c682f06be74c8 289,483-484
+.cursor/skills/launch-cursor-autoapprove/scripts/devtools_auto_accept.js
+  239c682f06be74c8 81,136,140-145
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "ab2a7c2166bbc511a1876bbd1dd75de2e27ece65",
+  "prompts": {
+    "239c682f06be74c8": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "18d2c6c9-c5e7-4b5f-89b1-0372169727df",
+        "model": "gpt-5.4-xhigh"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 138,
+      "total_deletions": 4,
+      "accepted_lines": 138,
+      "overriden_lines": 0
+    }
+  }
+}
