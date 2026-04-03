@@ -26,6 +26,8 @@ Use this when reviewing PRs locally or before posting GitHub comments.
 - Are secrets, tokens, or account identifiers kept out of the diff?
 - Does any automation fail closed on ambiguous state?
 - Are destructive or irreversible operations guarded or user-approved?
+- Are local-only artifacts such as worklogs, memory files, skill logs, or
+  scratch PR-body backups absent from the diff unless explicitly intended?
 
 ## Operations
 
