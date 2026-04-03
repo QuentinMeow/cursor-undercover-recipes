@@ -1,0 +1,16 @@
+{
+  "name": "deny-approve-request",
+  "description": "Permission approval: Deny + Approve Request (dismiss pattern)",
+  "source": "real Cursor UI capture, sanitized",
+  "spec": {
+    "role": "dialog",
+    "modal": true,
+    "buttons": [
+      { "var": "a", "text": "Deny" },
+      { "var": "b", "text": "Approve Request" }
+    ]
+  },
+  "expect_click": true,
+  "expect_id": "approve_request",
+  "expect_single_click": true
+}

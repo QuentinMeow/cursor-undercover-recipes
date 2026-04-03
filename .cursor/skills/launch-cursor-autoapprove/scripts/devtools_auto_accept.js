@@ -2,10 +2,14 @@
 // Injected by launcher.py via CDP Runtime.evaluate.
 // Canonical DOM injector for the launch-cursor-autoapprove skill.
 // Manual DevTools paste is emergency fallback only.
-// Originally adapted from ivalsaraj/true-yolo-cursor-auto-accept-full-agentic-mode,
-// then narrowed to Cursor approval surfaces with structured logging.
 //
-// API:  startAccept()  stopAccept()  acceptStatus()
+// Architecture: observer-driven surface detection + policy engine + event sink.
+// The MutationObserver detects DOM changes immediately; a fallback poll catches
+// anything the observer misses. The policy engine decides click/block/unknown.
+// All decisions are queued in state.eventQueue for the launcher to drain and
+// persist durably.
+//
+// API:  startAccept()  stopAccept()  acceptStatus()  acceptDebugSnapshot()
 (function () {
   "use strict";
 
@@ -17,8 +21,15 @@
   const LOG_PREFIX = "[autoAccept]";
   const SCRIPT_HASH = globalThis.__cursorAutoAcceptScriptHash || "unknown";
   const REPO_SLUG = globalThis.__cursorAutoAcceptRepoSlug || "workspace";
-  const STRATEGY_VERSION = "2026-04-context-first";
+  const STRATEGY_VERSION = "2026-04-observer-policy";
   const TITLE_SYNC_INTERVAL = 3000;
+  const OBSERVER_DEBOUNCE_MS = 300;
+  const FINGERPRINT_COOLDOWN_MS = 8000;
+  const EVENT_QUEUE_MAX = 200;
+
+  // -----------------------------------------------------------------------
+  // Pattern tables (discovery layer)
+  // -----------------------------------------------------------------------
 
   const APPROVAL_PATTERNS = [
     { pattern: "accept all", id: "accept_all" },
@@ -62,10 +73,17 @@
     '[role="alertdialog"]',
     '[aria-modal="true"]',
   ];
-  const DISMISS_PATTERNS = new Set(["skip", "cancel", "dismiss", "deny", "not now", "close", "reject", "don't allow", "decline"]);
+  const DISMISS_PATTERNS = new Set([
+    "skip", "cancel", "dismiss", "deny", "not now", "close", "reject",
+    "don't allow", "decline",
+  ]);
   const COMPANION_PATTERNS = new Set(["view", "stop", "details", "show details"]);
 
   const RESUME_DATA_LINK = "command:composer.resumeCurrentChat";
+
+  // -----------------------------------------------------------------------
+  // State
+  // -----------------------------------------------------------------------
 
   const state = {
     scriptHash: SCRIPT_HASH,
@@ -74,11 +92,20 @@
     running: false,
     timer: null,
     titleTimer: null,
+    observer: null,
+    observerDebounceTimer: null,
     totalClicks: 0,
     clicks: [],
+    eventQueue: [],
+    fingerprintCooldowns: new Map(),
     enableResume: true,
     enableConnectionRetry: true,
+    enableStateProbe: false,
   };
+
+  // -----------------------------------------------------------------------
+  // DOM helpers (shared by discovery and policy)
+  // -----------------------------------------------------------------------
 
   function isVisible(el) {
     const s = window.getComputedStyle(el);
@@ -114,6 +141,103 @@
   function normalizeLabel(text) {
     return stripKeyboardHints(text.toLowerCase().trim());
   }
+
+  // -----------------------------------------------------------------------
+  // Prompt fingerprinting (dedupe layer)
+  // -----------------------------------------------------------------------
+
+  function _promptFingerprint(el) {
+    const root = el.closest(PROMPT_ROOT_SELECTORS.join(", ")) || el.parentElement;
+    if (!root) return "orphan";
+    const buttons = [];
+    for (const sel of BUTTON_SELECTORS) {
+      for (const btn of root.querySelectorAll(sel)) {
+        const t = (btn.textContent || "").trim();
+        if (t && t.length <= 60) buttons.push(normalizeLabel(t));
+      }
+    }
+    buttons.sort();
+    return buttons.join("|") || "empty";
+  }
+
+  function _isCoolingDown(fingerprint) {
+    const last = state.fingerprintCooldowns.get(fingerprint);
+    if (!last) return false;
+    return Date.now() - last < FINGERPRINT_COOLDOWN_MS;
+  }
+
+  function _markClicked(fingerprint) {
+    state.fingerprintCooldowns.set(fingerprint);
+    state.fingerprintCooldowns.set(fingerprint, Date.now());
+    if (state.fingerprintCooldowns.size > 100) {
+      const oldest = state.fingerprintCooldowns.keys().next().value;
+      state.fingerprintCooldowns.delete(oldest);
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Event queue (sink for launcher to drain)
+  // -----------------------------------------------------------------------
+
+  function _queueEvent(ev) {
+    ev.ts = new Date().toISOString();
+    ev.scriptHash = SCRIPT_HASH;
+    state.eventQueue.push(ev);
+    if (state.eventQueue.length > EVENT_QUEUE_MAX) {
+      state.eventQueue = state.eventQueue.slice(-EVENT_QUEUE_MAX);
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // State-first probe (feature-flagged)
+  //
+  // When enabled, checks for internal Cursor approval state before DOM
+  // scanning. These internal signals are more stable than DOM labels but
+  // may break across Cursor versions — hence the feature flag.
+  // -----------------------------------------------------------------------
+
+  function _probeStructuredState() {
+    if (!state.enableStateProbe) return null;
+    try {
+      const indicators = [];
+      const allElements = document.querySelectorAll("[class*='approval'], [class*='permission'], [data-testid*='approval']");
+      for (const el of allElements) {
+        if (!isVisible(el) || isInExcludedZone(el)) continue;
+        indicators.push({
+          tag: el.tagName.toLowerCase(),
+          classes: el.className?.toString().slice(0, 100) || "",
+          text: (el.textContent || "").trim().slice(0, 100),
+        });
+      }
+
+      const composerStates = document.querySelectorAll("[class*='wakelock'], [class*='user-approval']");
+      for (const el of composerStates) {
+        if (!isVisible(el)) continue;
+        indicators.push({
+          tag: el.tagName.toLowerCase(),
+          classes: el.className?.toString().slice(0, 100) || "",
+          text: (el.textContent || "").trim().slice(0, 100),
+          signal: "internal-state",
+        });
+      }
+
+      if (indicators.length > 0) {
+        _queueEvent({
+          type: "state_probe",
+          indicators,
+          found: indicators.length,
+        });
+      }
+      return indicators.length > 0 ? indicators : null;
+    } catch (e) {
+      console.log(`${LOG_PREFIX} state probe error:`, e.message);
+      return null;
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Discovery layer: find approval candidates
+  // -----------------------------------------------------------------------
 
   function matchesApproval(el) {
     if (!el || !el.textContent) return null;
@@ -304,6 +428,64 @@
     return buttons;
   }
 
+  // -----------------------------------------------------------------------
+  // Policy layer: decide click/block/unknown
+  // -----------------------------------------------------------------------
+
+  function _eligibilityReason(btn) {
+    if (!_hasTrustedPromptContext(btn)) return null;
+    if (btn.kind === "resume") return "resume";
+    if (hasNearbyDismissal(btn.el)) return "dismiss";
+    if (hasNearbyCompanion(btn.el)) return "companion";
+    if (isModalSingleActionApprove(btn)) return "modal";
+    return null;
+  }
+
+  function _debugSurface(el) {
+    if (!el) return "none";
+    if (_isPromptRoot(el)) return "modal";
+    if (_isComposerSurface(el)) return "composer";
+    return "other";
+  }
+
+  // -----------------------------------------------------------------------
+  // Prompt-scoped artifact capture (focused, not whole-window)
+  // -----------------------------------------------------------------------
+
+  function _capturePromptSubtree(el) {
+    const root = el.closest(PROMPT_ROOT_SELECTORS.join(", ")) || el.parentElement;
+    if (!root) return null;
+    const buttons = [];
+    const seenEls = new Set();
+    for (const sel of BUTTON_SELECTORS) {
+      for (const btn of root.querySelectorAll(sel)) {
+        if (seenEls.has(btn)) continue;
+        seenEls.add(btn);
+        const text = (btn.textContent || "").trim();
+        if (!text || text.length > 80) continue;
+        buttons.push({
+          text,
+          normalized: normalizeLabel(text),
+          tag: btn.tagName.toLowerCase(),
+          visible: isVisible(btn),
+          clickable: isClickable(btn),
+          excluded: isInExcludedZone(btn),
+        });
+      }
+    }
+    return {
+      role: root.getAttribute("role"),
+      ariaModal: root.getAttribute("aria-modal"),
+      textPreview: (root.textContent || "").trim().slice(0, 200),
+      buttonCount: buttons.length,
+      buttons,
+    };
+  }
+
+  // -----------------------------------------------------------------------
+  // Click execution
+  // -----------------------------------------------------------------------
+
   function clickEl(el) {
     try {
       if (typeof el.click === "function") {
@@ -318,6 +500,134 @@
     const opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y };
     el.dispatchEvent(new MouseEvent("click", opts));
   }
+
+  // -----------------------------------------------------------------------
+  // Core check-and-click (called by observer and poll)
+  // -----------------------------------------------------------------------
+
+  function checkAndClick() {
+    _probeStructuredState();
+
+    const buttons = findApprovalButtons();
+    if (buttons.length === 0) return;
+
+    const priority = { approval: 0, connection: 1, resume: 2 };
+
+    const evaluated = buttons.map((btn) => ({
+      ...btn,
+      reason: _eligibilityReason(btn),
+      fingerprint: _promptFingerprint(btn.el),
+    }));
+
+    const eligible = evaluated
+      .filter((btn) => btn.reason !== null)
+      .sort((a, b) => (priority[a.kind || "approval"] ?? 9) - (priority[b.kind || "approval"] ?? 9));
+
+    const blocked = evaluated.filter((btn) => btn.reason === null && _hasTrustedPromptContext(btn));
+    const unknown = evaluated.filter((btn) => btn.reason === null && !_hasTrustedPromptContext(btn));
+
+    for (const btn of blocked) {
+      _queueEvent({
+        type: "blocked_candidate",
+        kind: btn.kind,
+        pattern_id: btn.id,
+        text: btn.text,
+        surface: _debugSurface(btn.el),
+        fingerprint: btn.fingerprint,
+        prompt: _capturePromptSubtree(btn.el),
+      });
+    }
+
+    for (const btn of unknown) {
+      _queueEvent({
+        type: "unknown_prompt",
+        kind: btn.kind,
+        pattern_id: btn.id,
+        text: btn.text,
+        surface: _debugSurface(btn.el),
+        fingerprint: btn.fingerprint,
+        prompt: _capturePromptSubtree(btn.el),
+      });
+    }
+
+    if (eligible.length === 0) return;
+
+    const btn = eligible[0];
+
+    if (_isCoolingDown(btn.fingerprint)) {
+      console.log(`${LOG_PREFIX} skipping ${btn.id} (cooldown for fingerprint ${btn.fingerprint.slice(0, 20)})`);
+      return;
+    }
+
+    clickEl(btn.el);
+    _markClicked(btn.fingerprint);
+    state.totalClicks++;
+    const entry = {
+      ts: new Date().toISOString(),
+      kind: btn.kind || "approval",
+      id: btn.id,
+      text: btn.text,
+      reason: btn.reason,
+      fingerprint: btn.fingerprint,
+    };
+    state.clicks.push(entry);
+    if (state.clicks.length > 100) {
+      state.clicks = state.clicks.slice(-100);
+    }
+
+    _queueEvent({
+      type: "click",
+      kind: btn.kind || "approval",
+      pattern_id: btn.id,
+      text: btn.text,
+      reason: btn.reason,
+      fingerprint: btn.fingerprint,
+      prompt: _capturePromptSubtree(btn.el),
+    });
+
+    console.log(
+      `${LOG_PREFIX} clicked ${btn.id}: "${btn.text}" [${btn.reason}] (total: ${state.totalClicks})`
+    );
+  }
+
+  // -----------------------------------------------------------------------
+  // MutationObserver: detect prompt surfaces immediately
+  // -----------------------------------------------------------------------
+
+  function _setupObserver() {
+    if (state.observer) return;
+
+    state.observer = new MutationObserver(() => {
+      if (!state.running) return;
+      if (state.observerDebounceTimer) clearTimeout(state.observerDebounceTimer);
+      state.observerDebounceTimer = setTimeout(() => {
+        state.observerDebounceTimer = null;
+        checkAndClick();
+      }, OBSERVER_DEBOUNCE_MS);
+    });
+
+    state.observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["role", "aria-modal", "class", "style", "disabled"],
+    });
+  }
+
+  function _teardownObserver() {
+    if (state.observer) {
+      state.observer.disconnect();
+      state.observer = null;
+    }
+    if (state.observerDebounceTimer) {
+      clearTimeout(state.observerDebounceTimer);
+      state.observerDebounceTimer = null;
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Title sync
+  // -----------------------------------------------------------------------
 
   function _syncTitle() {
     const emoji = state.running ? "\u2705" : "\u23F8";
@@ -337,21 +647,9 @@
     if (titleContainer) titleContainer.title = title;
   }
 
-  function _eligibilityReason(btn) {
-    if (!_hasTrustedPromptContext(btn)) return null;
-    if (btn.kind === "resume") return "resume";
-    if (hasNearbyDismissal(btn.el)) return "dismiss";
-    if (hasNearbyCompanion(btn.el)) return "companion";
-    if (isModalSingleActionApprove(btn)) return "modal";
-    return null;
-  }
-
-  function _debugSurface(el) {
-    if (!el) return "none";
-    if (_isPromptRoot(el)) return "modal";
-    if (_isComposerSurface(el)) return "composer";
-    return "other";
-  }
+  // -----------------------------------------------------------------------
+  // Debug snapshot (prompt-scoped, not whole-window button dump)
+  // -----------------------------------------------------------------------
 
   function _debugButtons(limit = 300) {
     const rows = [];
@@ -382,22 +680,31 @@
   }
 
   function debugSnapshot() {
-    const candidates = findApprovalButtons().map((btn) => ({
-      kind: btn.kind || "approval",
-      id: btn.id || "",
-      text: btn.text || "",
-      reason: _eligibilityReason(btn),
-      surface: _debugSurface(btn.el),
-      inExcludedZone: isInExcludedZone(btn.el),
-      hasDismissNearby: hasNearbyDismissal(btn.el),
-      hasCompanionNearby: hasNearbyCompanion(btn.el),
-      isModalSingleActionApprove: isModalSingleActionApprove(btn),
-    }));
+    const candidates = findApprovalButtons().map((btn) => {
+      const fp = _promptFingerprint(btn.el);
+      return {
+        kind: btn.kind || "approval",
+        id: btn.id || "",
+        text: btn.text || "",
+        reason: _eligibilityReason(btn),
+        surface: _debugSurface(btn.el),
+        fingerprint: fp,
+        coolingDown: _isCoolingDown(fp),
+        inExcludedZone: isInExcludedZone(btn.el),
+        hasDismissNearby: hasNearbyDismissal(btn.el),
+        hasCompanionNearby: hasNearbyCompanion(btn.el),
+        isModalSingleActionApprove: isModalSingleActionApprove(btn),
+        prompt: _capturePromptSubtree(btn.el),
+      };
+    });
     return {
       strategyVersion: STRATEGY_VERSION,
       scriptHash: state.scriptHash,
       running: state.running,
       totalClicks: state.totalClicks,
+      observerActive: !!state.observer,
+      eventQueueLength: state.eventQueue.length,
+      cooldownEntries: state.fingerprintCooldowns.size,
       visibleButtons: _debugButtons(),
       candidates,
       eligible: candidates.filter((c) => c.reason !== null),
@@ -405,26 +712,9 @@
     };
   }
 
-  function checkAndClick() {
-    const buttons = findApprovalButtons();
-    if (buttons.length === 0) return;
-    const priority = { approval: 0, connection: 1, resume: 2 };
-    const eligible = buttons
-      .map((btn) => ({ ...btn, reason: _eligibilityReason(btn) }))
-      .filter((btn) => btn.reason !== null)
-      .sort((a, b) => (priority[a.kind || "approval"] ?? 9) - (priority[b.kind || "approval"] ?? 9));
-    if (eligible.length === 0) return;
-
-    const btn = eligible[0];
-    clickEl(btn.el);
-    state.totalClicks++;
-    const entry = { ts: new Date().toISOString(), kind: btn.kind || "approval", id: btn.id, text: btn.text, reason: btn.reason };
-    state.clicks.push(entry);
-    if (state.clicks.length > 100) {
-      state.clicks = state.clicks.slice(-100);
-    }
-    console.log(`${LOG_PREFIX} clicked ${btn.id}: "${btn.text}" [${btn.reason}] (total: ${state.totalClicks})`);
-  }
+  // -----------------------------------------------------------------------
+  // Start / stop / status
+  // -----------------------------------------------------------------------
 
   function start(interval) {
     if (state.running) {
@@ -433,9 +723,10 @@
     }
     if (typeof interval === "number" && interval > 0) state.interval = interval;
     state.running = true;
+    _setupObserver();
     state.timer = setInterval(checkAndClick, state.interval);
     _syncTitle();
-    console.log(`${LOG_PREFIX} started (interval ${state.interval}ms)`);
+    console.log(`${LOG_PREFIX} started (interval ${state.interval}ms, observer active)`);
   }
 
   function stop() {
@@ -445,6 +736,7 @@
     }
     clearInterval(state.timer);
     state.timer = null;
+    _teardownObserver();
     state.running = false;
     _syncTitle();
     console.log(`${LOG_PREFIX} stopped (total clicks: ${state.totalClicks})`);
@@ -458,11 +750,18 @@
       running: state.running,
       interval: state.interval,
       totalClicks: state.totalClicks,
+      observerActive: !!state.observer,
+      eventQueueLength: state.eventQueue.length,
+      cooldownEntries: state.fingerprintCooldowns.size,
       recentClicks: state.clicks.slice(-10),
     };
     console.log(`${LOG_PREFIX} status`, JSON.stringify(s, null, 2));
     return s;
   }
+
+  // -----------------------------------------------------------------------
+  // Bootstrap
+  // -----------------------------------------------------------------------
 
   state.titleTimer = setInterval(_syncTitle, TITLE_SYNC_INTERVAL);
   _syncTitle();
@@ -473,5 +772,7 @@
   globalThis.acceptStatus = status;
   globalThis.acceptDebugSnapshot = debugSnapshot;
 
-  console.log(`${LOG_PREFIX} loaded (${SCRIPT_HASH}) — startAccept() / stopAccept() / acceptStatus()`);
+  console.log(
+    `${LOG_PREFIX} loaded (${SCRIPT_HASH}) — startAccept() / stopAccept() / acceptStatus()`
+  );
 })();

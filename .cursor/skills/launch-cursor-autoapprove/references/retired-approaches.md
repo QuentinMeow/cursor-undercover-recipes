@@ -127,3 +127,9 @@ remove stale runtime artifacts so they cannot conflict with this skill:
 The supported global skill name for this approach is:
 
 - `/global-launch-cursor-autoapprove`
+
+**Note (2026-04)**: The repo-local `.cursor/hooks.json` had a stale
+`beforeShellExecution` hook calling the retired `cursor_auto_approval.py`.
+This was removed as part of the observer-policy rework. The launcher now
+automatically detects and warns about any remaining stale hooks at launch
+and status time.

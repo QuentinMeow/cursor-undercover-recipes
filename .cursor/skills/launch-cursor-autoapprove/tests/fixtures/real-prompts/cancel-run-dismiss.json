@@ -1,0 +1,16 @@
+{
+  "name": "cancel-run-dismiss",
+  "description": "Shell command approval: Cancel + Run (dismiss pattern)",
+  "source": "real Cursor UI capture, sanitized",
+  "spec": {
+    "role": "dialog",
+    "modal": true,
+    "buttons": [
+      { "var": "a", "text": "Cancel" },
+      { "var": "b", "text": "Run" }
+    ]
+  },
+  "expect_click": true,
+  "expect_id": "run",
+  "expect_single_click": true
+}

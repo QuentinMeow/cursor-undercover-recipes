@@ -63,6 +63,47 @@ HISTORY_MAX_BYTES = 5 * 1024 * 1024  # rotate at 5 MB
 
 CONFIG_PATH = RUNTIME_DIR / "config.json"
 
+STALE_HOOK_PATTERNS = [
+    "auto-approval/cursor_auto_approval.py",
+    "cursor-autoapprove",
+    "personal-cursor-quickapprove",
+]
+
+
+# ---------------------------------------------------------------------------
+# Stale-hook detection
+# ---------------------------------------------------------------------------
+
+
+def _check_stale_hooks(workspace: str | Path | None = None) -> list[str]:
+    """Return warning lines if any repo or global hooks.json contains retired approval hooks."""
+    warnings: list[str] = []
+    candidates: list[Path] = [Path.home() / ".cursor" / "hooks.json"]
+    if workspace:
+        candidates.append(Path(workspace) / ".cursor" / "hooks.json")
+    for hooks_path in candidates:
+        if not hooks_path.is_file():
+            continue
+        try:
+            data = json.loads(hooks_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        for hook_list in data.get("hooks", {}).values():
+            if not isinstance(hook_list, list):
+                continue
+            for entry in hook_list:
+                cmd = entry.get("command", "") if isinstance(entry, dict) else ""
+                for pattern in STALE_HOOK_PATTERNS:
+                    if pattern in cmd:
+                        warnings.append(
+                            f"  WARNING: Stale approval hook detected in {hooks_path}:\n"
+                            f"           {cmd}\n"
+                            f"           This conflicts with launch-cursor-autoapprove. "
+                            f"Remove the hook entry or delete the file."
+                        )
+    return warnings
+
+
 # ---------------------------------------------------------------------------
 # State file helpers
 # ---------------------------------------------------------------------------
@@ -287,6 +328,9 @@ def _clear_injector_expression() -> str:
 """.strip()
 
 
+PROMPT_ARTIFACTS_DIR = RUNTIME_DIR / "prompt-artifacts"
+
+
 def _log_event(record_type: str, workspace: str = "", slug: str = "",
                **extra: object) -> None:
     """Append an NDJSON event to the history log."""
@@ -309,6 +353,58 @@ def _log_event(record_type: str, workspace: str = "", slug: str = "",
             f.write(line)
     except OSError:
         pass
+
+
+def _save_prompt_artifact(event: dict, slug: str) -> str | None:
+    """Write a per-prompt JSON artifact file. Returns the path or None."""
+    try:
+        PROMPT_ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+        ts = event.get("ts", datetime.now(timezone.utc).isoformat())
+        ts_safe = ts.replace(":", "").replace("+", "p")[:20]
+        kind = event.get("record_type", "unknown")
+        fingerprint = event.get("fingerprint", "nofp")[:16]
+        fname = f"{ts_safe}-{slug}-{kind}-{fingerprint}.json"
+        path = PROMPT_ARTIFACTS_DIR / fname
+        path.write_text(json.dumps(event, indent=2, default=str), encoding="utf-8")
+        return str(path)
+    except OSError:
+        return None
+
+
+_DRAIN_EVENTS_EXPR = r"""
+(() => {
+  if (typeof globalThis.__cursorAutoAccept === 'undefined') return '[]';
+  const q = globalThis.__cursorAutoAccept.state.eventQueue || [];
+  globalThis.__cursorAutoAccept.state.eventQueue = [];
+  return JSON.stringify(q);
+})()
+""".strip()
+
+
+def _drain_injector_events(port: int, target_id: str | None,
+                           workspace: str = "", slug: str = "") -> list[dict]:
+    """Pull queued events from the injector and persist them durably."""
+    try:
+        result = _cdp_evaluate(port, _DRAIN_EVENTS_EXPR, target_id=target_id)
+        raw = result.get("result", {}).get("result", {}).get("value", "[]")
+        events = json.loads(raw) if isinstance(raw, str) else []
+    except (ConnectionRefusedError, OSError, RuntimeError, json.JSONDecodeError):
+        return []
+
+    persisted: list[dict] = []
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        record_type = ev.get("type", "unknown")
+        ev["record_type"] = record_type
+        _log_event(
+            record_type, workspace, slug,
+            **{k: v for k, v in ev.items() if k not in ("type", "record_type")},
+        )
+        if record_type in ("blocked_candidate", "unknown_prompt"):
+            _save_prompt_artifact(ev, slug)
+        persisted.append(ev)
+    return persisted
 
 
 def _skill_doc_dir() -> Path | None:
@@ -1276,6 +1372,8 @@ def _print_session_status(session: dict) -> None:
         if target_count:
             print(f"Targets:   {target_count} page target(s) on port")
 
+        drained = _drain_injector_events(port, bound_target, workspace, slug)
+
         gate = _cdp_gate(port, "status", target_id=bound_target)
         if gate:
             running = gate.get("running", False)
@@ -1300,6 +1398,18 @@ def _print_session_status(session: dict) -> None:
                 print(f"Recent:    {json.dumps(recent[-3:])}")
         else:
             print("Gate:      unknown (CDP or injector status unavailable)")
+
+        if drained:
+            click_events = [e for e in drained if e.get("record_type") == "click"]
+            unknown_events = [e for e in drained if e.get("record_type") == "unknown_prompt"]
+            blocked_events = [e for e in drained if e.get("record_type") == "blocked_candidate"]
+            if click_events:
+                print(f"Drained:   {len(click_events)} click event(s) persisted to history")
+            if unknown_events:
+                last_unknown = unknown_events[-1]
+                print(f"  UNKNOWN: Last unknown prompt: {last_unknown.get('text', '?')[:60]}")
+            if blocked_events:
+                print(f"  BLOCKED: {len(blocked_events)} blocked candidate(s) captured")
 
         if target_warning:
             print(target_warning)
@@ -1396,6 +1506,9 @@ def cmd_launch(args: argparse.Namespace) -> int:
     ws_key = str(workspace)
     slug = _repo_slug(workspace)
     enabled_title = _window_title(workspace, gate_on=True)
+
+    for warn in _check_stale_hooks(workspace):
+        print(warn, file=sys.stderr)
 
     existing = sessions.get(ws_key)
     if existing and existing.get("pid") and _pid_is_alive(existing["pid"]):
@@ -1625,6 +1738,11 @@ def cmd_status(args: argparse.Namespace) -> int:
         print("No active sessions.")
         return 0
 
+    for ws in sessions:
+        for warn in _check_stale_hooks(ws):
+            print(warn, file=sys.stderr)
+        break  # only check once using the first workspace
+
     workspace_arg = getattr(args, "workspace", None)
     if workspace_arg:
         session = _resolve_session(args, state, require_alive=False, allow_interactive=True, command_name="status")
@@ -1807,6 +1925,10 @@ def cmd_history(args: argparse.Namespace) -> int:
             detail = f"session {action} (PID {pid_val})"
         elif rtype == "click":
             detail = f"click {e.get('kind', '?')} {e.get('pattern_id', '?')}: {e.get('text', '')}"
+        elif rtype == "blocked_candidate":
+            detail = f"blocked {e.get('reason', '?')}: {e.get('text', '')[:40]}"
+        elif rtype == "unknown_prompt":
+            detail = f"UNKNOWN: {e.get('text', '')[:50]}"
         else:
             detail = f"{rtype} {action}"
         target = e.get("cdp_target_id", "")

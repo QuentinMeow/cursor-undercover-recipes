@@ -388,6 +388,41 @@ Optional deep synthetic matrix:
   --mode synthetic --suite full --port 9222
 ```
 
+## Test 10: Real-Prompt Replay
+
+Replay sanitized real-prompt fixtures (the end-to-end regression gate):
+
+```bash
+/usr/bin/python3 "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/scripts/stress_test.py" \
+  --mode replay --port 9222
+```
+
+Expected result:
+
+- All fixtures pass (correct click behavior + single-click dedupe)
+- `Results: <n>/<n> passed, 0 failed`
+- Artifacts under `logs/<run-id>-harness-replay/`
+- Per-case JSON with before/after debug snapshots and screenshots
+
+To add new fixtures from a missed prompt, sanitize the captured prompt subtree
+and save as `tests/fixtures/real-prompts/<descriptive-name>.json`.
+
+## Test 11: Event Drain Verification
+
+After running any approval-producing action:
+
+```bash
+/usr/bin/python3 "$LAUNCHER" status
+```
+
+Expected result:
+
+- `Drained:` line shows click events persisted to history
+- `history.jsonl` contains `click` records with `fingerprint` and `prompt` fields
+- If a prompt was missed: `UNKNOWN:` line shows the unmatched prompt text
+- Artifact files in `~/.cursor/launch-autoapprove/prompt-artifacts/` for any
+  blocked or unknown events
+
 Expected result (meaningful suite):
 
 - around a dozen high-signal cases (instead of 50)
@@ -412,6 +447,7 @@ Categories tested:
 - 4 non-approve solo buttons (should NOT click)
 - 10 false-positive guards (excluded zones, invisible, disabled, etc.)
 - 10 edge cases (keyboard hints, case, whitespace, role=button, etc.)
+- 5 real-prompt replay fixtures (dedupe-checked)
 
 ## Cleanup
 
