@@ -1,0 +1,35 @@
+.cursor/skills/launch-cursor-autoapprove/scripts/launcher.py
+  390933deda1bd635 730-799,1819-1963,2028-2040
+.cursor/skills/launch-cursor-autoapprove/LESSONS.md
+  390933deda1bd635 88-105
+.cursor/skills/launch-cursor-autoapprove/scripts/stress_test.py
+  390933deda1bd635 1-320
+.cursor/skills/launch-cursor-autoapprove/issues/008-allow-view-companion-not-recognized.md
+  390933deda1bd635 1-60
+.cursor/skills/launch-cursor-autoapprove/references/implementation.md
+  390933deda1bd635 264,266-284,286-290,364-403
+.cursor/skills/launch-cursor-autoapprove/references/manual-testing.md
+  390933deda1bd635 325-380
+.cursor/skills/launch-cursor-autoapprove/scripts/devtools_auto_accept.js
+  390933deda1bd635 64-65,131,136,139-147,155,163-168,321-328,334-335,342,347
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "7a9e06122dd769cf6941d8f4b0145eeae0b1be94",
+  "prompts": {
+    "390933deda1bd635": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "235bd6ab-e201-4f7d-ad2a-6122d90e0401",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 1021,
+      "total_deletions": 263,
+      "accepted_lines": 781,
+      "overriden_lines": 0
+    }
+  }
+}
