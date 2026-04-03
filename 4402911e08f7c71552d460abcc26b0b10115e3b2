@@ -1,0 +1,31 @@
+.cursor/skills/launch-cursor-autoapprove/README.md
+  9a4cbede4ea33939 77-79,102-106
+.cursor/skills/launch-cursor-autoapprove/LESSONS.md
+  9a4cbede4ea33939 173-184
+.cursor/skills/launch-cursor-autoapprove/SKILL.md
+  9a4cbede4ea33939 99-100,126-127
+.cursor/skills/launch-cursor-autoapprove/references/implementation.md
+  9a4cbede4ea33939 50-53,525-532
+.cursor/skills/launch-cursor-autoapprove/references/retired-approaches.md
+  9a4cbede4ea33939 96,105
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "4402911e08f7c71552d460abcc26b0b10115e3b2",
+  "prompts": {
+    "9a4cbede4ea33939": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "1039881c-b41e-4d30-8531-2394798246bb",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 38,
+      "total_deletions": 4,
+      "accepted_lines": 38,
+      "overriden_lines": 0
+    }
+  }
+}
