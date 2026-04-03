@@ -1,7 +1,7 @@
 ---
 description: README.md and AGENTS.md authoring guide
 globs: "**/README.md,**/AGENTS.md"
-alwaysApply: false
+alwaysApply: true
 ---
 ## Audience Split
 

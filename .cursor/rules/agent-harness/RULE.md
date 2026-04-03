@@ -1,6 +1,6 @@
 ---
 description: Evidence-first harness engineering principles for AI agent reliability
-alwaysApply: false
+alwaysApply: true
 globs:
   - ".cursor/skills/**"
   - ".cursor/rules/**"

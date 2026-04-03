@@ -1,3 +1,8 @@
+---
+description: 
+alwaysApply: true
+---
+
 # GitHub Manager Agent Guide
 
 ## Summary

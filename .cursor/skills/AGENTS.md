@@ -1,3 +1,8 @@
+---
+description: 
+alwaysApply: true
+---
+
 # Shared Skills Agent Guide
 
 ## Summary
