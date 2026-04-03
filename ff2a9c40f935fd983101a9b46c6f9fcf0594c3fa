@@ -1,0 +1,44 @@
+.cursor/skills/launch-cursor-autoapprove/scripts/devtools_auto_accept.js
+  390933deda1bd635 25-27
+.cursor/skills/launch-cursor-autoapprove/references/implementation.md
+  390933deda1bd635 246-247
+.cursor/skills/launch-cursor-autoapprove/issues/006-approve-labeled-prompts-not-matched.md
+  390933deda1bd635 1-39
+.cursor/skills/launch-cursor-autoapprove/references/manual-testing.md
+  390933deda1bd635 68-72,146-161
+.cursor/skills/launch-cursor-autoapprove/LESSONS.md
+  390933deda1bd635 76-81
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "ff2a9c40f935fd983101a9b46c6f9fcf0594c3fa",
+  "prompts": {
+    "390933deda1bd635": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "235bd6ab-e201-4f7d-ad2a-6122d90e0401",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 72,
+      "total_deletions": 1,
+      "accepted_lines": 72,
+      "overriden_lines": 0
+    },
+    "5948fc637907ad74": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "54227be8-6eea-48e4-b24f-b4a85d7aa6a3",
+        "model": "gpt-5.4-xhigh"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    }
+  }
+}
