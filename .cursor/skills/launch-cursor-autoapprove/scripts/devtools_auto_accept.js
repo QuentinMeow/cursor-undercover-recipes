@@ -727,6 +727,7 @@
     state.timer = setInterval(checkAndClick, state.interval);
     _syncTitle();
     console.log(`${LOG_PREFIX} started (interval ${state.interval}ms, observer active)`);
+    setTimeout(checkAndClick, 50);
   }
 
   function stop() {
