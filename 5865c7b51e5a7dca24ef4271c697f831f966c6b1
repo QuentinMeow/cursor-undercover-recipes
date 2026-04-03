@@ -1,0 +1,45 @@
+.cursor/skills/launch-cursor-autoapprove/scripts/stress_test.py
+  6e9f92bbde744661 2,7,483-621,635,643,648,661-662
+.cursor/skills/launch-cursor-autoapprove/references/retired-approaches.md
+  6e9f92bbde744661 130-135
+.cursor/skills/launch-cursor-autoapprove/tests/fixtures/real-prompts/allow-view-companion.json
+  6e9f92bbde744661 1-16
+.cursor/skills/launch-cursor-autoapprove/scripts/launcher.py
+  6e9f92bbde744661 66-106,331-333,358-407,1375-1376,1402-1412,1510-1512,1741-1745,1928-1931
+.cursor/skills/launch-cursor-autoapprove/scripts/devtools_auto_accept.js
+  6e9f92bbde744661 6-12,24,26-32,76-79,84-87,95-96,99-100,103,106-108,145-175,178-241,431-482,485-488,504-590,593-631,650-652,683-699,705-707,715-717,726,729,739,753-755,762-764,775-777
+.cursor/skills/launch-cursor-autoapprove/LESSONS.md
+  6e9f92bbde744661 124-159
+.cursor/skills/launch-cursor-autoapprove/tests/fixtures/real-prompts/deny-approve-request.json
+  6e9f92bbde744661 1-16
+.cursor/skills/launch-cursor-autoapprove/tests/fixtures/real-prompts/cancel-run-dismiss.json
+  6e9f92bbde744661 1-16
+.cursor/skills/launch-cursor-autoapprove/tests/fixtures/real-prompts/run-this-time-only-with-hint.json
+  6e9f92bbde744661 1-16
+.cursor/skills/launch-cursor-autoapprove/references/manual-testing.md
+  6e9f92bbde744661 391-425,450
+.cursor/skills/launch-cursor-autoapprove/tests/fixtures/real-prompts/approve-terminal-command-solo.json
+  6e9f92bbde744661 1-15
+.cursor/skills/launch-cursor-autoapprove/references/implementation.md
+  6e9f92bbde744661 13,20-39,117-118,123-133,248-256,259,261-263,266-267,371-386,469,475-477,495-507,516-517
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "5865c7b51e5a7dca24ef4271c697f831f966c6b1",
+  "prompts": {
+    "6e9f92bbde744661": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "d3d89965-14f8-4617-ad44-7b05307098dd",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 864,
+      "total_deletions": 64,
+      "accepted_lines": 864,
+      "overriden_lines": 0
+    }
+  }
+}
