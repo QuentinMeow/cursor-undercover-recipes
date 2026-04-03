@@ -89,11 +89,12 @@ lifecycle with `on`/`off`/`stop`.
 
 | Command | What it does |
 |---------|-------------|
-| `launch [-w PATH] [PATH]` | Open dedicated Cursor, inject DOM script, gate ON. Blocks only if the same workspace is already running. Multiple workspaces can run simultaneously. |
+| `launch [-w PATH] [PATH\|ALIAS]` | Open dedicated Cursor, inject DOM script, gate ON. Accepts a concrete path (relative or absolute) or a registered alias. Auto-registers the directory name as an alias. Blocks only if the same workspace is already running. Multiple workspaces can run simultaneously. |
 | `on [-w PATH\|SLUG]` | Resume auto-clicking (`startAccept()` via CDP). Reloads stale in-window injector code when hash differs. Auto-detected if only one session, otherwise opens an interactive picker in a TTY. |
 | `off [-w PATH\|SLUG]` | Pause auto-clicking (`stopAccept()` via CDP) while keeping the dedicated window open. Auto-detected if only one session, otherwise opens an interactive picker in a TTY. |
 | `status [-w PATH\|SLUG]` | Show session details. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
 | `stop [-w PATH\|SLUG] [--all]` | Pause gate, close dedicated Cursor process, and remove session when shutdown succeeds. Without `-w`, it prefers running sessions when any are alive; if none are running, it falls back to stale entries for cleanup. Use `--all` to stop every session, but do not combine `--all` with `-w` or a positional workspace. |
+| `alias [set\|remove\|list]` | Manage workspace aliases stored in `config.json`. `set <name> <path>` registers a new alias (validates the path exists and the name is not already taken). `remove <name>` deletes one. `list` shows all. |
 | `history [-w SLUG] [-n LIMIT] [--json]` | Show durable event log of session/gate/click events. Persisted across sessions. |
 | `help [COMMAND]` | Show usage examples, subcommand help, and paths to the deeper docs. |
 
@@ -109,8 +110,10 @@ use `caa --help` (or the full launcher path with `--help`).
 
 ## How It Works
 
-1. `launch` syncs `settings.json` and `keybindings.json` from your default
-   Cursor profile so editor preferences carry over to the dedicated window.
+1. `launch` syncs `settings.json`, `keybindings.json`, and auth tokens from
+   your default Cursor profile so editor preferences and login carry over to
+   the dedicated window. It also auto-registers the directory name as an alias
+   in `config.json` for quick future launches.
 2. `launch` starts a new Cursor process with `--remote-debugging-port` and
    `--user-data-dir` (a per-workspace profile directory). Each workspace gets
    its own persistent profile at `~/.cursor/launch-autoapprove/dedicated-profile-<slug>/`.

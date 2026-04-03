@@ -19,6 +19,30 @@
   likely mean a manual window was opened inside the dedicated process, which
   can confuse CDP commands.
 
+## Session State Hygiene
+
+- **Dead and invalid sessions must be garbage-collected automatically**: If
+  sessions are persisted on disk (e.g. `state.json`), every state load should
+  prune entries whose PIDs are dead OR whose workspace paths no longer exist.
+  A session with a non-existent workspace is always broken regardless of PID
+  status — the Cursor window opened on a bogus path, and keeping the entry
+  causes slug collisions, which cascade into new profile dirs and forced
+  re-logins.  Relying on explicit `stop` commands for cleanup causes stale
+  entries to accumulate and confuse every subsequent command.
+
+- **Bare-name workspace arguments resolve relative to CWD, not intent**:
+  `Path("gocmp").resolve()` becomes `$CWD/gocmp`, which may not exist.
+  The launcher must validate that the resolved path is an existing directory.
+  Do not guess with hardcoded search parents (e.g. `~/code`) — that is
+  environment-specific and breaks for other users. Instead, use an explicit
+  alias config file (`config.json`) and auto-register directory names on
+  successful launch so short names work on subsequent invocations.
+
+- **Auth tokens must be bootstrapped into dedicated profiles**: Electron
+  `--user-data-dir` profiles are fully isolated — including login state.
+  Copy `cursorAuth/*` rows from the default profile's `state.vscdb` at
+  launch time so the user is not forced to re-login for every new workspace.
+
 ## Runtime Sync
 
 - **Long-lived injected scripts need an explicit version handshake**: When a
@@ -26,6 +50,14 @@
   open, compare an on-disk script hash with the in-window injector state and
   reload only when they differ. Otherwise `status` can look healthy while the
   running window still uses stale logic.
+
+## Process Discipline
+
+- **Always update lessons and docs after fixing a bug**: Every bug fix
+  must produce a corresponding update to `LESSONS.md`, `issues/`, and
+  `references/implementation.md`.  The cost of forgetting is that the
+  same mistake recurs because the context is lost.  Treat doc updates
+  as part of the definition of done, not an afterthought.
 
 ## DOM Auto-Click Safety
 
