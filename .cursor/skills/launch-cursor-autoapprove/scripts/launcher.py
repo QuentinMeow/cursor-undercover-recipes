@@ -24,6 +24,7 @@ import re
 import select
 import shutil
 import signal
+import sqlite3
 import socket
 import struct
 import subprocess
@@ -60,6 +61,8 @@ CDP_INJECT_RETRIES = 6
 HISTORY_PATH = RUNTIME_DIR / "history.jsonl"
 HISTORY_MAX_BYTES = 5 * 1024 * 1024  # rotate at 5 MB
 
+CONFIG_PATH = RUNTIME_DIR / "config.json"
+
 # ---------------------------------------------------------------------------
 # State file helpers
 # ---------------------------------------------------------------------------
@@ -70,8 +73,12 @@ def _profile_dir(slug: str) -> Path:
     return RUNTIME_DIR / f"dedicated-profile-{slug}"
 
 
-def _load_state() -> dict:
-    """Load multi-session state. Auto-migrates legacy single-session format."""
+def _load_state(gc: bool = True) -> dict:
+    """Load multi-session state. Auto-migrates legacy single-session format.
+
+    When *gc* is True (the default), stale sessions whose PIDs are dead
+    are pruned automatically so they never accumulate on disk.
+    """
     if not STATE_PATH.exists():
         return {"sessions": {}}
     try:
@@ -79,6 +86,10 @@ def _load_state() -> dict:
     except (json.JSONDecodeError, OSError):
         return {"sessions": {}}
     if "sessions" in raw:
+        if not isinstance(raw["sessions"], dict):
+            raw["sessions"] = {}
+        if gc:
+            return _gc_stale_sessions(raw)
         return raw
     # Legacy single-session format: wrap into multi-session and migrate profile dir
     if "pid" in raw and "workspace" in raw:
@@ -91,6 +102,8 @@ def _load_state() -> dict:
         if legacy_profile.is_dir() and not target_profile.exists():
             legacy_profile.rename(target_profile)
         _save_state(new_state)
+        if gc:
+            return _gc_stale_sessions(new_state)
         return new_state
     return {"sessions": {}}
 
@@ -102,9 +115,39 @@ def _save_state(state: dict) -> None:
     tmp.replace(STATE_PATH)
 
 
+def _gc_stale_sessions(state: dict) -> dict:
+    """Remove sessions that are stale or invalid and persist the change.
+
+    A session is removed when ANY of these is true:
+    - PID is no longer alive (process exited)
+    - Workspace path does not exist as a directory (ghost session from a
+      bad launch path; the Cursor process is terminated if still alive)
+    """
+    sessions = state.get("sessions", {})
+    keep: dict[str, dict] = {}
+    for ws, s in sessions.items():
+        pid = s.get("pid")
+        pid_alive = pid and _pid_is_alive(pid)
+        ws_exists = Path(ws).is_dir()
+
+        if pid_alive and ws_exists:
+            keep[ws] = s
+        elif pid_alive and not ws_exists:
+            _terminate_pid(pid, timeout=3.0)
+        # else: pid dead — just drop the entry
+
+    if len(keep) != len(sessions):
+        state["sessions"] = keep
+        if keep:
+            _save_state(state)
+        else:
+            _clear_all_state()
+    return state
+
+
 def _remove_session(workspace: str) -> None:
     """Remove a single session entry from state."""
-    state = _load_state()
+    state = _load_state(gc=False)
     state["sessions"].pop(workspace, None)
     if state["sessions"]:
         _save_state(state)
@@ -119,6 +162,89 @@ def _clear_all_state() -> None:
         pass
     except OSError:
         _save_state({"sessions": {}})
+
+
+# ---------------------------------------------------------------------------
+# Config file helpers (aliases)
+# ---------------------------------------------------------------------------
+
+
+def _load_config() -> dict:
+    if not CONFIG_PATH.exists():
+        return {"aliases": {}}
+    try:
+        raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {"aliases": {}}
+    if not isinstance(raw.get("aliases"), dict):
+        raw["aliases"] = {}
+    return raw
+
+
+def _save_config(config: dict) -> None:
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = CONFIG_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    tmp.replace(CONFIG_PATH)
+
+
+def _get_alias(name: str) -> str | None:
+    """Look up a workspace alias. Returns the absolute path string or None."""
+    config = _load_config()
+    return config.get("aliases", {}).get(name)
+
+
+def _set_alias(name: str, workspace_path: str) -> str | None:
+    """Register an alias. Returns an error message on collision, else None."""
+    config = _load_config()
+    aliases = config.get("aliases", {})
+    existing = aliases.get(name)
+    if existing and existing != workspace_path:
+        return (
+            f"Alias '{name}' already points to {existing}. "
+            f"Run 'caa alias remove {name}' first, or choose a different alias."
+        )
+    aliases[name] = workspace_path
+    config["aliases"] = aliases
+    _save_config(config)
+    return None
+
+
+def _remove_alias(name: str) -> bool:
+    """Remove an alias. Returns True if it existed."""
+    config = _load_config()
+    aliases = config.get("aliases", {})
+    if name not in aliases:
+        return False
+    del aliases[name]
+    config["aliases"] = aliases
+    _save_config(config)
+    return True
+
+
+def _list_aliases() -> dict[str, str]:
+    return _load_config().get("aliases", {})
+
+
+def _auto_register_alias(workspace: Path) -> None:
+    """Auto-register the directory basename as an alias after a successful launch."""
+    slug = _repo_slug(workspace)
+    ws_str = str(workspace)
+    config = _load_config()
+    aliases = config.get("aliases", {})
+    existing = aliases.get(slug)
+    if existing and existing != ws_str:
+        return
+    if existing == ws_str:
+        return
+    aliases[slug] = ws_str
+    config["aliases"] = aliases
+    _save_config(config)
+
+
+# ---------------------------------------------------------------------------
+# DOM injector helpers
+# ---------------------------------------------------------------------------
 
 
 def _dom_injector_path() -> Path:
@@ -223,6 +349,7 @@ def _help_examples(topic: str | None = None) -> list[str]:
         "launch": [
             "Examples:",
             "  caa launch ~/code/my-project",
+            "  caa launch my-project          # if alias exists",
             "  caa launch -w ~/code/another-project",
         ],
         "on": [
@@ -262,12 +389,20 @@ def _help_examples(topic: str | None = None) -> list[str]:
     return [
         "Examples:",
         "  caa launch ~/code/my-project",
+        "  caa launch my-project          # uses alias if set",
+        "  caa alias set mp ~/code/my-project",
+        "  caa alias list",
         "  caa off",
         "  caa on -w my-project",
         "  caa status",
         "  caa stop --all",
         "  caa history -w my-project",
         "  caa help off",
+        "",
+        "Aliases:",
+        "  - 'launch' auto-registers the directory name as an alias",
+        "  - use 'caa alias set <name> <path>' to add a custom alias",
+        "  - use 'caa alias list' to see all aliases",
         "",
         "Multi-session behavior:",
         "  - 'on', 'off', and 'stop' open an arrow-key picker in an interactive terminal",
@@ -311,8 +446,62 @@ def cmd_help(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
+_AUTH_KEY_PREFIX = "cursorAuth/"
+
+
+def _sync_auth_tokens(profile_dir: Path) -> None:
+    """Copy cursorAuth/* rows from the default profile's state.vscdb.
+
+    This bootstraps authentication in dedicated profiles so the user
+    does not have to re-login for every new workspace.  Only auth-prefixed
+    keys are copied; all other per-workspace state is left untouched.
+    """
+    src_db = CURSOR_DEFAULT_USER_DATA / "User" / "globalStorage" / "state.vscdb"
+    if not src_db.is_file():
+        return
+
+    dst_gs = profile_dir / "User" / "globalStorage"
+    dst_gs.mkdir(parents=True, exist_ok=True)
+    dst_db = dst_gs / "state.vscdb"
+
+    src_conn: sqlite3.Connection | None = None
+    try:
+        src_conn = sqlite3.connect(f"file:{src_db}?mode=ro", uri=True)
+        rows = src_conn.execute(
+            "SELECT key, value FROM ItemTable WHERE key LIKE ?",
+            (f"{_AUTH_KEY_PREFIX}%",),
+        ).fetchall()
+    except (sqlite3.Error, OSError) as exc:
+        print(f"  Could not read auth tokens from default profile: {exc}")
+        return
+    finally:
+        if src_conn:
+            src_conn.close()
+
+    if not rows:
+        return
+
+    dst_conn: sqlite3.Connection | None = None
+    try:
+        dst_conn = sqlite3.connect(str(dst_db))
+        dst_conn.execute(
+            "CREATE TABLE IF NOT EXISTS ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)"
+        )
+        dst_conn.executemany(
+            "INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)",
+            rows,
+        )
+        dst_conn.commit()
+        print(f"  Synced {len(rows)} auth token(s) from default profile")
+    except (sqlite3.Error, OSError) as exc:
+        print(f"  Could not write auth tokens to dedicated profile: {exc}")
+    finally:
+        if dst_conn:
+            dst_conn.close()
+
+
 def _sync_user_settings(profile_dir: Path) -> None:
-    """Copy settings.json and keybindings.json from default Cursor profile."""
+    """Copy settings, keybindings, and auth tokens from default Cursor profile."""
     src_user = CURSOR_DEFAULT_USER_DATA / "User"
     dst_user = profile_dir / "User"
 
@@ -328,6 +517,8 @@ def _sync_user_settings(profile_dir: Path) -> None:
         if src.is_file():
             shutil.copy2(src, dst)
             print(f"  Synced {filename} from default profile")
+
+    _sync_auth_tokens(profile_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -942,6 +1133,10 @@ def _resolve_session(args: argparse.Namespace, state: dict,
         resolved = str(workspace_path.resolve())
         if resolved in sessions:
             return sessions[resolved]
+        if not path_like:
+            alias_target = _get_alias(workspace_arg)
+            if alias_target and alias_target in sessions:
+                return sessions[alias_target]
         session_label = "active session" if require_alive else "matching session"
         print(f"No {session_label} for '{workspace_arg}'.", file=diag_stream)
         if sessions:
@@ -1072,18 +1267,65 @@ def _stop_session(session: dict) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Workspace resolution
+# ---------------------------------------------------------------------------
+
+
+def _resolve_workspace_for_launch(raw: str | None) -> Path | None:
+    """Resolve a user-supplied workspace argument to an existing directory.
+
+    Resolution order:
+    1. If *raw* is None, use CWD.
+    2. Expand ~ and resolve to an absolute path. If it is an existing
+       directory, use it.
+    3. Treat *raw* as an alias name from config.json.
+    4. Return None if nothing matches (caller should error).
+    """
+    if raw is None:
+        return Path.cwd()
+
+    candidate = Path(raw).expanduser().resolve()
+    if candidate.is_dir():
+        return candidate
+
+    looks_like_path = (
+        raw.startswith(("~", ".", ".."))
+        or os.sep in raw
+    )
+    if not looks_like_path:
+        alias_target = _get_alias(raw)
+        if alias_target:
+            p = Path(alias_target)
+            if p.is_dir():
+                return p
+
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Subcommands
 # ---------------------------------------------------------------------------
 
 
 def cmd_launch(args: argparse.Namespace) -> int:
-    workspace = Path(args.workspace).expanduser().resolve() if args.workspace else Path.cwd()
+    state = _load_state()
+    sessions = state.get("sessions", {})
+
+    workspace = _resolve_workspace_for_launch(args.workspace)
+    if workspace is None:
+        print(f"Workspace '{args.workspace}' is not a valid directory or alias.", file=sys.stderr)
+        aliases = _list_aliases()
+        if aliases:
+            print("Known aliases:", file=sys.stderr)
+            for name, path in sorted(aliases.items()):
+                print(f"  {name:20s} {path}", file=sys.stderr)
+        print("Pass a concrete path, or set an alias with: caa alias set <name> <path>",
+              file=sys.stderr)
+        return 1
+
     ws_key = str(workspace)
     slug = _repo_slug(workspace)
     enabled_title = _window_title(workspace, gate_on=True)
-
-    state = _load_state()
-    sessions = state.get("sessions", {})
 
     existing = sessions.get(ws_key)
     if existing and existing.get("pid") and _pid_is_alive(existing["pid"]):
@@ -1163,6 +1405,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
     }
     state["sessions"] = sessions
     _save_state(state)
+    _auto_register_alias(workspace)
 
     print(f"Cursor started (PID {pid}). Waiting for CDP to become ready...")
     time.sleep(CDP_INJECT_DELAY)
@@ -1170,7 +1413,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
     inject_ok, pinned_target = _cdp_inject(
         cdp_port, auto_start=False, force_reload=True, repo_slug=slug,
     )
-    if pinned_target:
+    if inject_ok and pinned_target:
         sessions[ws_key]["cdp_target_id"] = pinned_target
         _save_state(state)
 
@@ -1386,6 +1629,56 @@ def cmd_stop(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_alias(args: argparse.Namespace) -> int:
+    """Manage workspace aliases stored in config.json."""
+    action = getattr(args, "alias_action", None)
+
+    if action == "list" or action is None:
+        aliases = _list_aliases()
+        if not aliases:
+            print("No aliases configured.")
+            print("  caa alias set <name> <path>")
+            return 0
+        for name, path in sorted(aliases.items()):
+            exists = Path(path).is_dir()
+            marker = "" if exists else "  (path missing!)"
+            print(f"  {name:30s} {path}{marker}")
+        return 0
+
+    if action == "set":
+        name = args.alias_name
+        raw_path = args.alias_path
+        if not name or not raw_path:
+            print("Usage: caa alias set <name> <path>", file=sys.stderr)
+            return 1
+        ws = Path(raw_path).expanduser().resolve()
+        if not ws.is_dir():
+            print(f"Path '{raw_path}' (resolved: {ws}) is not an existing directory.",
+                  file=sys.stderr)
+            return 1
+        err = _set_alias(name, str(ws))
+        if err:
+            print(err, file=sys.stderr)
+            return 1
+        print(f"Alias '{name}' -> {ws}")
+        return 0
+
+    if action == "remove":
+        name = args.alias_name
+        if not name:
+            print("Usage: caa alias remove <name>", file=sys.stderr)
+            return 1
+        if _remove_alias(name):
+            print(f"Alias '{name}' removed.")
+        else:
+            print(f"Alias '{name}' does not exist.", file=sys.stderr)
+            return 1
+        return 0
+
+    print("Unknown alias action. Use: list, set, remove", file=sys.stderr)
+    return 1
+
+
 def cmd_history(args: argparse.Namespace) -> int:
     """Show persisted event history."""
     workspace_filter = getattr(args, "workspace", None)
@@ -1497,6 +1790,17 @@ def build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argument
     p_stop.add_argument("--all", action="store_true", help="Stop all active sessions")
     p_stop.set_defaults(func=cmd_stop)
     command_parsers["stop"] = p_stop
+
+    p_alias = sub.add_parser("alias", help="Manage workspace aliases")
+    alias_sub = p_alias.add_subparsers(dest="alias_action")
+    alias_sub.add_parser("list", help="List all aliases")
+    p_alias_set = alias_sub.add_parser("set", help="Create or update an alias")
+    p_alias_set.add_argument("alias_name", help="Short alias name")
+    p_alias_set.add_argument("alias_path", help="Workspace directory path")
+    p_alias_rm = alias_sub.add_parser("remove", help="Remove an alias")
+    p_alias_rm.add_argument("alias_name", help="Alias to remove")
+    p_alias.set_defaults(func=cmd_alias)
+    command_parsers["alias"] = p_alias
 
     p_history = sub.add_parser("history", help="Show event history log")
     p_history.add_argument("--workspace", "-w", help="Filter by workspace path or slug")

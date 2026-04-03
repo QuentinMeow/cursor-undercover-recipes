@@ -67,7 +67,8 @@ After global install:
 |---|---|
 | `~/.cursor/launch-autoapprove/launcher.py` | Runtime launcher |
 | `~/.cursor/launch-autoapprove/devtools_auto_accept.js` | Runtime injector script |
-| `~/.cursor/launch-autoapprove/state.json` | Persisted multi-session state (may include stale entries until cleaned up) |
+| `~/.cursor/launch-autoapprove/state.json` | Persisted multi-session state (auto-GC'd on every load) |
+| `~/.cursor/launch-autoapprove/config.json` | Workspace aliases and user configuration |
 | `~/.cursor/launch-autoapprove/history.jsonl` | Append-only NDJSON event log (rotates at 5 MB) |
 | `~/.cursor/launch-autoapprove/dedicated-profile-<slug>/` | Per-workspace Cursor profile |
 | `~/.cursor/skills/global-launch-cursor-autoapprove/` | Global slash-command docs |
@@ -106,24 +107,75 @@ Legacy single-session format (flat `{pid, cdp_port, workspace}`) is auto-migrate
 on first read. The legacy `dedicated-profile/` directory is renamed to
 `dedicated-profile-<slug>/` during migration.
 
+### Automatic Session Garbage Collection
+
+Every call to `_load_state()` prunes invalid sessions. A session is removed
+when ANY of these conditions is true:
+
+- **PID dead** — the Cursor process exited (a dead PID cannot be revived).
+- **Workspace path missing** — the directory in the session key no longer
+  exists on disk. This catches ghost sessions from bad launch paths. If the
+  Cursor process is still alive, it is terminated first since a window on a
+  non-existent path is always broken.
+
+### Workspace Resolution
+
+`caa launch <arg>` resolves the workspace argument in this order:
+
+1. If `<arg>` is omitted, use the current working directory.
+2. Expand `~` and resolve to an absolute path. If the result is an existing
+   directory, use it.
+3. Treat `<arg>` as an alias name — look it up in `config.json`.
+4. If no match is found, error out with a list of known aliases.
+
+This prevents ghost sessions from bare-name arguments (e.g. `caa launch gocmp`
+from the home directory resolving to the non-existent `~/gocmp`).
+
+### Workspace Aliases (`config.json`)
+
+`~/.cursor/launch-autoapprove/config.json` stores user-defined workspace
+aliases:
+
+```json
+{
+  "aliases": {
+    "gocmp": "/Users/qmiao/code/gocmp",
+    "recipes": "/Users/qmiao/code/cursor-undercover-recipes"
+  }
+}
+```
+
+Aliases are populated two ways:
+
+- **Automatic**: Every successful `caa launch <path>` auto-registers the
+  directory basename as an alias (e.g. launching `/Users/qmiao/code/gocmp`
+  registers `gocmp`). It does not overwrite if the name already points to a
+  different path.
+- **Explicit**: `caa alias set <name> <path>` registers a custom name. The
+  path must exist and the name must not collide with an existing alias for a
+  different path.
+
+`caa alias list` shows all aliases. `caa alias remove <name>` deletes one.
+
 ## Launch Flow (Step-by-Step)
 
 When you run `caa launch --workspace <path>`:
 
-1. Check if this workspace already has a running session; block if so.
-2. Compute slug (handle collision by appending path hash if needed).
-3. Create runtime and per-slug profile directories if missing.
-4. Copy `settings.json` and `keybindings.json` from default Cursor profile.
-5. Select an available local CDP port (starting near `9222`).
-6. Snapshot existing Cursor main PIDs.
-7. Launch Cursor with:
+1. Resolve workspace path (see Workspace Resolution above).
+2. Check if this workspace already has a running session; block if so.
+3. Compute slug (handle collision by appending path hash if needed).
+4. Create runtime and per-slug profile directories if missing.
+5. Copy `settings.json`, `keybindings.json`, and auth tokens from default Cursor profile.
+6. Select an available local CDP port (starting near `9222`).
+7. Snapshot existing Cursor main PIDs.
+8. Launch Cursor with:
    - `--remote-debugging-port=<port>`
    - `--user-data-dir ~/.cursor/launch-autoapprove/dedicated-profile-<slug>`
    - `<workspace>`
-8. Wait for a new Cursor main PID that includes the expected launch args.
-9. Save session to `state.json` under the workspace path key.
-10. Inject `devtools_auto_accept.js` via CDP `Runtime.evaluate`.
-11. Call `startAccept()` and sync title to `autoapprove ✅ <repo>`.
+9. Wait for a new Cursor main PID that includes the expected launch args.
+10. Save session to `state.json` under the workspace path key.
+11. Inject `devtools_auto_accept.js` via CDP `Runtime.evaluate`.
+12. Call `startAccept()` and sync title to `autoapprove ✅ <repo>`.
 
 If `open -na` path detection fails, the launcher falls back to direct executable
 launch and repeats PID detection.
@@ -257,10 +309,11 @@ Copied each launch:
 
 - `User/settings.json`
 - `User/keybindings.json`
+- `cursorAuth/*` rows from `User/globalStorage/state.vscdb` (auth tokens only)
 
 Not copied:
 
-- `User/globalStorage/state.vscdb` (chat/account/model state)
+- Non-auth rows in `User/globalStorage/state.vscdb` (model selection, chat state)
 - extension runtime state
 
 Each per-workspace profile persists between launches, so dedicated-window-specific
