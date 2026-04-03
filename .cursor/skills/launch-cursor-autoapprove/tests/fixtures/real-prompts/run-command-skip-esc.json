@@ -1,0 +1,16 @@
+{
+  "name": "run-command-skip-esc",
+  "description": "Shell command card: dismiss button renders plain-text Esc hint next to Run ↩",
+  "source": "real Cursor UI capture, sanitized",
+  "spec": {
+    "role": "dialog",
+    "modal": true,
+    "buttons": [
+      { "var": "a", "text": "Skip Esc" },
+      { "var": "b", "text": "Run ↩" }
+    ]
+  },
+  "expect_click": true,
+  "expect_id": "run",
+  "expect_single_click": true
+}

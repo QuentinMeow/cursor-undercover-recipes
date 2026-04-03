@@ -286,6 +286,7 @@ Approval labels are matched by exact normalized text:
 - Normalize by lowercasing, trimming, stripping trailing shortcut hints:
   - parenthesized hints, e.g. `(⌃⏎)`
   - trailing glyphs, e.g. `↩`
+  - trailing plain-text `Esc`/`Escape` hints on dismiss buttons, e.g. `Skip Esc`
 - Compare with `===` against known patterns:
   - `accept all`, `accept`, `approve`, `approve request`,
     `approve terminal command`, `always allow`, `allow`
@@ -479,6 +480,8 @@ interaction.
 Each probe is injected via `createElement` + `setAttribute` (not `innerHTML`,
 which unreliably sets ARIA attributes), waits one poll interval, and verifies
 whether the injector clicked the correct button or correctly ignored it.
+The harness clears injector fingerprint cooldowns before each synthetic or
+replay case so repeated label sets do not contaminate later assertions.
 
 Artifact-first output:
 

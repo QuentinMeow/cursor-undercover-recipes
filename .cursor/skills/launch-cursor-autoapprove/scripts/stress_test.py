@@ -165,11 +165,13 @@ TEST_CASES: list[tuple[str, dict, bool, str | None]] = [
     ("edge_approve_terminal_with_view: View+Approve Terminal Command",
      {"buttons": [_btn("a", "View"), _btn("b", "Approve Terminal Command")]},
      True, "approve_terminal_command"),
+    ("edge_plain_text_esc_hint: Skip Esc+Run ↩",
+     {"buttons": [_btn("a", "Skip Esc"), _btn("b", "Run ↩")]}, True, "run"),
 ]
 
 # 1-indexed into TEST_CASES.
 MEANINGFUL_CASE_INDEXES = [
-    1, 2, 11, 20, 23, 27, 32, 34, 37, 41, 43, 46, 50
+    1, 2, 11, 20, 23, 27, 32, 34, 37, 41, 43, 46, 50, 51
 ]
 
 
@@ -289,6 +291,21 @@ def _get_debug_snapshot(port: int, target_id: str | None) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _clear_fingerprint_cooldowns(port: int, target_id: str | None) -> None:
+    launcher._cdp_evaluate(
+        port,
+        """
+(() => {
+  const state = globalThis.__cursorAutoAccept?.state;
+  if (!state) return false;
+  state.fingerprintCooldowns = new Map();
+  return true;
+})()
+""".strip(),
+        target_id=target_id,
+    )
+
+
 def _save_png(port: int, target_id: str | None, out_path: Path) -> str | None:
     try:
         png = launcher._cdp_screenshot(port, target_id=target_id, timeout=20.0)
@@ -328,6 +345,7 @@ def _run_synthetic(args: argparse.Namespace, port: int, target: str | None, out_
 
     for i, (name, spec, expect_click, expect_id) in enumerate(selected, 1):
         probe_id = f"__aa_stress_{i}"
+        _clear_fingerprint_cooldowns(port, target)
         clicks_before = _get_clicks(port, target)
         before_debug = _get_debug_snapshot(port, target)
         before_png = _save_png(port, target, screenshots_dir / f"{i:02d}-before.png")
@@ -534,6 +552,7 @@ def _run_replay(args: argparse.Namespace, port: int, target: str | None, out_dir
         expect_single = fixture.get("expect_single_click", False)
         probe_id = f"__aa_replay_{i}"
 
+        _clear_fingerprint_cooldowns(port, target)
         clicks_before = _get_clicks(port, target)
         before_debug = _get_debug_snapshot(port, target)
         before_png = _save_png(port, target, screenshots_dir / f"{i:02d}-before.png")
