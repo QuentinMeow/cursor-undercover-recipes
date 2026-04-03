@@ -1,0 +1,31 @@
+.cursor/skills/launch-cursor-autoapprove/references/implementation.md
+  390933deda1bd635 266,271-279
+.cursor/skills/launch-cursor-autoapprove/scripts/devtools_auto_accept.js
+  390933deda1bd635 154-177,309
+.cursor/skills/launch-cursor-autoapprove/references/manual-testing.md
+  390933deda1bd635 163-181
+.cursor/skills/launch-cursor-autoapprove/issues/007-single-action-approve-modals-blocked-by-dismissal-guard.md
+  390933deda1bd635 1-48
+.cursor/skills/launch-cursor-autoapprove/LESSONS.md
+  390933deda1bd635 82-87
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "308be9295029dcba493c50eb0bd5e3449a3aa02d",
+  "prompts": {
+    "390933deda1bd635": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "235bd6ab-e201-4f7d-ad2a-6122d90e0401",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 109,
+      "total_deletions": 3,
+      "accepted_lines": 108,
+      "overriden_lines": 0
+    }
+  }
+}
