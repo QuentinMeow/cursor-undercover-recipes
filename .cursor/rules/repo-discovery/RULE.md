@@ -30,3 +30,8 @@ Use these supporting rules as the task demands:
 3. `.cursor/rules/skill-conventions/RULE.md` when working inside `.cursor/skills/**`.
 4. `.cursor/rules/memory-keeper/RULE.md` for reading and updating persistent cross-session knowledge in `MEMORY.md`.
 5. `.cursor/rules/agent-harness/RULE.md` for evidence-first harness engineering when building or operating agent automation tools.
+6. `.cursor/rules/debug-escalation/RULE.md` for the mandatory escalation ladder when debugging (never repeat a failed approach).
+7. `.cursor/rules/assumption-guard/RULE.md` for verifying environmental assumptions before acting on them.
+8. `.cursor/rules/instrument-first/RULE.md` for deploying instrumentation before forming hypotheses.
+9. `.cursor/rules/autonomous-recovery/RULE.md` for the self-correction loop when stuck (step back without human coaching).
+10. `.cursor/rules/version-coupling-guard/RULE.md` when skills depend on external software versions (DOM selectors, APIs, CLIs).
