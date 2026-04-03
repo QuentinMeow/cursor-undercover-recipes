@@ -357,18 +357,53 @@ Expected result:
 - `[4/4] Artifacts saved to:` shows a directory with screenshot.png,
   dom-snapshot.json, and probe-result.json
 
-## Test 9: Automated Stress Test (50 cases)
+## Test 9: Automated Harness (Short + Real Snapshot)
 
-Run the full stress test suite:
+Prefer real snapshot mode (no synthetic prompt injection):
 
 ```bash
-/usr/bin/python3 "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/scripts/stress_test.py" --port 9222
+/usr/bin/python3 "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/scripts/stress_test.py" \
+  --mode snapshot --duration 60 --interval 2.5 --port 9222
 ```
 
 Expected result:
 
-- `Results: 50/50 passed, 0 failed`
-- Results JSON saved under `logs/stress-test-results.json`
+- Saves artifacts under `logs/<run-id>-harness-snapshot/`
+- Includes:
+  - `snapshot-summary.json`
+  - `snapshots/*.json` (live `acceptDebugSnapshot()` payloads)
+  - `screenshots/*.png` (real UI frames)
+
+If you want a fast synthetic smoke suite (combined, meaningful cases only):
+
+```bash
+/usr/bin/python3 "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/scripts/stress_test.py" \
+  --mode synthetic --suite meaningful --port 9222
+```
+
+Optional deep synthetic matrix:
+
+```bash
+/usr/bin/python3 "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/scripts/stress_test.py" \
+  --mode synthetic --suite full --port 9222
+```
+
+Expected result (meaningful suite):
+
+- around a dozen high-signal cases (instead of 50)
+- `Results: <n>/<n> passed, 0 failed`
+- artifacts under `logs/<run-id>-harness-synthetic/`
+
+Engineering note:
+
+- The evidence package is the source of truth, not just terminal PASS lines.
+- The harness now syncs wait time to `acceptStatus().interval` + margin, so cases
+  are sampled after at least one injector poll. Forcing a shorter wait can create
+  false negatives.
+- The click counter is expected to increase by the number of positive cases,
+  while false-positive guard cases should not contribute clicks.
+- If a case fails, inspect `cases/<N>.json` first (look at `visibleButtons`,
+  `candidates`, and `eligible`), then compare with the paired screenshots.
 
 Categories tested:
 - 10 dismiss+approval combinations (cancel, skip, close, etc.)

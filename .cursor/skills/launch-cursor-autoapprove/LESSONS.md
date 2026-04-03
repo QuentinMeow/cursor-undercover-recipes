@@ -103,3 +103,21 @@
   injecting test elements via CDP, `innerHTML` can silently fail to set ARIA
   attributes (`role`, `aria-modal`) in some Electron/Chromium contexts.
   `createElement` + `setAttribute` always works.
+
+## Harness Engineering
+
+- **Pass/fail lines are not enough; save per-case evidence artifacts**: Stress tests
+  should persist paired screenshots plus machine-readable button inventories and
+  eligibility traces for every case. When behavior regresses, visual + structured
+  artifacts are the fastest way to understand "what button existed" and "why guard
+  logic accepted/rejected it."
+
+- **Prefer real snapshot harnesses for day-to-day confidence**: Synthetic probes are
+  useful for deterministic regression checks, but routine validation should collect
+  snapshots from real Cursor UI states so selector drift and context assumptions are
+  tested against actual product surfaces.
+
+- **Use context-first acceptance, not label-only acceptance**: Exact label matching
+  is still brittle if context is weak. Require trusted prompt surfaces (modal roots
+  or composer/chat context anchored to the real input box) before evaluating
+  dismissal/companion/modal guard rules.

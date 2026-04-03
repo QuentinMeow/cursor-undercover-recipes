@@ -266,6 +266,10 @@ Safety filters:
 Approval buttons are only clicked if they pass one of four eligibility paths
 (checked in order by `_eligibilityReason`):
 
+0. **Trusted prompt context** — all non-resume/non-connection candidates must
+   be inside a modal prompt root (`dialog`/`alertdialog`/`aria-modal`) or a
+   composer/chat surface that contains `div.full-input-box`. This context gate
+   avoids accepting generic labels in unrelated UI areas.
 1. **Resume** — `btn.kind === "resume"` (specific `data-link` attribute)
 2. **Dismissal proximity** — `hasNearbyDismissal(btn.el)`: a nearby control
    matching `DISMISS_PATTERNS` (`skip`, `cancel`, `dismiss`, `deny`, `not now`,
@@ -288,6 +292,19 @@ Both dismissal and companion checks use shared helpers (`_matchesLabelSet`,
 
 Each click is logged with a `reason` field (`dismiss`, `companion`, `modal`,
 `resume`) for post-hoc diagnostics.
+
+### Debug Snapshot API (harness introspection)
+
+The injector exposes `acceptDebugSnapshot()` for evidence-first harnesses.
+
+Returned fields include:
+
+- `strategyVersion` and `scriptHash`
+- `visibleButtons` (normalized labels + surface classification + guard signals)
+- `candidates` and `eligible` lists (with per-button eligibility reason)
+
+This allows stress harnesses to capture machine-readable "why" evidence for
+both clicked and non-clicked cases.
 
 ### Click Strategy
 
@@ -390,16 +407,28 @@ interaction.
 
 ### Stress Test
 
-`scripts/stress_test.py` runs 50 synthetic probe scenarios via CDP:
+`scripts/stress_test.py` now supports two harness modes:
 
-- 20 compound surfaces (dismiss+approval, companion+approval combinations)
-- 10 single-action modal probes
-- 10 false-positive guards (excluded zones, invisible, disabled, long labels)
-- 10 edge cases (keyboard hints, case normalization, role=button, pointer-events)
+- `--mode snapshot` (default): captures real live UI snapshots and screenshots.
+- `--mode synthetic`: runs probe-based assertions.
+  - `--suite meaningful` (default for synthetic): short, combined, high-signal cases.
+  - `--suite full`: original full matrix for deep regression checks.
 
 Each probe is injected via `createElement` + `setAttribute` (not `innerHTML`,
 which unreliably sets ARIA attributes), waits one poll interval, and verifies
 whether the injector clicked the correct button or correctly ignored it.
+
+Artifact-first output:
+
+- snapshot mode:
+  - `logs/<run-id>-harness-snapshot/snapshot-summary.json`
+  - `logs/<run-id>-harness-snapshot/snapshots/<tick>.json`
+  - `logs/<run-id>-harness-snapshot/screenshots/<tick>.png`
+- synthetic mode:
+  - `logs/<run-id>-harness-synthetic/stress-test-results.json`
+  - `logs/<run-id>-harness-synthetic/screenshots/*-before.png` and `*-after.png`
+  - `logs/<run-id>-harness-synthetic/cases/<N>.json` with spec, expected/actual result, and
+  `acceptDebugSnapshot()` output before/after injection
 
 ## Known Limits
 
