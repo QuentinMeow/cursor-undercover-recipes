@@ -73,3 +73,9 @@
   checks, and click simulation should stay minimal (`el.click()` first, no
   blind Enter key spam). This combination is what turns "best effort" DOM
   automation into something predictable enough for day-to-day use.
+
+- **Approval synonyms drift across Cursor surfaces**: Some permission prompts
+  use `Approve` wording rather than `Accept`/`Allow`/`Run`. Keep the label list
+  updated with exact synonym variants (`approve`, `approve request`, etc.) and
+  verify with real prompt surfaces whenever users report `Waiting for Approval`
+  plus unchanged click counters.

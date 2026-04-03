@@ -65,6 +65,11 @@ to confirm the click count changed.
 Also validate the opposite: non-prompt UI actions must **not** increase click
 count (false-positive regression coverage).
 
+If the chat shows `Waiting for Approval...` and click count stays unchanged, the
+prompt text may not match the current injector patterns yet. Run `status` and
+inspect `Recent:` plus the live prompt label (for example, `Approve` / `Allow`
+/ `Run`) before concluding gate state is wrong.
+
 ## Test 0: False-Positive Regression (Explorer / Editor)
 
 With gate ON and no approval prompt visible:
@@ -137,6 +142,23 @@ Expected result:
 
 - the task completes without a manual click
 - `status` shows new `Allow` or `Run` entries under `Recent`
+
+## Test 3b: Approve-Labeled Prompt Coverage
+
+Some Cursor surfaces use `Approve` wording instead of `Allow` / `Run`.
+
+1. Trigger a command in chat that produces an `Approve ...` UI prompt.
+2. Capture `status` before and after:
+
+```bash
+/usr/bin/python3 "$LAUNCHER" status
+```
+
+Expected result:
+
+- `Clicks:` increases after the prompt appears
+- `Recent:` includes an `approval` entry such as `approve`,
+  `approve_request`, or `approve_terminal_command`
 
 ## Test 4: Interactive Session Picker
 
