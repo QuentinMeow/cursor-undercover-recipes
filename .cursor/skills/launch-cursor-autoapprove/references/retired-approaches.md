@@ -93,7 +93,7 @@ That is something the code can actually observe and control.
 ### 3. Validate mechanism, not just outcome
 
 Command completion is not enough. The supported workflow exposes click counts
-and recent click logs through `aa status`.
+and recent click logs through `caa status`.
 
 ### 4. Keep the pattern list complete
 
@@ -102,7 +102,7 @@ The DOM injector must explicitly match all known approval labels. Missing
 
 ### 5. Handle installed/runtime drift explicitly
 
-`aa on` now reloads stale in-window injector code when the installed script hash
+`caa on` now reloads stale in-window injector code when the installed script hash
 does not match the running window's hash.
 
 ## What To Use Now

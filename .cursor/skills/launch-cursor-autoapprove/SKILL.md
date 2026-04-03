@@ -96,6 +96,8 @@ lifecycle with `on`/`off`/`stop`.
 | `stop [-w PATH\|SLUG] [--all]` | Pause gate, close dedicated Cursor process, and remove session when shutdown succeeds. Without `-w`, it prefers running sessions when any are alive; if none are running, it falls back to stale entries for cleanup. Use `--all` to stop every session, but do not combine `--all` with `-w` or a positional workspace. |
 | `alias [set\|remove\|list]` | Manage workspace aliases stored in `config.json`. `set <name> <path>` registers a new alias (validates the path exists and the name is not already taken). `remove <name>` deletes one. `list` shows all. |
 | `history [-w SLUG] [-n LIMIT] [--json]` | Show durable event log of session/gate/click events. Persisted across sessions. |
+| `screenshot [-w PATH\|SLUG] [-o FILE]` | Capture PNG screenshot of the dedicated Cursor window via CDP. |
+| `diagnose [-w PATH\|SLUG]` | Self-debug: screenshot + DOM snapshot + synthetic probe. Saves artifacts to a timestamped directory. |
 | `help [COMMAND]` | Show usage examples, subcommand help, and paths to the deeper docs. |
 
 `on` and `off` auto-detect the target when only one running session is active.
@@ -121,7 +123,8 @@ use `caa --help` (or the full launcher path with `--help`).
    passing the repo slug so the script knows the project name. The chosen
    CDP target is pinned by ID in `state.json` so all subsequent commands
    (`on`/`off`/`status`/`stop`) address exactly that page.
-4. The injector polls for approval buttons every 2s and clicks matches.
+4. The injector uses a MutationObserver (300ms debounce) for instant detection,
+   with a 2s fallback poll, and clicks matches.
 5. The injector continuously maintains the window title
    (`autoapprove ✅ <repo>` or `autoapprove ⏸ <repo>`) via a 3-second
    interval, so the title self-heals if Cursor resets it.

@@ -47,6 +47,10 @@ default and intended for future hardening as internal APIs stabilize.
 | `off` | `-w PATH\|SLUG` (optional) | Turn gate OFF; keep dedicated window open. |
 | `status` | `-w PATH\|SLUG` (optional) | Print session details. Shows all sessions if `-w` omitted; ambiguous slugs use the picker. |
 | `stop` | `-w PATH\|SLUG` (optional), `--all` | Turn gate OFF, terminate dedicated process, and remove session entry when shutdown succeeds. `--all` must not be combined with `-w` or a positional workspace. |
+| `alias` | `set <name> <path>`, `remove <name>`, `list` | Manage workspace aliases stored in `config.json`. See [Workspace Aliases](#workspace-aliases-configjson) below. |
+| `history` | `-w SLUG`, `-n LIMIT`, `--json` | Show persisted event log (session/gate/click events). |
+| `screenshot` | `-w PATH\|SLUG`, `-o FILE` | Capture PNG screenshot of the dedicated window via CDP. |
+| `diagnose` | `-w PATH\|SLUG` | Self-debug: screenshot + DOM snapshot + synthetic probe + summary. |
 | `help` | optional `COMMAND` topic | Print usage examples, command help, and deeper-doc paths. |
 
 Behavior notes:
@@ -518,6 +522,14 @@ prevent regression.
   hosts (rare).
 - The state probe is experimental and off by default. Internal Cursor APIs
   may change without notice.
+- **Window must be in foreground**: The DOM injector uses `el.click()` and
+  MutationObserver, both of which require the Chromium renderer to be active.
+  When the dedicated Cursor window is not the frontmost window (e.g., hidden
+  behind other windows or minimized), Chromium throttles timers and may
+  suspend DOM updates, so approval prompts will not be detected or clicked
+  until the window is brought back to the foreground. This means running
+  parallel agent chats across multiple windows is not currently supported --
+  only the foreground auto-approve window will reliably click prompts.
 
 ## Related Docs
 

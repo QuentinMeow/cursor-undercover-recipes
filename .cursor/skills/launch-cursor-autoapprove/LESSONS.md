@@ -170,6 +170,18 @@
   attributes (`role`, `aria-modal`) in some Electron/Chromium contexts.
   `createElement` + `setAttribute` always works.
 
+## Foreground Window Requirement
+
+- **The dedicated window must be the frontmost window for auto-clicking to work**:
+  Chromium throttles timers and may suspend DOM updates for background windows.
+  The MutationObserver and fallback poll both depend on the renderer being active.
+  When the auto-approve window is behind other windows or minimized, approval
+  prompts will not be detected or clicked until the user switches back to the
+  window. This makes parallel multi-window auto-approve workflows impractical
+  with the current DOM-based approach. A future improvement might use CDP
+  `Runtime.evaluate` polling from the launcher side (outside the renderer) or
+  Chromium's background-timer override flags to work around this limitation.
+
 ## Harness Engineering
 
 - **Pass/fail lines are not enough; save per-case evidence artifacts**: Stress tests

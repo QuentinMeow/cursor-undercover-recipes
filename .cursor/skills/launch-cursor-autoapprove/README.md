@@ -74,6 +74,9 @@ built-in usage summary, `caa help` for examples and doc paths, or
 | `status` | Show PID, CDP port, workspace, gate state, click count, injector hash, current title, and recent clicks. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
 | `stop` | Turn gate OFF, close the dedicated Cursor process, and clear local session state when shutdown succeeds. Without `-w`, it prefers running sessions when any are alive; if none are running, it falls back to stale entries for cleanup. Use `--all` to stop every session, and do not combine `--all` with `-w` or a positional workspace. |
 | `history [-w SLUG] [-n N] [--json]` | Show durable event log (session/gate/click events). |
+| `alias [set\|remove\|list]` | Manage workspace aliases stored in `config.json`. Auto-registered on launch. |
+| `screenshot [-w SLUG] [-o FILE]` | Capture PNG screenshot of the dedicated window via CDP. |
+| `diagnose [-w SLUG]` | Self-debug: screenshot + DOM snapshot + synthetic probe + summary. |
 | `help [COMMAND]` | Show usage examples, command-specific help, and deeper doc paths. |
 
 ## Important Behavior
@@ -96,6 +99,11 @@ built-in usage summary, `caa help` for examples and doc paths, or
   matching or require pattern updates.
 - Keep the gate OFF (`caa off`) when doing sensitive UI actions in the dedicated
   window that are unrelated to approvals.
+- **The dedicated window must stay in the foreground.** The DOM injector
+  depends on an active Chromium renderer. When the window is behind other
+  windows or minimized, timers are throttled and prompts are not clicked until
+  you switch back. Parallel agent chats across multiple auto-approve windows
+  are not currently supported.
 
 ## Migration Note (Retired Approach Cleanup)
 
