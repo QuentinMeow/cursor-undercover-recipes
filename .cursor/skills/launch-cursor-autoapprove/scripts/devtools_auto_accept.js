@@ -178,7 +178,6 @@
   }
 
   function _markClicked(fingerprint) {
-    state.fingerprintCooldowns.set(fingerprint);
     state.fingerprintCooldowns.set(fingerprint, Date.now());
     if (state.fingerprintCooldowns.size > 100) {
       const oldest = state.fingerprintCooldowns.keys().next().value;
