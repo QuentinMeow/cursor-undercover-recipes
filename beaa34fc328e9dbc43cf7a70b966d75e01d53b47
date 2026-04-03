@@ -1,0 +1,44 @@
+.cursor/skills/launch-cursor-autoapprove/references/implementation.md
+  535a28e39dd02e8c 70-71,110-159,164-171,175-178,312,316
+.cursor/skills/launch-cursor-autoapprove/LESSONS.md
+  535a28e39dd02e8c 22-45,54-61
+.cursor/skills/launch-cursor-autoapprove/issues/005-ghost-sessions-auth-and-workspace-resolution.md
+  535a28e39dd02e8c 1-58
+.cursor/skills/launch-cursor-autoapprove/scripts/launcher.py
+  535a28e39dd02e8c 27,64-65,76-81,89-92,105-106,118-147,150,167-249,352,392-394,402-405,449-502,504,521,1136-1139,1270-1304,1311-1325,1408,1416,1632-1681,1794-1804
+.cursor/skills/launch-cursor-autoapprove/SKILL.md
+  535a28e39dd02e8c 92,97,113-116
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "beaa34fc328e9dbc43cf7a70b966d75e01d53b47",
+  "prompts": {
+    "535a28e39dd02e8c": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "068af4a1-5249-4251-a973-461f54152b64",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 538,
+      "total_deletions": 88,
+      "accepted_lines": 475,
+      "overriden_lines": 0
+    },
+    "5948fc637907ad74": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "54227be8-6eea-48e4-b24f-b4a85d7aa6a3",
+        "model": "gpt-5.4-xhigh"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 3,
+      "overriden_lines": 0
+    }
+  }
+}
