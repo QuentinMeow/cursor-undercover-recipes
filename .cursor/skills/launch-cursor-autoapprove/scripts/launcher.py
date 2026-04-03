@@ -727,6 +727,76 @@ def _cdp_evaluate_ws(ws_url: str, expression: str, timeout: float = 10.0) -> dic
     raise RuntimeError("Timed out waiting for CDP response")
 
 
+def _cdp_send_method(ws_url: str, method: str, params: dict | None = None,
+                     timeout: float = 30.0) -> dict:
+    """Send an arbitrary CDP method and return the response payload."""
+    parsed = urllib.parse.urlparse(ws_url)
+    sock = socket.create_connection((parsed.hostname, parsed.port), timeout=timeout)
+    sock.settimeout(timeout)
+    try:
+        key = base64.b64encode(os.urandom(16)).decode()
+        handshake = (
+            f"GET {parsed.path} HTTP/1.1\r\n"
+            f"Host: {parsed.hostname}:{parsed.port}\r\n"
+            f"Upgrade: websocket\r\n"
+            f"Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\n"
+            f"Sec-WebSocket-Version: 13\r\n"
+            f"\r\n"
+        )
+        sock.sendall(handshake.encode())
+        response = b""
+        while b"\r\n\r\n" not in response:
+            response += sock.recv(4096)
+        if b"101" not in response.split(b"\r\n")[0]:
+            raise RuntimeError("CDP websocket handshake failed")
+
+        msg = json.dumps({
+            "id": 2,
+            "method": method,
+            "params": params or {},
+        })
+        _ws_send_text(sock, msg)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            payload = json.loads(_ws_recv_text(sock))
+            if payload.get("id") != 2:
+                continue
+            if payload.get("error"):
+                message = payload["error"].get("message", f"CDP {method} error")
+                raise RuntimeError(message)
+            return payload
+    except socket.timeout as exc:
+        raise RuntimeError(f"Timed out waiting for CDP {method} response") from exc
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
+    raise RuntimeError(f"Timed out waiting for CDP {method} response")
+
+
+def _cdp_screenshot(port: int, target_id: str | None = None,
+                    timeout: float = 30.0) -> bytes:
+    """Capture a PNG screenshot of the target page via CDP Page.captureScreenshot."""
+    page_targets = _cdp_list_page_targets(port, timeout=timeout)
+    if not page_targets:
+        raise RuntimeError(f"No page target found on CDP port {port}")
+    if target_id:
+        match = [t for t in page_targets if t.get("id") == target_id]
+        if not match:
+            raise RuntimeError(f"Bound CDP target {target_id} not found on port {port}")
+        ws_url = match[0]["webSocketDebuggerUrl"]
+    else:
+        ws_url = page_targets[0]["webSocketDebuggerUrl"]
+    payload = _cdp_send_method(ws_url, "Page.captureScreenshot",
+                               {"format": "png"}, timeout=timeout)
+    data_b64 = payload.get("result", {}).get("data", "")
+    if not data_b64:
+        raise RuntimeError("Page.captureScreenshot returned no data")
+    return base64.b64decode(data_b64)
+
+
 def _cdp_list_page_targets(port: int, timeout: float = 10.0) -> list[dict]:
     """List all page targets on a CDP port."""
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
@@ -1746,6 +1816,151 @@ def cmd_history(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_screenshot(args: argparse.Namespace) -> int:
+    """Capture a PNG screenshot of the dedicated Cursor window."""
+    state = _load_state()
+    session = _resolve_session(args, state, require_alive=True,
+                               allow_interactive=True, command_name="screenshot")
+    if not session:
+        return 1
+    port = session.get("cdp_port")
+    target = session.get("cdp_target_id")
+    slug = session.get("slug", "workspace")
+    if not port:
+        print("No CDP port for session.", file=sys.stderr)
+        return 1
+    out_path = getattr(args, "output", None)
+    if not out_path:
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        out_path = str(RUNTIME_DIR / f"screenshot-{slug}-{ts}.png")
+    try:
+        png = _cdp_screenshot(port, target_id=target)
+    except (ConnectionRefusedError, OSError, RuntimeError) as exc:
+        print(f"Screenshot failed: {exc}", file=sys.stderr)
+        return 1
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(out_path).write_bytes(png)
+    print(f"Screenshot saved: {out_path} ({len(png)} bytes)")
+    return 0
+
+
+_DIAGNOSE_DOM_EXPR = r"""(() => {
+  const BUTTON_SELS = ['button','[role="button"]','a[role="button"]','[class*="primary-button"]','[class*="secondary-button"]','[class*="text-button"]','[class*="action-label"]'];
+  const EXCLUDED = ['[id="workbench.parts.sidebar"]','[id="workbench.parts.editor"]','[id="workbench.parts.panel"]','[id="workbench.parts.statusbar"]','[id="workbench.parts.activitybar"]','[id="workbench.parts.auxiliarybar"]'];
+  const isVis = (el) => { const s = getComputedStyle(el), r = el.getBoundingClientRect(); return s.display !== 'none' && s.visibility !== 'hidden' && parseFloat(s.opacity||'1') > 0.1 && r.width > 0 && r.height > 0; };
+  const isExcl = (el) => EXCLUDED.some(s => el.closest(s));
+  const rows = [];
+  for (const sel of BUTTON_SELS) {
+    for (const el of document.querySelectorAll(sel)) {
+      const text = (el.textContent || '').trim().replace(/\s+/g, ' ');
+      if (!text || text.length > 80 || !isVis(el)) continue;
+      const inDialog = !!el.closest('[role="dialog"],[role="alertdialog"],[aria-modal="true"]');
+      const excluded = isExcl(el);
+      rows.push({ text, excluded, inDialog, tag: el.tagName.toLowerCase(), role: el.getAttribute('role') || '', aria: (el.getAttribute('aria-label') || '').slice(0, 80) });
+    }
+  }
+  const status = typeof acceptStatus === 'function' ? acceptStatus() : null;
+  return { buttons: rows, injectorStatus: status, timestamp: new Date().toISOString() };
+})()"""
+
+
+def cmd_diagnose(args: argparse.Namespace) -> int:
+    """Run a self-contained diagnostic: screenshot + DOM snapshot + synthetic probe."""
+    state = _load_state()
+    session = _resolve_session(args, state, require_alive=True,
+                               allow_interactive=True, command_name="diagnose")
+    if not session:
+        return 1
+    port = session.get("cdp_port")
+    target = session.get("cdp_target_id")
+    slug = session.get("slug", "workspace")
+    if not port:
+        print("No CDP port for session.", file=sys.stderr)
+        return 1
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    out_dir = RUNTIME_DIR / f"diagnose-{slug}-{ts}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Step 1: Screenshot
+    try:
+        png = _cdp_screenshot(port, target_id=target)
+        (out_dir / "screenshot.png").write_bytes(png)
+        print(f"[1/4] Screenshot: {out_dir / 'screenshot.png'} ({len(png)} bytes)")
+    except (ConnectionRefusedError, OSError, RuntimeError) as exc:
+        print(f"[1/4] Screenshot failed: {exc}")
+
+    # Step 2: DOM snapshot
+    try:
+        result = _cdp_evaluate(port, _DIAGNOSE_DOM_EXPR, target_id=target)
+        dom_data = result.get("result", {}).get("result", {}).get("value")
+        (out_dir / "dom-snapshot.json").write_text(
+            json.dumps(dom_data, indent=2) if dom_data else "{}", encoding="utf-8")
+        btn_count = len(dom_data.get("buttons", [])) if isinstance(dom_data, dict) else 0
+        print(f"[2/4] DOM snapshot: {btn_count} visible buttons captured")
+    except (ConnectionRefusedError, OSError, RuntimeError) as exc:
+        print(f"[2/4] DOM snapshot failed: {exc}")
+
+    # Step 3: Synthetic probe (View + Allow in dialog)
+    gate_before = _cdp_gate(port, "status", target_id=target) or {}
+    clicks_before = gate_before.get("totalClicks", 0)
+    probe_js = r"""(() => {
+      const old = document.getElementById('__aa_diagnose_probe');
+      if (old) old.remove();
+      const d = document.createElement('div');
+      d.id = '__aa_diagnose_probe';
+      d.setAttribute('role', 'dialog');
+      d.setAttribute('aria-modal', 'true');
+      d.style.cssText = 'position:fixed;right:16px;top:20px;z-index:2147483647;background:#222;padding:10px;display:flex;gap:8px';
+      const b1 = document.createElement('button');
+      b1.textContent = 'View';
+      const b2 = document.createElement('button');
+      b2.textContent = 'Allow';
+      b2.onclick = () => d.setAttribute('data-clicked', 'allow');
+      d.appendChild(b1);
+      d.appendChild(b2);
+      document.body.appendChild(d);
+      return true;
+    })()"""
+    try:
+        _cdp_evaluate(port, probe_js, target_id=target)
+        print("[3/4] Synthetic View+Allow probe injected, waiting 4s...")
+        time.sleep(4.0)
+        gate_after = _cdp_gate(port, "status", target_id=target) or {}
+        clicks_after = gate_after.get("totalClicks", 0)
+        clicked = _cdp_evaluate(port,
+            "(() => document.getElementById('__aa_diagnose_probe')?.getAttribute('data-clicked') || 'no')()",
+            target_id=target)
+        probe_clicked = clicked.get("result", {}).get("result", {}).get("value", "unknown")
+        _cdp_evaluate(port,
+            "(() => { document.getElementById('__aa_diagnose_probe')?.remove(); return true; })()",
+            target_id=target)
+        delta = clicks_after - clicks_before
+        recent = (gate_after.get("recentClicks") or [])[-3:]
+        result_data = {
+            "clicks_before": clicks_before,
+            "clicks_after": clicks_after,
+            "delta": delta,
+            "probe_clicked": probe_clicked,
+            "recent": recent,
+        }
+        (out_dir / "probe-result.json").write_text(
+            json.dumps(result_data, indent=2), encoding="utf-8")
+        verdict = "PASS" if delta > 0 and probe_clicked != "no" else "FAIL"
+        print(f"[3/4] Probe result: {verdict} (clicks +{delta}, probe={probe_clicked})")
+    except (ConnectionRefusedError, OSError, RuntimeError) as exc:
+        print(f"[3/4] Probe failed: {exc}")
+        verdict = "ERROR"
+
+    # Step 4: Summary
+    print(f"[4/4] Artifacts saved to: {out_dir}")
+    gate_final = _cdp_gate(port, "status", target_id=target) or {}
+    print(f"       Gate: {'ON' if gate_final.get('running') else 'OFF'}")
+    print(f"       Clicks: {gate_final.get('totalClicks', '?')}")
+    print(f"       Injector: {_format_injector_hash(gate_final.get('scriptHash'))}")
+    return 0 if verdict == "PASS" else 1
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -1809,6 +2024,19 @@ def build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argument
                            help="Output as NDJSON")
     p_history.set_defaults(func=cmd_history)
     command_parsers["history"] = p_history
+
+    p_screenshot = sub.add_parser("screenshot", help="Capture PNG screenshot of dedicated window")
+    p_screenshot.add_argument("--workspace", "-w", help=ws_help)
+    p_screenshot.add_argument("workspace_pos", nargs="?", help=ws_help)
+    p_screenshot.add_argument("--output", "-o", help="Output file path (default: auto-named in runtime dir)")
+    p_screenshot.set_defaults(func=cmd_screenshot)
+    command_parsers["screenshot"] = p_screenshot
+
+    p_diagnose = sub.add_parser("diagnose", help="Self-debug: screenshot + DOM snapshot + synthetic probe")
+    p_diagnose.add_argument("--workspace", "-w", help=ws_help)
+    p_diagnose.add_argument("workspace_pos", nargs="?", help=ws_help)
+    p_diagnose.set_defaults(func=cmd_diagnose)
+    command_parsers["diagnose"] = p_diagnose
 
     p_help = sub.add_parser("help", help="Show examples and deeper docs", add_help=False)
     p_help.add_argument("-h", "--help", action="store_true", help="Show examples and deeper docs")

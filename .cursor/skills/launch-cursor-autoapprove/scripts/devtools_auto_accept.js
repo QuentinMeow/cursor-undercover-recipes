@@ -61,7 +61,8 @@
     '[role="alertdialog"]',
     '[aria-modal="true"]',
   ];
-  const DISMISS_PATTERNS = new Set(["skip", "cancel", "dismiss", "deny", "not now", "close"]);
+  const DISMISS_PATTERNS = new Set(["skip", "cancel", "dismiss", "deny", "not now", "close", "reject", "don't allow", "decline"]);
+  const COMPANION_PATTERNS = new Set(["view", "stop", "details", "show details"]);
 
   const RESUME_DATA_LINK = "command:composer.resumeCurrentChat";
 
@@ -127,15 +128,23 @@
     return null;
   }
 
-  function matchesDismissal(el) {
+  function _matchesLabelSet(el, labelSet) {
     if (!el || !el.textContent) return false;
     const raw = el.textContent.trim();
     if (!raw || raw.length > 40) return false;
     if (!isVisible(el) || !isClickable(el) || isInExcludedZone(el)) return false;
-    return DISMISS_PATTERNS.has(normalizeLabel(raw));
+    return labelSet.has(normalizeLabel(raw));
   }
 
-  function hasNearbyDismissal(el) {
+  function matchesDismissal(el) {
+    return _matchesLabelSet(el, DISMISS_PATTERNS);
+  }
+
+  function matchesCompanion(el) {
+    return _matchesLabelSet(el, COMPANION_PATTERNS);
+  }
+
+  function _hasNearbyMatch(el, matchFn) {
     const PART_BOUNDARY = /^workbench\.parts\./;
     let node = el;
     for (let depth = 0; node && depth < 3; depth++) {
@@ -143,12 +152,20 @@
       for (const sel of BUTTON_SELECTORS) {
         for (const candidate of node.querySelectorAll(sel)) {
           if (candidate === el) continue;
-          if (matchesDismissal(candidate)) return true;
+          if (matchFn(candidate)) return true;
         }
       }
       node = node.parentElement;
     }
     return false;
+  }
+
+  function hasNearbyDismissal(el) {
+    return _hasNearbyMatch(el, matchesDismissal);
+  }
+
+  function hasNearbyCompanion(el) {
+    return _hasNearbyMatch(el, matchesCompanion);
   }
 
   function isModalSingleActionApprove(btn) {
@@ -301,24 +318,33 @@
     if (titleContainer) titleContainer.title = title;
   }
 
+  function _eligibilityReason(btn) {
+    if (btn.kind === "resume") return "resume";
+    if (hasNearbyDismissal(btn.el)) return "dismiss";
+    if (hasNearbyCompanion(btn.el)) return "companion";
+    if (isModalSingleActionApprove(btn)) return "modal";
+    return null;
+  }
+
   function checkAndClick() {
     const buttons = findApprovalButtons();
     if (buttons.length === 0) return;
     const priority = { approval: 0, connection: 1, resume: 2 };
     const eligible = buttons
-      .filter((btn) => btn.kind === "resume" || hasNearbyDismissal(btn.el) || isModalSingleActionApprove(btn))
+      .map((btn) => ({ ...btn, reason: _eligibilityReason(btn) }))
+      .filter((btn) => btn.reason !== null)
       .sort((a, b) => (priority[a.kind || "approval"] ?? 9) - (priority[b.kind || "approval"] ?? 9));
     if (eligible.length === 0) return;
 
     const btn = eligible[0];
     clickEl(btn.el);
     state.totalClicks++;
-    const entry = { ts: new Date().toISOString(), kind: btn.kind || "approval", id: btn.id, text: btn.text };
+    const entry = { ts: new Date().toISOString(), kind: btn.kind || "approval", id: btn.id, text: btn.text, reason: btn.reason };
     state.clicks.push(entry);
     if (state.clicks.length > 100) {
       state.clicks = state.clicks.slice(-100);
     }
-    console.log(`${LOG_PREFIX} clicked ${btn.id}: "${btn.text}" (total: ${state.totalClicks})`);
+    console.log(`${LOG_PREFIX} clicked ${btn.id}: "${btn.text}" [${btn.reason}] (total: ${state.totalClicks})`);
   }
 
   function start(interval) {
