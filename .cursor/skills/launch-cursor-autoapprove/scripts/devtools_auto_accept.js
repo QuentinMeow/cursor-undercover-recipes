@@ -78,6 +78,7 @@
     "don't allow", "decline",
   ]);
   const COMPANION_PATTERNS = new Set(["view", "stop", "details", "show details"]);
+  const TRAILING_ESC_HINT_RE = /\s+(?:esc|escape)$/;
 
   const RESUME_DATA_LINK = "command:composer.resumeCurrentChat";
 
@@ -132,10 +133,16 @@
   }
 
   function stripKeyboardHints(text) {
-    return text
+    let stripped = text
       .replace(/\s*\([⌃⌥⇧⌘⎋⏎↩\s\w]{1,6}\)\s*$/, "")
       .replace(/[\s\u21A9\u23CE\u21E7\u2318\u2325\u238B\u232B\u2326\u21E5]+$/, "")
       .trim();
+    // Cursor shell-approval cards render dismiss buttons like "Skip Esc".
+    // Treat the trailing plain-text Esc token as a keyboard hint, not label text.
+    if (/\s/.test(stripped)) {
+      stripped = stripped.replace(TRAILING_ESC_HINT_RE, "").trim();
+    }
+    return stripped;
   }
 
   function normalizeLabel(text) {

@@ -80,6 +80,12 @@
   verify with real prompt surfaces whenever users report `Waiting for Approval`
   plus unchanged click counters.
 
+- **Keyboard hints can be plain text, not just glyphs**: Cursor shell approval
+  cards may render dismiss buttons like `Skip Esc` instead of plain `Skip`.
+  Normalize trailing plain-text shortcut hints before exact label matching, or
+  otherwise valid `Run` prompts will be blocked because the nearby dismissal is
+  invisible to the policy engine.
+
 - **Dismissal-guard exceptions must stay narrow and contextual**: Requiring a
   nearby dismiss action is a strong default, but Cursor can show single-action
   modal permission prompts (`approve terminal command`) with no cancel sibling.
@@ -116,6 +122,12 @@
   useful for deterministic regression checks, but routine validation should collect
   snapshots from real Cursor UI states so selector drift and context assumptions are
   tested against actual product surfaces.
+
+- **Synthetic probe suites must reset dedupe state between cases**: The injector's
+  fingerprint cooldown is correct at runtime, but it can create false negatives in
+  back-to-back harness cases that reuse the same normalized button set. Clear
+  cooldown state before each synthetic or replay case so the harness measures
+  matcher behavior, not cross-case residue.
 
 - **Use context-first acceptance, not label-only acceptance**: Exact label matching
   is still brittle if context is weak. Require trusted prompt surfaces (modal roots

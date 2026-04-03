@@ -70,6 +70,10 @@ prompt text may not match the current injector patterns yet. Run `status` and
 inspect `Recent:` plus the live prompt label (for example, `Approve` / `Allow`
 / `Run`) before concluding gate state is wrong.
 
+Real shell-command cards can also append shortcut text to the button label,
+for example `Skip Esc` next to `Run ↩`. Those suffixes should still normalize
+to `skip` and `run`.
+
 ## Test 0: False-Positive Regression (Explorer / Editor)
 
 With gate ON and no approval prompt visible:
@@ -98,6 +102,26 @@ Expected result:
 
 - the command completes
 - `status` may show an extra `Run` click
+
+## Test 1b: Shell Card With Plain-Text Shortcut Suffix
+
+Some Cursor command approval cards render the dismiss action as `Skip Esc`
+instead of plain `Skip`.
+
+1. Trigger a shell command approval card in chat while gate is ON.
+2. Confirm the card shows `Skip Esc` plus `Run ↩` (or another approval label
+   with a keyboard hint).
+3. Capture `status` before and after:
+
+```bash
+/usr/bin/python3 "$LAUNCHER" status
+```
+
+Expected result:
+
+- the prompt is auto-clicked without manual interaction
+- `Clicks:` increases
+- `Recent:` includes a `run` entry
 
 ## Test 2: File Create + Delete
 
@@ -446,8 +470,8 @@ Categories tested:
 - 6 single-action modal probes (approve* solo, approve+view, approve+cancel)
 - 4 non-approve solo buttons (should NOT click)
 - 10 false-positive guards (excluded zones, invisible, disabled, etc.)
-- 10 edge cases (keyboard hints, case, whitespace, role=button, etc.)
-- 5 real-prompt replay fixtures (dedupe-checked)
+- 11 edge cases (keyboard hints, plain-text `Esc` hints, case, whitespace, role=button, etc.)
+- 6 real-prompt replay fixtures (dedupe-checked)
 
 ## Cleanup
 
