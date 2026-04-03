@@ -50,6 +50,16 @@ python3 -m unittest discover -s "$(git rev-parse --show-toplevel)/.cursor/skills
 - Keep PR workflow guidance generic and evidence-first; do not assume a
   specific employer, repo, or stack-management tool.
 - Keep scripts self-contained; do not add cross-skill imports.
+- Treat `.agents/worklog/*.md` (except `.gitkeep`), `.cursor/MEMORY.md`,
+  `.cursor/skills/**/logs/**`, and ad hoc PR-body scratch files as local-only
+  artifacts. Keep them out of commits unless the user explicitly asks for
+  those exact paths to be versioned.
+- If one of those ignored artifacts is already tracked, remember that
+  `.gitignore` will not untrack it. Remove it from the index as part of the
+  fix instead of assuming ignore rules are enough.
+- `QuentinMeow` examples are intentional for this repo's personal remote. If
+  this skill is copied elsewhere, update the target login rather than copying
+  the literal username.
 
 ### Verification
 

@@ -53,8 +53,12 @@ Follow this order:
 2. Use GitHub or remote-tracking refs for file counts and line counts.
 3. Read the full diff before writing summaries or split plans.
 4. Read all review-comment surfaces before claiming feedback is addressed.
-5. Back up PR bodies to a local scratch file before overwriting them.
-6. Split by concern first. Treat line counts as a prompt to think, not a hard
+5. Inspect `git status`, `git diff`, and `git diff --cached` before committing
+   or opening a PR so local-only artifacts do not ride along.
+6. Back up PR bodies to a gitignored scratch path such as
+   `.cursor/skills/github-manager/logs/<run-id>/` or `/tmp/` before
+   overwriting them.
+7. Split by concern first. Treat line counts as a prompt to think, not a hard
    law.
 
 See:
@@ -69,6 +73,12 @@ See:
 - Never substitute a working-tree diff for the PR diff.
 - Never publish counts or claims that are not grounded in GitHub data or the
   actual diff.
+- Never `git add -f` or commit repo-local artifacts such as
+  `.agents/worklog/*.md` (except `.gitkeep`), `.cursor/MEMORY.md`,
+  `.cursor/skills/**/logs/**`, or PR-body scratch files unless the user
+  explicitly asks for those exact files in the diff.
+- If an ignored file is already tracked, remove it from the index instead of
+  assuming `.gitignore` will fix it.
 - Never hardcode or commit work-account identifiers, private hostnames, or
   tokens.
 - Never use this skill to change `git config`.
