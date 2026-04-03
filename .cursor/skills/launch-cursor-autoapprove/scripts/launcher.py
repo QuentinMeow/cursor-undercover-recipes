@@ -57,6 +57,9 @@ LAUNCH_TIMEOUT = 30.0
 CDP_INJECT_DELAY = 5.0
 CDP_INJECT_RETRIES = 6
 
+HISTORY_PATH = RUNTIME_DIR / "history.jsonl"
+HISTORY_MAX_BYTES = 5 * 1024 * 1024  # rotate at 5 MB
+
 # ---------------------------------------------------------------------------
 # State file helpers
 # ---------------------------------------------------------------------------
@@ -158,6 +161,30 @@ def _clear_injector_expression() -> str:
 """.strip()
 
 
+def _log_event(record_type: str, workspace: str = "", slug: str = "",
+               **extra: object) -> None:
+    """Append an NDJSON event to the history log."""
+    try:
+        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "record_type": record_type,
+            "workspace": workspace,
+            "slug": slug,
+        }
+        entry.update(extra)
+        line = json.dumps(entry, default=str) + "\n"
+        if HISTORY_PATH.exists() and HISTORY_PATH.stat().st_size > HISTORY_MAX_BYTES:
+            rotated = HISTORY_PATH.with_suffix(".1.jsonl")
+            with contextlib.suppress(OSError):
+                rotated.unlink(missing_ok=True)
+            HISTORY_PATH.rename(rotated)
+        with open(HISTORY_PATH, "a", encoding="utf-8") as f:
+            f.write(line)
+    except OSError:
+        pass
+
+
 def _skill_doc_dir() -> Path | None:
     local_skill_dir = SCRIPT_DIR.parent
     if (local_skill_dir / "SKILL.md").is_file():
@@ -218,6 +245,12 @@ def _help_examples(topic: str | None = None) -> list[str]:
             "  caa stop",
             "  caa stop --all",
         ],
+        "history": [
+            "Examples:",
+            "  caa history",
+            "  caa history -w my-project",
+            "  caa history -n 50 --json",
+        ],
         "help": [
             "Examples:",
             "  caa help",
@@ -233,6 +266,7 @@ def _help_examples(topic: str | None = None) -> list[str]:
         "  caa on -w my-project",
         "  caa status",
         "  caa stop --all",
+        "  caa history -w my-project",
         "  caa help off",
         "",
         "Multi-session behavior:",
@@ -259,7 +293,7 @@ def cmd_help(args: argparse.Namespace) -> int:
         target = command_parsers.get(topic)
         if target is None:
             print(f"Unknown help topic '{topic}'.", file=sys.stderr)
-            print("Available topics: launch, on, off, status, stop, help", file=sys.stderr)
+            print("Available topics: launch, on, off, status, stop, history, help", file=sys.stderr)
             return 1
         target.print_help()
     else:
@@ -502,25 +536,59 @@ def _cdp_evaluate_ws(ws_url: str, expression: str, timeout: float = 10.0) -> dic
     raise RuntimeError("Timed out waiting for CDP response")
 
 
-def _cdp_evaluate(port: int, expression: str, timeout: float = 10.0) -> dict:
-    """Evaluate JS in the main workbench page target via CDP websocket."""
+def _cdp_list_page_targets(port: int, timeout: float = 10.0) -> list[dict]:
+    """List all page targets on a CDP port."""
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
     conn.request("GET", "/json")
     resp = conn.getresponse()
     targets = json.loads(resp.read().decode("utf-8"))
     conn.close()
-
-    page_targets = [
+    return [
         t for t in targets
         if t.get("type") == "page" and t.get("webSocketDebuggerUrl")
     ]
+
+
+def _is_workbench(t: dict) -> bool:
+    url = (t.get("url") or "").lower()
+    title = (t.get("title") or "").lower()
+    return "workbench" in url or "workbench" in title
+
+
+def _cdp_select_workbench_target(port: int, timeout: float = 10.0) -> dict:
+    """Select the best workbench target and return its /json metadata.
+
+    Used at launch time to pick the initial target for pinning.
+    """
+    page_targets = _cdp_list_page_targets(port, timeout=timeout)
+    if not page_targets:
+        raise RuntimeError(f"No page target found on CDP port {port}")
+    preferred = [t for t in page_targets if _is_workbench(t)]
+    if preferred:
+        return preferred[0]
+    return page_targets[0]
+
+
+def _cdp_evaluate(port: int, expression: str, timeout: float = 10.0,
+                  target_id: str | None = None) -> dict:
+    """Evaluate JS in a page target via CDP websocket.
+
+    When target_id is set, only that specific target is used (pinned mode).
+    When target_id is None, falls back to workbench-first heuristic.
+    """
+    page_targets = _cdp_list_page_targets(port, timeout=timeout)
     if not page_targets:
         raise RuntimeError(f"No page target found on CDP port {port}")
 
-    def _is_workbench(t: dict) -> bool:
-        url = (t.get("url") or "").lower()
-        title = (t.get("title") or "").lower()
-        return "workbench" in url or "workbench" in title
+    if target_id:
+        match = [t for t in page_targets if t.get("id") == target_id]
+        if not match:
+            available_ids = [t.get("id") for t in page_targets]
+            raise RuntimeError(
+                f"Bound CDP target {target_id} not found on port {port}. "
+                f"Available targets: {available_ids}"
+            )
+        return _cdp_evaluate_ws(match[0]["webSocketDebuggerUrl"], expression, timeout=timeout)
 
     preferred = [t for t in page_targets if _is_workbench(t)]
     ordered = preferred + [t for t in page_targets if t not in preferred]
@@ -542,12 +610,17 @@ def _format_injector_hash(script_hash: str | None) -> str:
 
 
 def _cdp_inject(port: int, auto_start: bool = True, force_reload: bool = False,
-                 repo_slug: str = "workspace") -> bool:
-    """Inject the DOM auto-accept script via CDP. Returns True on success."""
+                 repo_slug: str = "workspace",
+                 target_id: str | None = None) -> tuple[bool, str | None]:
+    """Inject the DOM auto-accept script via CDP.
+
+    Returns (success, target_id_used). On first inject target_id may be None;
+    the function will select a workbench target and return its id for pinning.
+    """
     js_path = _dom_injector_path()
     if not js_path.exists():
         print(f"DOM injector not found at {js_path}", file=sys.stderr)
-        return False
+        return False, None
 
     script, _script_hash, script_path = _load_dom_injector_script()
     slug_preamble = f"globalThis.__cursorAutoAcceptRepoSlug = {json.dumps(repo_slug)};\n"
@@ -557,24 +630,28 @@ def _cdp_inject(port: int, auto_start: bool = True, force_reload: bool = False,
     if auto_start:
         script += "\n; startAccept();"
 
+    pinned_id = target_id
     for attempt in range(CDP_INJECT_RETRIES):
         try:
-            result = _cdp_evaluate(port, script, timeout=10.0)
+            if not pinned_id:
+                chosen = _cdp_select_workbench_target(port, timeout=10.0)
+                pinned_id = chosen.get("id")
+            result = _cdp_evaluate(port, script, timeout=10.0, target_id=pinned_id)
             exc = result.get("result", {}).get("exceptionDetails")
             if exc:
                 print(f"DOM injection error: {exc.get('text', '')}", file=sys.stderr)
-                return False
+                return False, pinned_id
             print(f"Injected script from {script_path}")
-            return True
+            return True, pinned_id
         except (ConnectionRefusedError, OSError, RuntimeError):
             if attempt < CDP_INJECT_RETRIES - 1:
                 time.sleep(2 * (attempt + 1))
             else:
-                return False
-    return False
+                return False, pinned_id
+    return False, pinned_id
 
 
-def _cdp_title(port: int) -> str | None:
+def _cdp_title(port: int, target_id: str | None = None) -> str | None:
     try:
         result = _cdp_evaluate(
             port,
@@ -584,6 +661,7 @@ def _cdp_title(port: int) -> str | None:
   return titleButton?.textContent || document.title;
 })()
 """.strip(),
+            target_id=target_id,
         )
         value = result.get("result", {}).get("result", {}).get("value")
         return value if isinstance(value, str) else None
@@ -608,7 +686,8 @@ document.title = {title_json};
 """.strip()
 
 
-def _cdp_gate(port: int, action: str, title: str | None = None) -> dict | None:
+def _cdp_gate(port: int, action: str, title: str | None = None,
+              target_id: str | None = None) -> dict | None:
     """Call startAccept/stopAccept/acceptStatus via CDP. Returns parsed status or None."""
     title_expr = _title_sync_expr(title) if title else ""
     if action == "on":
@@ -621,7 +700,7 @@ def _cdp_gate(port: int, action: str, title: str | None = None) -> dict | None:
         return None
 
     try:
-        result = _cdp_evaluate(port, expr)
+        result = _cdp_evaluate(port, expr, target_id=target_id)
         value = result.get("result", {}).get("result", {}).get("value")
         if isinstance(value, str):
             return json.loads(value)
@@ -891,11 +970,12 @@ def _resolve_session(args: argparse.Namespace, state: dict,
 
 
 def _print_session_status(session: dict) -> None:
-    """Print status for a single session."""
+    """Print status for a single session with target-level diagnostics."""
     pid = session.get("pid")
     port = session.get("cdp_port")
     workspace = session.get("workspace", "unknown")
     slug = session.get("slug", _repo_slug(workspace))
+    bound_target = session.get("cdp_target_id")
     alive = _pid_is_alive(pid) if pid else False
 
     print(f"Session:   {slug}")
@@ -903,17 +983,51 @@ def _print_session_status(session: dict) -> None:
     print(f"CDP port:  {port or 'none'}")
     print(f"Workspace: {workspace}")
     print(f"Launched:  {session.get('launched_at', 'unknown')}")
+    if bound_target:
+        print(f"Target:    {bound_target}")
 
     if alive and port:
-        gate = _cdp_gate(port, "status")
+        target_count = 0
+        target_warning = ""
+        try:
+            page_targets = _cdp_list_page_targets(port, timeout=5.0)
+            target_count = len(page_targets)
+            wb_targets = [t for t in page_targets if _is_workbench(t)]
+            if len(wb_targets) > 1:
+                target_warning = (
+                    f"  WARNING: {len(wb_targets)} workbench targets on port {port}. "
+                    "Extra windows in this dedicated process may receive wrong signals."
+                )
+            if bound_target:
+                found = any(t.get("id") == bound_target for t in page_targets)
+                if not found:
+                    target_warning = (
+                        f"  WARNING: Bound target {bound_target} not found among "
+                        f"{target_count} page target(s). Session needs rebinding (run 'on')."
+                    )
+        except (ConnectionRefusedError, OSError, RuntimeError):
+            pass
+
+        if target_count:
+            print(f"Targets:   {target_count} page target(s) on port")
+
+        gate = _cdp_gate(port, "status", target_id=bound_target)
         if gate:
             running = gate.get("running", False)
             clicks = gate.get("totalClicks", 0)
             label = "ON" if running else "OFF"
-            title = _cdp_title(port)
+            title = _cdp_title(port, target_id=bound_target)
             print(f"Gate:      {label}")
             print(f"Clicks:    {clicks}")
             print(f"Injector:  {_format_injector_hash(gate.get('scriptHash'))}")
+            expected_hash: str | None = None
+            try:
+                _, expected_hash, _ = _load_dom_injector_script()
+            except OSError:
+                pass
+            in_window = gate.get("scriptHash")
+            if expected_hash and in_window and in_window != expected_hash:
+                print(f"  DRIFT:   in-window={in_window}, on-disk={expected_hash} (run 'on' to reload)")
             if title:
                 print(f"Window:    {title}")
             recent = gate.get("recentClicks", [])
@@ -921,6 +1035,9 @@ def _print_session_status(session: dict) -> None:
                 print(f"Recent:    {json.dumps(recent[-3:])}")
         else:
             print("Gate:      unknown (CDP or injector status unavailable)")
+
+        if target_warning:
+            print(target_warning)
     elif not alive:
         print("Gate:      N/A (process not running)")
 
@@ -938,7 +1055,9 @@ def _stop_session(session: dict) -> bool:
 
     if pid and _pid_is_alive(pid):
         if port:
-            _cdp_gate(port, "off", title=disabled_title)
+            _cdp_gate(port, "off", title=disabled_title,
+                      target_id=session.get("cdp_target_id"))
+        _log_event("session", workspace, slug, action="stop", pid=pid)
         if _terminate_pid(pid):
             print(f"[{slug}] Auto-approve OFF. Dedicated Cursor (PID {pid}) closed.")
             return True
@@ -1048,12 +1167,27 @@ def cmd_launch(args: argparse.Namespace) -> int:
     print(f"Cursor started (PID {pid}). Waiting for CDP to become ready...")
     time.sleep(CDP_INJECT_DELAY)
 
-    if _cdp_inject(cdp_port, auto_start=False, force_reload=True, repo_slug=slug):
-        result = _cdp_gate(cdp_port, "on", title=enabled_title)
+    inject_ok, pinned_target = _cdp_inject(
+        cdp_port, auto_start=False, force_reload=True, repo_slug=slug,
+    )
+    if pinned_target:
+        sessions[ws_key]["cdp_target_id"] = pinned_target
+        _save_state(state)
+
+    _log_event("session", ws_key, slug, action="launch", pid=pid,
+               cdp_port=cdp_port, cdp_target_id=pinned_target)
+
+    if inject_ok:
+        result = _cdp_gate(cdp_port, "on", title=enabled_title,
+                           target_id=pinned_target)
         print("\nAuto-approve ON.")
         print(f"Window title target: {enabled_title}")
+        if pinned_target:
+            print(f"Bound target: {pinned_target}")
         if result and result.get("scriptHash"):
             print(f"Injector hash: {result['scriptHash']}")
+        _log_event("gate", ws_key, slug, action="on",
+                   cdp_target_id=pinned_target)
     else:
         print(
             "\nCDP injection failed. Retry by running this launcher with 'on' "
@@ -1079,13 +1213,15 @@ def cmd_on(args: argparse.Namespace) -> int:
     port = session["cdp_port"]
     pid = session["pid"]
     workspace = session["workspace"]
+    slug = session.get("slug", _repo_slug(workspace))
+    bound_target = session.get("cdp_target_id")
     enabled_title = _window_title(workspace, gate_on=True)
 
     if not _pid_is_alive(pid):
         print(f"Dedicated Cursor (PID {pid}) is no longer running.", file=sys.stderr)
         return 1
 
-    check = _cdp_gate(port, "status")
+    check = _cdp_gate(port, "status", target_id=bound_target)
     expected_hash: str | None = None
     expected_path: Path | None = None
     try:
@@ -1095,7 +1231,6 @@ def cmd_on(args: argparse.Namespace) -> int:
 
     current_hash = check.get("scriptHash") if isinstance(check, dict) else None
     needs_reload = check is None or (expected_hash is not None and current_hash != expected_hash)
-    slug = session.get("slug", _repo_slug(workspace))
     if needs_reload:
         if check is None:
             print(
@@ -1108,16 +1243,32 @@ def cmd_on(args: argparse.Namespace) -> int:
                 f"(window={_format_injector_hash(current_hash)}, local={expected_hash}, "
                 f"path={expected_path})."
             )
-        if not _cdp_inject(port, auto_start=False, force_reload=True, repo_slug=slug):
+        inject_ok, new_target = _cdp_inject(
+            port, auto_start=False, force_reload=True, repo_slug=slug,
+            target_id=bound_target,
+        )
+        if not inject_ok:
             print("Injection failed.", file=sys.stderr)
             return 1
+        if new_target and new_target != bound_target:
+            bound_target = new_target
+            session["cdp_target_id"] = bound_target
+            state_data = _load_state()
+            ws_key = session["workspace"]
+            if ws_key in state_data["sessions"]:
+                state_data["sessions"][ws_key]["cdp_target_id"] = bound_target
+                _save_state(state_data)
 
-    result = _cdp_gate(port, "on", title=enabled_title)
+    result = _cdp_gate(port, "on", title=enabled_title, target_id=bound_target)
     if result:
         print(f"Auto-approve ON (total clicks so far: {result.get('totalClicks', 0)})")
         print(f"Window title target: {enabled_title}")
+        if bound_target:
+            print(f"Bound target: {bound_target}")
         if result.get("scriptHash"):
             print(f"Injector hash: {result['scriptHash']}")
+        _log_event("gate", workspace, slug, action="on",
+                   cdp_target_id=bound_target)
     else:
         print("Failed to start auto-approve.", file=sys.stderr)
         return 1
@@ -1133,16 +1284,20 @@ def cmd_off(args: argparse.Namespace) -> int:
     port = session["cdp_port"]
     pid = session["pid"]
     workspace = session["workspace"]
+    slug = session.get("slug", _repo_slug(workspace))
+    bound_target = session.get("cdp_target_id")
     disabled_title = _window_title(workspace, gate_on=False)
 
     if not _pid_is_alive(pid):
         print(f"Dedicated Cursor (PID {pid}) is no longer running.", file=sys.stderr)
         return 1
 
-    result = _cdp_gate(port, "off", title=disabled_title)
+    result = _cdp_gate(port, "off", title=disabled_title, target_id=bound_target)
     if result:
         print(f"Auto-approve OFF (total clicks: {result.get('totalClicks', 0)})")
         print(f"Window title target: {disabled_title}")
+        _log_event("gate", workspace, slug, action="off",
+                   cdp_target_id=bound_target)
     else:
         print("Failed to stop auto-approve.", file=sys.stderr)
         return 1
@@ -1231,6 +1386,73 @@ def cmd_stop(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_history(args: argparse.Namespace) -> int:
+    """Show persisted event history."""
+    workspace_filter = getattr(args, "workspace", None)
+    limit = getattr(args, "limit", 20) or 20
+    as_json = getattr(args, "json_output", False)
+
+    if not HISTORY_PATH.exists():
+        print("No history yet.")
+        return 0
+
+    lines: list[str] = []
+    try:
+        with open(HISTORY_PATH, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError as exc:
+        print(f"Cannot read history: {exc}", file=sys.stderr)
+        return 1
+
+    entries: list[dict] = []
+    for raw_line in lines:
+        raw_line = raw_line.strip()
+        if not raw_line:
+            continue
+        try:
+            entry = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        if workspace_filter:
+            ws = entry.get("workspace", "")
+            sl = entry.get("slug", "")
+            if workspace_filter not in (ws, sl) and _repo_slug(ws) != workspace_filter:
+                continue
+        entries.append(entry)
+
+    entries = entries[-limit:]
+
+    if as_json:
+        for e in entries:
+            print(json.dumps(e))
+        return 0
+
+    if not entries:
+        print("No matching history entries.")
+        return 0
+
+    for e in entries:
+        ts = e.get("ts", "?")[:19]
+        rtype = e.get("record_type", "?")
+        slug = e.get("slug", "?")
+        action = e.get("action", "")
+        detail = ""
+        if rtype == "gate":
+            detail = f"gate {action}"
+        elif rtype == "session":
+            pid_val = e.get("pid", "")
+            detail = f"session {action} (PID {pid_val})"
+        elif rtype == "click":
+            detail = f"click {e.get('kind', '?')} {e.get('pattern_id', '?')}: {e.get('text', '')}"
+        else:
+            detail = f"{rtype} {action}"
+        target = e.get("cdp_target_id", "")
+        target_str = f" [{target[:8]}]" if target else ""
+        print(f"{ts}  {slug:25s}  {detail}{target_str}")
+
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -1275,6 +1497,14 @@ def build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argument
     p_stop.add_argument("--all", action="store_true", help="Stop all active sessions")
     p_stop.set_defaults(func=cmd_stop)
     command_parsers["stop"] = p_stop
+
+    p_history = sub.add_parser("history", help="Show event history log")
+    p_history.add_argument("--workspace", "-w", help="Filter by workspace path or slug")
+    p_history.add_argument("--limit", "-n", type=int, default=20, help="Max entries (default 20)")
+    p_history.add_argument("--json", dest="json_output", action="store_true",
+                           help="Output as NDJSON")
+    p_history.set_defaults(func=cmd_history)
+    command_parsers["history"] = p_history
 
     p_help = sub.add_parser("help", help="Show examples and deeper docs", add_help=False)
     p_help.add_argument("-h", "--help", action="store_true", help="Show examples and deeper docs")

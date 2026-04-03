@@ -187,6 +187,58 @@ Expected result:
 - with exactly one running session, the piped `off` command succeeds without a
   picker
 
+## Test 5: Multi-Window Target Binding
+
+Verify that opening an extra window inside a dedicated process does not
+corrupt CDP targeting.
+
+1. Launch a dedicated session:
+
+```bash
+/usr/bin/python3 "$LAUNCHER" launch "$PWD"
+```
+
+2. Inside the dedicated Cursor process, manually open a second workspace
+   (File → Open Folder) to create a second workbench page.
+
+3. Run status:
+
+```bash
+/usr/bin/python3 "$LAUNCHER" status
+```
+
+Expected result:
+
+- `Target:` shows the pinned target ID
+- `Targets:` shows 2 (or more) page targets
+- A WARNING about multiple workbench targets appears
+- Gate ON/OFF reflects the originally launched session, not the extra window
+
+4. Toggle the gate:
+
+```bash
+/usr/bin/python3 "$LAUNCHER" off
+/usr/bin/python3 "$LAUNCHER" on
+```
+
+Expected result:
+
+- Only the originally launched window changes title (not the manually opened one)
+
+## Test 6: History Log
+
+1. After running a few on/off/launch/stop operations:
+
+```bash
+/usr/bin/python3 "$LAUNCHER" history
+```
+
+Expected result:
+
+- Shows timestamped entries for session launches, gate toggles
+- `-w <slug>` filters to a specific workspace
+- `--json` outputs NDJSON for machine consumption
+
 ## Best Evidence
 
 Run `/usr/bin/python3 "$LAUNCHER" status` after each burst and compare:

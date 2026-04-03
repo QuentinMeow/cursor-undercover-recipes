@@ -68,6 +68,7 @@ After global install:
 | `~/.cursor/launch-autoapprove/launcher.py` | Runtime launcher |
 | `~/.cursor/launch-autoapprove/devtools_auto_accept.js` | Runtime injector script |
 | `~/.cursor/launch-autoapprove/state.json` | Persisted multi-session state (may include stale entries until cleaned up) |
+| `~/.cursor/launch-autoapprove/history.jsonl` | Append-only NDJSON event log (rotates at 5 MB) |
 | `~/.cursor/launch-autoapprove/dedicated-profile-<slug>/` | Per-workspace Cursor profile |
 | `~/.cursor/skills/global-launch-cursor-autoapprove/` | Global slash-command docs |
 
@@ -81,11 +82,25 @@ After global install:
       "cdp_port": 9222,
       "workspace": "<workspace-path>",
       "slug": "<directory-name>",
-      "launched_at": "<UTC ISO timestamp>"
+      "launched_at": "<UTC ISO timestamp>",
+      "cdp_target_id": "<CDP page target ID>"
     }
   }
 }
 ```
+
+### Event History (`history.jsonl`)
+
+`~/.cursor/launch-autoapprove/history.jsonl` is an append-only NDJSON log
+of session lifecycle and gate events. It rotates at 5 MB. Each line is a
+JSON object with at least `ts`, `record_type`, `workspace`, and `slug`.
+
+Recorded event types:
+- `session` — launch, stop
+- `gate` — on, off
+- `click` — auto-click events (when reported by injector)
+
+View with `caa history [-w SLUG] [-n LIMIT] [--json]`.
 
 Legacy single-session format (flat `{pid, cdp_port, workspace}`) is auto-migrated
 on first read. The legacy `dedicated-profile/` directory is renamed to
@@ -113,12 +128,27 @@ When you run `caa launch --workspace <path>`:
 If `open -na` path detection fails, the launcher falls back to direct executable
 launch and repeats PID detection.
 
-## CDP Target Selection and Evaluation
+## CDP Target Selection and Stable Binding
 
-`_cdp_evaluate()` requests `/json`, collects all `type == "page"` targets,
-prefers targets whose URL or title contains "workbench" (the main Cursor UI),
-then falls back to other page targets. This targets the main workbench surface
-rather than webviews or secondary frames.
+At launch time, `_cdp_select_workbench_target()` picks the best workbench
+page target from `/json` and stores its `id` in `state.json` as
+`cdp_target_id`. All subsequent commands (`on`, `off`, `status`, `stop`) pass
+this ID to `_cdp_evaluate()`, which looks up the specific target by ID rather
+than iterating through all pages.
+
+If the bound target ID is not found in the current `/json` listing, the
+command fails closed with a clear error. If `target_id` is `None` (backward
+compatibility or fresh launch before the target is pinned), the legacy
+workbench-first heuristic is used.
+
+`caa status` reports:
+- The bound target ID
+- Total page target count on the port
+- A WARNING if multiple workbench targets exist (indicating a possible extra
+  manual window in the same process)
+- A WARNING if the bound target is missing (indicating the session needs
+  rebinding via `caa on`)
+- Injector hash drift detection (in-window hash vs on-disk hash)
 
 ## Injector Path Selection (Repo vs Installed)
 
@@ -164,6 +194,7 @@ Approval labels are matched by exact normalized text:
   - `accept all`, `accept`, `always allow`, `allow`
   - `run this time only`, `run command`, `run`
   - `apply`, `execute`, `continue`
+  - `switch`, `switch mode`, `change mode`, `confirm`
 
 Safety filters:
 
@@ -242,13 +273,20 @@ settings remain there until manually removed.
 - PID + running/stopped state
 - CDP port
 - workspace
+- bound CDP target ID
+- page target count on port
 - gate ON/OFF
 - click count
-- injector hash
+- injector hash (with drift warning if mismatched)
 - current window title
 - recent click entries (last 3 printed)
+- WARNING if multiple workbench targets exist on the port
+- WARNING if the bound target is missing
 
 Use this output as primary evidence during manual validation.
+
+`caa history` provides a durable event log complementing the in-memory
+status — even after sessions are stopped or the process crashes.
 
 ## Known Limits
 

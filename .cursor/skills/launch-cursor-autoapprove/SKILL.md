@@ -94,6 +94,7 @@ lifecycle with `on`/`off`/`stop`.
 | `off [-w PATH\|SLUG]` | Pause auto-clicking (`stopAccept()` via CDP) while keeping the dedicated window open. Auto-detected if only one session, otherwise opens an interactive picker in a TTY. |
 | `status [-w PATH\|SLUG]` | Show session details. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
 | `stop [-w PATH\|SLUG] [--all]` | Pause gate, close dedicated Cursor process, and remove session when shutdown succeeds. Without `-w`, it prefers running sessions when any are alive; if none are running, it falls back to stale entries for cleanup. Use `--all` to stop every session, but do not combine `--all` with `-w` or a positional workspace. |
+| `history [-w SLUG] [-n LIMIT] [--json]` | Show durable event log of session/gate/click events. Persisted across sessions. |
 | `help [COMMAND]` | Show usage examples, subcommand help, and paths to the deeper docs. |
 
 `on` and `off` auto-detect the target when only one running session is active.
@@ -114,7 +115,9 @@ use `caa --help` (or the full launcher path with `--help`).
    `--user-data-dir` (a per-workspace profile directory). Each workspace gets
    its own persistent profile at `~/.cursor/launch-autoapprove/dedicated-profile-<slug>/`.
 3. The launcher injects `devtools_auto_accept.js` via CDP `Runtime.evaluate`,
-   passing the repo slug so the script knows the project name.
+   passing the repo slug so the script knows the project name. The chosen
+   CDP target is pinned by ID in `state.json` so all subsequent commands
+   (`on`/`off`/`status`/`stop`) address exactly that page.
 4. The injector polls for approval buttons every 2s and clicks matches.
 5. The injector continuously maintains the window title
    (`autoapprove ✅ <repo>` or `autoapprove ⏸ <repo>`) via a 3-second

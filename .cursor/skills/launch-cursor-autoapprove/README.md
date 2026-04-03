@@ -56,6 +56,7 @@ caa on
 caa off
 caa status
 caa stop
+caa history
 caa help
 ```
 
@@ -72,6 +73,7 @@ built-in usage summary, `caa help` for examples and doc paths, or
 | `off` | Turn gate OFF without closing the dedicated window. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
 | `status` | Show PID, CDP port, workspace, gate state, click count, injector hash, current title, and recent clicks. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
 | `stop` | Turn gate OFF, close the dedicated Cursor process, and clear local session state when shutdown succeeds. Without `-w`, it prefers running sessions when any are alive; if none are running, it falls back to stale entries for cleanup. Use `--all` to stop every session, and do not combine `--all` with `-w` or a positional workspace. |
+| `history [-w SLUG] [-n N] [--json]` | Show durable event log (session/gate/click events). |
 | `help [COMMAND]` | Show usage examples, command-specific help, and deeper doc paths. |
 
 ## Important Behavior
