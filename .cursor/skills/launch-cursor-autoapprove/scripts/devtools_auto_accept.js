@@ -151,6 +151,30 @@
     return false;
   }
 
+  function isModalSingleActionApprove(btn) {
+    if (!btn || btn.kind !== "approval" || !btn.el) return false;
+    if (!["approve", "approve_request", "approve_terminal_command"].includes(btn.id)) return false;
+
+    const root = btn.el.closest(PROMPT_ROOT_SELECTORS.join(", "));
+    if (!root || isInExcludedZone(root) || !isVisible(root)) return false;
+
+    const controls = [];
+    const seen = new Set();
+    for (const sel of BUTTON_SELECTORS) {
+      for (const el of root.querySelectorAll(sel)) {
+        if (seen.has(el)) continue;
+        seen.add(el);
+        if (!isVisible(el) || !isClickable(el) || isInExcludedZone(el)) continue;
+        const text = (el.textContent || "").trim();
+        if (!text || text.length > 60) continue;
+        controls.push(el);
+      }
+    }
+
+    if (controls.some((el) => matchesDismissal(el))) return false;
+    return controls.length > 0 && controls.length <= 2;
+  }
+
   function collectApprovalMatches(root, out, seen) {
     for (const sel of BUTTON_SELECTORS) {
       for (const el of root.querySelectorAll(sel)) {
@@ -282,7 +306,7 @@
     if (buttons.length === 0) return;
     const priority = { approval: 0, connection: 1, resume: 2 };
     const eligible = buttons
-      .filter((btn) => btn.kind === "resume" || hasNearbyDismissal(btn.el))
+      .filter((btn) => btn.kind === "resume" || hasNearbyDismissal(btn.el) || isModalSingleActionApprove(btn))
       .sort((a, b) => (priority[a.kind || "approval"] ?? 9) - (priority[b.kind || "approval"] ?? 9));
     if (eligible.length === 0) return;
 

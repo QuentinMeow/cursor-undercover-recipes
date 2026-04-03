@@ -263,12 +263,21 @@ Safety filters:
 
 ### Dismissal Proximity Guard
 
-For approval and connection candidates, the injector requires a nearby dismissal
+Default behavior: approval and connection candidates require a nearby dismissal
 control (`skip`, `cancel`, `dismiss`, `deny`, `not now`, `close`) within
 ancestor depth <= 3 before clicking. The guard stops ascending at workbench part
 boundaries to avoid cross-region false matches.
 
-Resume links bypass the guard since they use a specific `data-link` attribute.
+Narrow exception for real single-action permission prompts:
+
+- allow `approve*` IDs without nearby dismissal only when:
+  - candidate is inside modal prompt roots (`dialog`/`alertdialog`/`aria-modal`)
+  - root is visible and not in excluded zones
+  - root has no visible dismissal control
+  - root has <= 2 short visible clickable controls
+
+Resume links bypass the dismissal guard since they use a specific
+`data-link` attribute.
 
 ### Click Strategy
 

@@ -79,3 +79,9 @@
   updated with exact synonym variants (`approve`, `approve request`, etc.) and
   verify with real prompt surfaces whenever users report `Waiting for Approval`
   plus unchanged click counters.
+
+- **Dismissal-guard exceptions must stay narrow and contextual**: Requiring a
+  nearby dismiss action is a strong default, but Cursor can show single-action
+  modal permission prompts (`approve terminal command`) with no cancel sibling.
+  Handle these with tightly scoped modal-context exceptions, not a global guard
+  relaxation.

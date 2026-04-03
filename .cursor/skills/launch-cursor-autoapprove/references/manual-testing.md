@@ -160,6 +160,25 @@ Expected result:
 - `Recent:` includes an `approval` entry such as `approve`,
   `approve_request`, or `approve_terminal_command`
 
+## Test 3c: Single-Action Approve Modal
+
+Some permission prompts render as a single-action modal (approve button only,
+no nearby dismissal control).
+
+1. Trigger a command in chat that produces a single-action
+   `Approve terminal command` style prompt.
+2. Capture `status` before and after:
+
+```bash
+/usr/bin/python3 "$LAUNCHER" status
+```
+
+Expected result:
+
+- prompt is auto-clicked without manual interaction
+- `Clicks:` increases
+- `Recent:` includes `approve_terminal_command` (or another `approve*` ID)
+
 ## Test 4: Interactive Session Picker
 
 Launch a second workspace so two sessions are active, then verify ambiguous
