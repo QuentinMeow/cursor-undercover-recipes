@@ -41,6 +41,31 @@ assumptions.
    research agents, skeptical reviewers, and implementation agents in
    parallel when the stakes are high.
 
+7. **Prefer fixed workflows over open-ended loops.** Use the smallest control
+   flow that can prove correctness: explicit steps, bounded retries, and clear
+   exit conditions before adding more autonomy.
+
+8. **Machine-checkable done criteria.** Define success in terms of tests, exit
+   codes, status fields, diff checks, or other durable signals rather than the
+   model's self-report.
+
+## High-Stakes Review Cadence
+
+When the work touches auth, GitHub automation, release flow, or safety-critical
+agent tooling, add these independent checks before finalizing:
+
+- **Goal auditor ("take one thousand steps back")**: verify the work still
+  targets the user's real objective and not a narrower local optimization.
+- **Step-back reviewer ("take a step back")**: challenge hacky patches,
+  accidental complexity, and architectural drift.
+- **Design skeptic**: look for a smaller trusted surface or simpler mechanism.
+- **Test skeptic**: confirm the planned tests and manual checks exercise the
+  claimed behavior instead of only the implementation shape.
+
+Parallelize independent analysis, then serialize conflicting edits through one
+integrator. If these reviewers disagree or the evidence is weak, stop and ask
+the user instead of pushing ahead.
+
 ## Applying These Principles
 
 When working on the `launch-cursor-autoapprove` skill or similar harnesses:
