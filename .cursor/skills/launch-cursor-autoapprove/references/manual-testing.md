@@ -486,3 +486,69 @@ Or close the dedicated window completely:
 ```bash
 /usr/bin/python3 "$LAUNCHER" stop
 ```
+
+---
+
+## CDP Diagnostic Harness
+
+When the injector silently fails (zero clicks, no blocked/unknown events), deploy a live CDP polling diagnostic to capture the injector's perspective during real prompts.
+
+### Quick-Start Diagnostic Script
+
+Save the following as `/tmp/cdp_fix_diagnostic.py` and run with `python3 /tmp/cdp_fix_diagnostic.py`:
+
+```python
+# See .agents/worklog/20260403-0105-PDT-autoclick-auxiliarybar-debugging.md
+# for the full diagnostic script template.
+# The key technique: connect via raw WebSocket to CDP port (default 9222),
+# evaluate acceptDebugSnapshot() + custom DOM queries every 300ms,
+# and capture per-button details during live prompts.
+```
+
+### What To Capture
+
+For each button found during a prompt:
+
+| Field | Why |
+|-------|-----|
+| `text` / `normalized` | Verify label normalization (SkipEsc vs Skip) |
+| `zone` / `zoneHasInput` | Check excluded zone and chat surface escape hatch |
+| `composerContains` / `composerDepth` | Verify `_isComposerSurface` walks far enough |
+| `ancestry` (8 levels) | Identify which workbench part hosts the button |
+| `tag` / `role` / `cursor` | Detect non-standard button elements (div with cursor:pointer) |
+
+### Diagnostic Lessons
+
+1. **Walk from the known-shallow element (inputBox), not the deeply-nested button**. Walking up from the button requires a depth limit that will eventually be too short.
+2. **Check if the excluded zone hosts a chat surface** via `zone.querySelector("div.full-input-box")`. Don't blanket-exclude workbench parts.
+3. **Capture the full element tag and cursor style**, not just button/role. Cursor may render actionable controls as `<div>` or `<span>` with `cursor: pointer`.
+4. **Synthetic probes do NOT validate real behavior**. They inject `role="dialog"` elements that bypass excluded zone and sibling scan issues.
+
+## Cursor Version Tracking
+
+The injector's DOM selectors are coupled to specific Cursor versions. Always record the version when validating.
+
+### Known Working Versions
+
+| Cursor Version | Chrome Version | Injector Hash | Shell Run | Subagent Allow | Date Validated |
+|---------------|----------------|---------------|-----------|----------------|----------------|
+| 3.0.8 | Chrome/142.0.7444.265 | 7e641c1041dd | OK | OK | 2026-04-03 |
+
+### Version Upgrade Checklist
+
+When upgrading Cursor:
+
+1. **Before upgrading**: Record current version and injector hash
+2. **After upgrading**: Run `caa status` to check if the injector is still loaded
+3. **Test shell commands**: Trigger a non-allowlisted command, verify auto-click
+4. **Test subagent approval**: Launch a subagent with shell commands, verify View+Allow click
+5. **If broken**: Run the CDP diagnostic harness to capture what changed
+6. **Record results**: Update the version table above
+
+### Key DOM Elements To Verify After Upgrade
+
+- `div.full-input-box` — anchor for composer surface detection
+- `div.conversations` — container for chat messages and prompts
+- `div.view-allow-btn-container-v1` — subagent tool-call button container
+- `workbench.parts.auxiliarybar` — current home of the agent chat panel
+- Button rendering: `<button>` vs `<div>` with `cursor: pointer`

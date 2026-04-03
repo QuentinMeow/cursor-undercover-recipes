@@ -523,3 +523,74 @@ prevent regression.
 
 - [Manual testing guide](manual-testing.md)
 - [Retired approaches and migration context](retired-approaches.md)
+
+---
+
+## Cursor 3.0.8 DOM Structure Changes (2026-04-03)
+
+### Agent Chat in Auxiliary Bar
+
+Starting with Cursor 3.0.8, the agent chat panel renders inside `workbench.parts.auxiliarybar`. Previous versions used a different workbench part. The DOM hierarchy is:
+
+```
+[id="workbench.parts.auxiliarybar"]
+  └── ... (several layers)
+      └── div.composer-bar.editor
+            ├── div.conversations (chat messages + approval buttons)
+            └── div (unnamed)
+                └── div.composer-input-blur-wrapper
+                      └── div.full-input-box (chat input)
+```
+
+Key change: `div.full-input-box` is no longer a sibling of `div.conversations`. They are cousins, separated by 2 DOM levels.
+
+### Excluded Zone Escape Hatch
+
+The injector's `isInExcludedZone()` now checks whether the excluded zone also hosts a chat surface:
+
+```javascript
+function isInExcludedZone(el) {
+    for (const sel of EXCLUDED_ZONES) {
+      const zone = el.closest(sel);
+      if (zone) {
+        if (zone.querySelector("div.full-input-box")) return false;
+        return true;
+      }
+    }
+    return false;
+}
+```
+
+This makes the exclusion contextual: workbench parts that host the chat input are allowed, others remain excluded.
+
+### Subagent Tool-Call Button Structure
+
+Subagent approval cards use `<div>` elements instead of `<button>`:
+
+```
+div.composer-tool-call-block-wrapper
+  └── div.task-tool-call-header
+        └── div.view-allow-btn-container-v1
+              └── div.view-allow-btn-container-inner
+                    ├── div (text: "View") ← cursor: pointer, no role="button"
+                    └── div (text: "Allow") ← cursor: pointer, no role="button"
+```
+
+The selector `.view-allow-btn-container-inner > div` was added to `BUTTON_SELECTORS` to discover these non-standard buttons. "Allow" matches `APPROVAL_PATTERNS`, "View" matches `COMPANION_PATTERNS`, giving eligibility reason `"companion"`.
+
+### Keyboard Hint Concatenation
+
+Cursor renders "Skip" and "Esc" in adjacent `<span>` elements. `textContent` concatenates them as "SkipEsc" without whitespace. The `stripKeyboardHints` function handles both forms:
+
+```javascript
+stripped = stripped.replace(/(.{2,}?)\s*(?:esc|escape)$/i, "$1").trim();
+```
+
+### Discovery Path: Ancestor Walk from InputBox
+
+The sibling scan in `findApprovalButtons` walks up the input box's ancestor chain (4 levels) and scans siblings at each level, because `div.conversations` is a cousin of `div.full-input-box`, not a sibling.
+
+### Composer Surface Detection: Walk from Known-Shallow Element
+
+`_isComposerSurface()` walks UP from `div.full-input-box` (known-shallow, ~4 levels to composer root) and checks `node.contains(el)`. This is more robust than walking up from the deeply-nested target element (which can be 25+ levels deep).
+

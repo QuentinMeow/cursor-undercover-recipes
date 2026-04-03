@@ -1,5 +1,65 @@
 # Lessons
 
+## Cursor Version Coupling
+
+- **DOM selectors and excluded zones are coupled to specific Cursor versions**: The
+  injector relies on workbench part IDs (`workbench.parts.auxiliarybar`, etc.) and
+  CSS class names (`div.full-input-box`, `div.conversations`, `div.composer-bar`).
+  Cursor can relocate UI panels across workbench parts between versions. What was
+  in the editor area in one version may move to the auxiliary bar in the next.
+  Always re-validate the DOM structure when upgrading Cursor.
+
+- **Excluded zones must be conditional, not absolute**: Blanket exclusion of
+  `workbench.parts.auxiliarybar` worked when the chat panel was elsewhere. When
+  Cursor moved the agent chat into the auxiliary bar, the exclusion silently
+  killed all auto-clicking. The fix: check whether the excluded zone also hosts
+  a chat surface (`zone.querySelector("div.full-input-box")`). This makes the
+  exclusion contextual rather than positional.
+
+- **Synthetic probes mask real failures**: The `diagnose` command's synthetic probe
+  injects `role="dialog"` elements that bypass both excluded zones and sibling-scan
+  issues. A passing synthetic probe does NOT prove real prompts will be clicked.
+  Always validate with real prompts and real click-count deltas.
+
+- **Document the known working Cursor version alongside every injector change**:
+  When the injector passes validation, record the Cursor version, Chrome version,
+  and the injector script hash. Future failures can then be bisected against version
+  changes.
+
+## Live CDP Diagnostic Method
+
+- **When the injector silently fails, deploy a CDP polling diagnostic**: Connect
+  to the dedicated window via CDP WebSocket (using the launcher's raw-socket
+  handshake to bypass origin restrictions). Evaluate `acceptDebugSnapshot()` plus
+  custom DOM queries every 300-500ms. Trigger real prompts and capture what the
+  injector sees in real-time. This is the fastest path from "clicks are 0" to
+  "here is the exact broken step."
+
+- **Walk from the known-shallow element, not the deeply-nested one**: When checking
+  whether a button shares a container with the chat input, walk UP from the input
+  box (known-shallow, ~4 levels to the composer root) and use `node.contains(el)`.
+  Walking up from the button is fragile because Cursor's component tree can be 25+
+  levels deep and any fixed depth limit will eventually be too short.
+
+- **Query the excluded zone directly**: Instead of walking from the button to check
+  if it's in a chat surface, use `el.closest(excludedZoneSelector)` to get the zone
+  element, then `zone.querySelector("div.full-input-box")` to check if it hosts a
+  chat. This is O(1) in DOM traversal and eliminates depth-limit bugs entirely.
+
+- **Capture per-button ancestry in diagnostic snapshots**: When a button is found but
+  not clicked, log its full ancestry path (tag, id, class at each level). This
+  immediately reveals which workbench part the button lives in and how far it is
+  from the expected containers.
+
+## Keyboard Hint Normalization
+
+- **Adjacent spans produce concatenated textContent without whitespace**: Cursor
+  renders button labels like "Skip" and "Esc" in separate `<span>` elements.
+  `textContent` concatenates them as "SkipEsc" with no space. The keyboard hint
+  stripper must handle both "Skip Esc" (whitespace-separated) and "SkipEsc"
+  (concatenated). A regex like `/(.{2,}?)\s*(?:esc|escape)$/i` handles both
+  without hollowing out standalone "Esc".
+
 ## CDP Target Binding
 
 - **Port-scoped CDP control is not window-scoped**: A single CDP debugging
@@ -169,3 +229,5 @@
 - **Stale hooks cause split-brain debugging**: Having two approval systems active
   simultaneously makes every failure ambiguous. Detect and warn about conflicting
   configurations at startup, not after hours of debugging.
+
+
