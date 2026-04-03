@@ -1,0 +1,33 @@
+.cursor/rules/debug-escalation/RULE.md
+  53e6f209b25dc3aa 1-81
+.cursor/rules/autonomous-recovery/RULE.md
+  53e6f209b25dc3aa 1-91
+.cursor/rules/assumption-guard/RULE.md
+  53e6f209b25dc3aa 1-79
+.cursor/rules/version-coupling-guard/RULE.md
+  53e6f209b25dc3aa 1-105
+.cursor/rules/instrument-first/RULE.md
+  53e6f209b25dc3aa 1-100
+.cursor/rules/repo-discovery/RULE.md
+  53e6f209b25dc3aa 33-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "5cd60d84341aead726eccfaefb86730605155989",
+  "prompts": {
+    "53e6f209b25dc3aa": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "849c6261-8f22-4b94-b3e7-a26cc17dc254",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 461,
+      "total_deletions": 0,
+      "accepted_lines": 461,
+      "overriden_lines": 0
+    }
+  }
+}
