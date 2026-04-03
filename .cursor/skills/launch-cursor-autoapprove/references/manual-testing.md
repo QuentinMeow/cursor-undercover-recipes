@@ -368,7 +368,21 @@ Run the full stress test suite:
 Expected result:
 
 - `Results: 50/50 passed, 0 failed`
-- Results JSON saved under `logs/stress-test-results.json`
+- Artifacts saved under `logs/<run-id>/`:
+  - `stress-test-results.json`
+  - `screenshots/` with `01-before.png` ... `50-after.png` (100 images total)
+  - `cases/` with one debug JSON per case (button inventory + eligibility trace)
+
+Engineering note:
+
+- The evidence package is the source of truth, not just terminal PASS lines.
+- The harness now syncs wait time to `acceptStatus().interval` + margin, so cases
+  are sampled after at least one injector poll. Forcing a shorter wait can create
+  false negatives.
+- The click counter is expected to increase by the number of positive cases,
+  while false-positive guard cases should not contribute clicks.
+- If a case fails, inspect `cases/<N>.json` first (look at `visibleButtons`,
+  `candidates`, and `eligible`), then compare with the paired screenshots.
 
 Categories tested:
 - 10 dismiss+approval combinations (cancel, skip, close, etc.)

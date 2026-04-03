@@ -266,6 +266,10 @@ Safety filters:
 Approval buttons are only clicked if they pass one of four eligibility paths
 (checked in order by `_eligibilityReason`):
 
+0. **Trusted prompt context** — all non-resume/non-connection candidates must
+   be inside a modal prompt root (`dialog`/`alertdialog`/`aria-modal`) or a
+   composer/chat surface that contains `div.full-input-box`. This context gate
+   avoids accepting generic labels in unrelated UI areas.
 1. **Resume** — `btn.kind === "resume"` (specific `data-link` attribute)
 2. **Dismissal proximity** — `hasNearbyDismissal(btn.el)`: a nearby control
    matching `DISMISS_PATTERNS` (`skip`, `cancel`, `dismiss`, `deny`, `not now`,
@@ -288,6 +292,19 @@ Both dismissal and companion checks use shared helpers (`_matchesLabelSet`,
 
 Each click is logged with a `reason` field (`dismiss`, `companion`, `modal`,
 `resume`) for post-hoc diagnostics.
+
+### Debug Snapshot API (harness introspection)
+
+The injector exposes `acceptDebugSnapshot()` for evidence-first harnesses.
+
+Returned fields include:
+
+- `strategyVersion` and `scriptHash`
+- `visibleButtons` (normalized labels + surface classification + guard signals)
+- `candidates` and `eligible` lists (with per-button eligibility reason)
+
+This allows stress harnesses to capture machine-readable "why" evidence for
+both clicked and non-clicked cases.
 
 ### Click Strategy
 
@@ -400,6 +417,13 @@ interaction.
 Each probe is injected via `createElement` + `setAttribute` (not `innerHTML`,
 which unreliably sets ARIA attributes), waits one poll interval, and verifies
 whether the injector clicked the correct button or correctly ignored it.
+
+Artifact-first output:
+
+- `logs/<run-id>/stress-test-results.json` for summary pass/fail
+- `logs/<run-id>/screenshots/*-before.png` and `*-after.png` per case
+- `logs/<run-id>/cases/<N>.json` with spec, expected/actual result, and
+  `acceptDebugSnapshot()` output before/after injection
 
 ## Known Limits
 

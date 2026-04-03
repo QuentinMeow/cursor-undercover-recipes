@@ -19,6 +19,7 @@ import argparse
 import json
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Reuse launcher's CDP helpers
@@ -28,6 +29,10 @@ sys.path.insert(0, str(LAUNCHER.parent))
 import launcher  # noqa: E402
 
 POLL_INTERVAL = 3.0
+
+
+def _run_id() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M-UTC-stress-test")
 
 def _btn(var: str, text: str, **kwargs: object) -> dict:
     return {"var": var, "text": text, **kwargs}
@@ -197,6 +202,12 @@ def _build_probe_js(spec: dict, probe_id: str) -> str:
         style = btn.get("style", "")
         lines.append(f"const b_{btn['var']} = document.createElement('{tag}');")
         lines.append(f"b_{btn['var']}.textContent = '{text}';")
+        lines.append(f"b_{btn['var']}.setAttribute('data-probe-button', '{btn['var']}');")
+        lines.append(
+            f"b_{btn['var']}.addEventListener('click', () => {{ "
+            f"d.setAttribute('data-clicked', '{btn['var']}'); d.remove(); "
+            f"}}, {{ once: true }});"
+        )
         if role:
             lines.append(f"b_{btn['var']}.setAttribute('role', '{role}');")
         if disabled:
@@ -241,10 +252,53 @@ def _get_recent(port: int, target_id: str | None) -> list[dict]:
     return json.loads(raw)
 
 
+def _get_injector_interval_seconds(port: int, target_id: str | None) -> float:
+    result = launcher._cdp_evaluate(
+        port,
+        "typeof acceptStatus === 'function' ? acceptStatus().interval : 2000",
+        target_id=target_id,
+    )
+    ms = result.get("result", {}).get("result", {}).get("value", 2000)
+    try:
+        ms_f = float(ms)
+    except (TypeError, ValueError):
+        ms_f = 2000.0
+    if ms_f <= 0:
+        ms_f = 2000.0
+    return ms_f / 1000.0
+
+
+def _get_debug_snapshot(port: int, target_id: str | None) -> dict:
+    result = launcher._cdp_evaluate(
+        port,
+        "typeof acceptDebugSnapshot === 'function' ? JSON.stringify(acceptDebugSnapshot()) : '{}'",
+        target_id=target_id,
+    )
+    raw = result.get("result", {}).get("result", {}).get("value", "{}")
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def _save_png(port: int, target_id: str | None, out_path: Path) -> str | None:
+    try:
+        png = launcher._cdp_screenshot(port, target_id=target_id, timeout=20.0)
+    except (ConnectionRefusedError, OSError, RuntimeError):
+        return None
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_bytes(png)
+    return str(out_path)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Stress test auto-approve injector")
     parser.add_argument("--port", type=int, default=9222)
     parser.add_argument("--target", help="CDP target ID")
+    parser.add_argument("--poll-interval", type=float, default=None,
+                        help="Probe settle wait in seconds (default: injector interval + margin)")
+    parser.add_argument("--outdir", help="Output run directory (default: logs/<run-id>)")
     args = parser.parse_args()
 
     port = args.port
@@ -258,20 +312,37 @@ def main() -> int:
                 target = sess.get("cdp_target_id")
                 break
 
+    injector_interval = _get_injector_interval_seconds(port, target)
+    effective_wait = max(args.poll_interval or 0.0, injector_interval + 0.4)
+
     total = len(TEST_CASES)
     passed = 0
     failed = 0
     results: list[dict] = []
 
-    print(f"Running {total} stress test cases on port {port}, target {target or 'auto'}")
-    print("=" * 72)
+    if args.outdir:
+        out_dir = Path(args.outdir).expanduser().resolve()
+    else:
+        out_dir = Path(__file__).parent.parent / "logs" / _run_id()
+    screenshots_dir = out_dir / "screenshots"
+    case_dir = out_dir / "cases"
+    screenshots_dir.mkdir(parents=True, exist_ok=True)
+    case_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Running {total} stress test cases on port {port}, target {target or 'auto'}", flush=True)
+    print(f"Injector interval: {injector_interval:.2f}s; per-case wait: {effective_wait:.2f}s", flush=True)
+    print(f"Artifacts: {out_dir}", flush=True)
+    print("=" * 72, flush=True)
 
     for i, (name, spec, expect_click, expect_id) in enumerate(TEST_CASES, 1):
         probe_id = f"__aa_stress_{i}"
         clicks_before = _get_clicks(port, target)
 
+        before_debug = _get_debug_snapshot(port, target)
+        before_png = _save_png(port, target, screenshots_dir / f"{i:02d}-before.png")
+
         _inject_probe(port, target, spec, probe_id)
-        time.sleep(POLL_INTERVAL)
+        time.sleep(effective_wait)
 
         clicks_after = _get_clicks(port, target)
         delta = clicks_after - clicks_before
@@ -279,6 +350,8 @@ def main() -> int:
 
         recent = _get_recent(port, target)
         last_id = recent[-1]["id"] if recent else None
+        after_debug = _get_debug_snapshot(port, target)
+        after_png = _save_png(port, target, screenshots_dir / f"{i:02d}-after.png")
 
         _remove_probe(port, target, probe_id)
 
@@ -297,21 +370,45 @@ def main() -> int:
             "expected_click": expect_click, "actual_click": clicked,
             "expected_id": expect_id, "actual_id": last_id if clicked else None,
             "delta": delta,
+            "before_screenshot": before_png,
+            "after_screenshot": after_png,
+            "buttons_seen_before": len(before_debug.get("visibleButtons", [])),
+            "buttons_seen_after": len(after_debug.get("visibleButtons", [])),
+            "eligible_seen_after": len(after_debug.get("eligible", [])),
         })
 
         marker = "✓" if ok else "✗"
-        print(f"  [{i:2d}/{total}] {marker} {status:4s}  {name}")
+        print(f"  [{i:2d}/{total}] {marker} {status:4s}  {name}", flush=True)
         if not ok:
-            print(f"         expected click={expect_click} id={expect_id}, got click={clicked} id={last_id} delta={delta}")
+            print(f"         expected click={expect_click} id={expect_id}, got click={clicked} id={last_id} delta={delta}", flush=True)
 
-    print("=" * 72)
-    print(f"Results: {passed}/{total} passed, {failed} failed")
+        per_case = {
+            "case": i,
+            "name": name,
+            "spec": spec,
+            "status": status,
+            "expected_click": expect_click,
+            "expected_id": expect_id,
+            "actual_click": clicked,
+            "actual_id": last_id if clicked else None,
+            "delta": delta,
+            "before_screenshot": before_png,
+            "after_screenshot": after_png,
+            "debug_before": before_debug,
+            "debug_after": after_debug,
+        }
+        (case_dir / f"{i:02d}.json").write_text(
+            json.dumps(per_case, indent=2), encoding="utf-8"
+        )
 
-    # Save results
-    out_path = Path(__file__).parent.parent / "logs" / "stress-test-results.json"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    print("=" * 72, flush=True)
+    print(f"Results: {passed}/{total} passed, {failed} failed", flush=True)
+
+    out_path = out_dir / "stress-test-results.json"
     out_path.write_text(json.dumps(results, indent=2), encoding="utf-8")
-    print(f"Results saved to: {out_path}")
+    print(f"Results saved to: {out_path}", flush=True)
+    print(f"Screenshots saved to: {screenshots_dir}", flush=True)
+    print(f"Per-case debug JSON saved to: {case_dir}", flush=True)
 
     return 0 if failed == 0 else 1
 

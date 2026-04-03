@@ -17,6 +17,7 @@
   const LOG_PREFIX = "[autoAccept]";
   const SCRIPT_HASH = globalThis.__cursorAutoAcceptScriptHash || "unknown";
   const REPO_SLUG = globalThis.__cursorAutoAcceptRepoSlug || "workspace";
+  const STRATEGY_VERSION = "2026-04-context-first";
   const TITLE_SYNC_INTERVAL = 3000;
 
   const APPROVAL_PATTERNS = [
@@ -166,6 +167,24 @@
 
   function hasNearbyCompanion(el) {
     return _hasNearbyMatch(el, matchesCompanion);
+  }
+
+  function _isPromptRoot(el) {
+    return !!el.closest(PROMPT_ROOT_SELECTORS.join(", "));
+  }
+
+  function _isComposerSurface(el) {
+    const surface = el.closest(
+      '[class*="composer"], [class*="chat"], [class*="conversation"], [id*="composer"]'
+    );
+    if (!surface) return false;
+    return !!surface.querySelector("div.full-input-box");
+  }
+
+  function _hasTrustedPromptContext(btn) {
+    if (!btn || !btn.el) return false;
+    if (btn.kind === "resume" || btn.kind === "connection") return true;
+    return _isPromptRoot(btn.el) || _isComposerSurface(btn.el);
   }
 
   function isModalSingleActionApprove(btn) {
@@ -319,11 +338,71 @@
   }
 
   function _eligibilityReason(btn) {
+    if (!_hasTrustedPromptContext(btn)) return null;
     if (btn.kind === "resume") return "resume";
     if (hasNearbyDismissal(btn.el)) return "dismiss";
     if (hasNearbyCompanion(btn.el)) return "companion";
     if (isModalSingleActionApprove(btn)) return "modal";
     return null;
+  }
+
+  function _debugSurface(el) {
+    if (!el) return "none";
+    if (_isPromptRoot(el)) return "modal";
+    if (_isComposerSurface(el)) return "composer";
+    return "other";
+  }
+
+  function _debugButtons(limit = 300) {
+    const rows = [];
+    const seen = new Set();
+    for (const sel of BUTTON_SELECTORS) {
+      for (const el of document.querySelectorAll(sel)) {
+        if (seen.has(el)) continue;
+        seen.add(el);
+        const text = (el.textContent || "").trim().replace(/\s+/g, " ");
+        if (!text || text.length > 80) continue;
+        if (!isVisible(el)) continue;
+        const m = matchesApproval(el);
+        rows.push({
+          text,
+          normalized: normalizeLabel(text),
+          tag: el.tagName.toLowerCase(),
+          role: el.getAttribute("role") || "",
+          inExcludedZone: isInExcludedZone(el),
+          surface: _debugSurface(el),
+          approvalId: m ? m.id : null,
+          hasDismissNearby: hasNearbyDismissal(el),
+          hasCompanionNearby: hasNearbyCompanion(el),
+        });
+        if (rows.length >= limit) return rows;
+      }
+    }
+    return rows;
+  }
+
+  function debugSnapshot() {
+    const candidates = findApprovalButtons().map((btn) => ({
+      kind: btn.kind || "approval",
+      id: btn.id || "",
+      text: btn.text || "",
+      reason: _eligibilityReason(btn),
+      surface: _debugSurface(btn.el),
+      inExcludedZone: isInExcludedZone(btn.el),
+      hasDismissNearby: hasNearbyDismissal(btn.el),
+      hasCompanionNearby: hasNearbyCompanion(btn.el),
+      isModalSingleActionApprove: isModalSingleActionApprove(btn),
+    }));
+    return {
+      strategyVersion: STRATEGY_VERSION,
+      scriptHash: state.scriptHash,
+      running: state.running,
+      totalClicks: state.totalClicks,
+      visibleButtons: _debugButtons(),
+      candidates,
+      eligible: candidates.filter((c) => c.reason !== null),
+      ts: new Date().toISOString(),
+    };
   }
 
   function checkAndClick() {
@@ -373,6 +452,7 @@
 
   function status() {
     const s = {
+      strategyVersion: STRATEGY_VERSION,
       scriptHash: state.scriptHash,
       repoSlug: state.repoSlug,
       running: state.running,
@@ -391,6 +471,7 @@
   globalThis.startAccept = start;
   globalThis.stopAccept = stop;
   globalThis.acceptStatus = status;
+  globalThis.acceptDebugSnapshot = debugSnapshot;
 
   console.log(`${LOG_PREFIX} loaded (${SCRIPT_HASH}) — startAccept() / stopAccept() / acceptStatus()`);
 })();
