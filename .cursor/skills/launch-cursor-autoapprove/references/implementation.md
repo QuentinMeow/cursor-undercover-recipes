@@ -261,23 +261,33 @@ Safety filters:
 - ignore labels longer than 60 chars
 - require `isVisible()` and `isClickable()`
 
-### Dismissal Proximity Guard
+### Eligibility Guard
 
-Default behavior: approval and connection candidates require a nearby dismissal
-control (`skip`, `cancel`, `dismiss`, `deny`, `not now`, `close`) within
-ancestor depth <= 3 before clicking. The guard stops ascending at workbench part
-boundaries to avoid cross-region false matches.
+Approval buttons are only clicked if they pass one of four eligibility paths
+(checked in order by `_eligibilityReason`):
 
-Narrow exception for real single-action permission prompts:
+1. **Resume** — `btn.kind === "resume"` (specific `data-link` attribute)
+2. **Dismissal proximity** — `hasNearbyDismissal(btn.el)`: a nearby control
+   matching `DISMISS_PATTERNS` (`skip`, `cancel`, `dismiss`, `deny`, `not now`,
+   `close`, `reject`, `don't allow`, `decline`) within ancestor depth <= 3.
+   The guard stops ascending at `workbench.parts.*` boundaries.
+3. **Companion proximity** — `hasNearbyCompanion(btn.el)`: a nearby control
+   matching `COMPANION_PATTERNS` (`view`, `stop`, `details`, `show details`)
+   within the same ancestor-depth walk. Companion controls indicate a real
+   approval surface without being dismissals. Same hygiene: visibility,
+   clickability, excluded-zone checks.
+4. **Modal single-action** — `isModalSingleActionApprove(btn)`: allow
+   `approve*` IDs without nearby dismissal only when:
+   - candidate is inside modal prompt roots (`dialog`/`alertdialog`/`aria-modal`)
+   - root is visible and not in excluded zones
+   - root has no visible dismissal control
+   - root has <= 2 short visible clickable controls
 
-- allow `approve*` IDs without nearby dismissal only when:
-  - candidate is inside modal prompt roots (`dialog`/`alertdialog`/`aria-modal`)
-  - root is visible and not in excluded zones
-  - root has no visible dismissal control
-  - root has <= 2 short visible clickable controls
+Both dismissal and companion checks use shared helpers (`_matchesLabelSet`,
+`_hasNearbyMatch`) to ensure consistent safety logic.
 
-Resume links bypass the dismissal guard since they use a specific
-`data-link` attribute.
+Each click is logged with a `reason` field (`dismiss`, `companion`, `modal`,
+`resume`) for post-hoc diagnostics.
 
 ### Click Strategy
 
@@ -350,6 +360,46 @@ Use this output as primary evidence during manual validation.
 
 `caa history` provides a durable event log complementing the in-memory
 status — even after sessions are stopped or the process crashes.
+
+## Self-Debug Commands
+
+### `caa screenshot`
+
+Captures a PNG screenshot of the dedicated Cursor window via CDP
+`Page.captureScreenshot`. Uses a generic `_cdp_send_method` helper that can
+send arbitrary CDP methods against the bound target.
+
+Output: timestamped PNG file in the runtime directory.
+
+### `caa diagnose`
+
+Runs a 4-step self-contained diagnostic without human involvement:
+
+1. **Screenshot** — captures current window state as PNG
+2. **DOM snapshot** — evaluates a JS expression that collects all visible
+   button-like elements with their text, excluded-zone status, dialog
+   membership, and the current injector `acceptStatus()`
+3. **Synthetic probe** — injects a View+Allow dialog, waits one poll interval,
+   checks if click count incremented and the probe was clicked
+4. **Summary** — reports PASS/FAIL with all artifacts saved to a timestamped
+   directory
+
+This enables agents to self-debug auto-click failures by inspecting DOM state,
+visual state, and click behavior without requiring human screenshots or
+interaction.
+
+### Stress Test
+
+`scripts/stress_test.py` runs 50 synthetic probe scenarios via CDP:
+
+- 20 compound surfaces (dismiss+approval, companion+approval combinations)
+- 10 single-action modal probes
+- 10 false-positive guards (excluded zones, invisible, disabled, long labels)
+- 10 edge cases (keyboard hints, case normalization, role=button, pointer-events)
+
+Each probe is injected via `createElement` + `setAttribute` (not `innerHTML`,
+which unreliably sets ARIA attributes), waits one poll interval, and verifies
+whether the injector clicked the correct button or correctly ignored it.
 
 ## Known Limits
 

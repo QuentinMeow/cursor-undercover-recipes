@@ -85,3 +85,21 @@
   modal permission prompts (`approve terminal command`) with no cancel sibling.
   Handle these with tightly scoped modal-context exceptions, not a global guard
   relaxation.
+
+- **Non-dismissal companion controls are a distinct structural signal**: Tool-call
+  approval prompts pair `Allow` with `View` (or `Stop`, `Details`). These are not
+  dismissals and must not be added to `DISMISS_PATTERNS` — doing so corrupts the
+  semantic model and causes cross-interaction bugs with `isModalSingleActionApprove`.
+  Instead, model them as a separate `COMPANION_PATTERNS` set with identical safety
+  hygiene (visibility, clickability, zone exclusion, ancestor-depth walk).
+
+- **Eligibility telemetry pays for itself immediately**: Adding a `reason` field
+  to click log entries (`dismiss`, `companion`, `modal`, `resume`) makes post-hoc
+  debugging trivial. Without it, you can see *that* a click happened but not *why*
+  the guard let it through — which is exactly what you need to diagnose false
+  positives and missed clicks.
+
+- **Synthetic DOM probes via createElement are more reliable than innerHTML**: When
+  injecting test elements via CDP, `innerHTML` can silently fail to set ARIA
+  attributes (`role`, `aria-modal`) in some Electron/Chromium contexts.
+  `createElement` + `setAttribute` always works.

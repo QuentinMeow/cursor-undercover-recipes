@@ -322,6 +322,62 @@ Expected result:
 - if not handled, document the exact surface and DOM context as a known
   limitation for selector tuning.
 
+## Test 7: Companion Pattern (View+Allow)
+
+Tool-call approval prompts pair `Allow` with `View` (not a dismiss action).
+The companion guard should recognize `View` as evidence of a real approval surface.
+
+1. Ask the agent to run a command that produces an `Allow` + `View` prompt
+   (typically a shell command or file operation).
+2. Capture `status` before and after:
+
+```bash
+/usr/bin/python3 "$LAUNCHER" status
+```
+
+Expected result:
+
+- prompt is auto-clicked without manual interaction
+- `Clicks:` increases
+- `Recent:` includes an entry with `"reason": "companion"`
+
+## Test 8: Self-Debug (diagnose command)
+
+Run the built-in diagnostic to verify the injector can click synthetic probes:
+
+```bash
+/usr/bin/python3 "$LAUNCHER" diagnose
+```
+
+Expected result:
+
+- `[1/4] Screenshot:` shows a saved PNG path
+- `[2/4] DOM snapshot:` shows visible button count
+- `[3/4] Probe result: PASS` with clicks > 0
+- `[4/4] Artifacts saved to:` shows a directory with screenshot.png,
+  dom-snapshot.json, and probe-result.json
+
+## Test 9: Automated Stress Test (50 cases)
+
+Run the full stress test suite:
+
+```bash
+/usr/bin/python3 "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/scripts/stress_test.py" --port 9222
+```
+
+Expected result:
+
+- `Results: 50/50 passed, 0 failed`
+- Results JSON saved under `logs/stress-test-results.json`
+
+Categories tested:
+- 10 dismiss+approval combinations (cancel, skip, close, etc.)
+- 10 companion+approval combinations (view, stop, details, etc.)
+- 6 single-action modal probes (approve* solo, approve+view, approve+cancel)
+- 4 non-approve solo buttons (should NOT click)
+- 10 false-positive guards (excluded zones, invisible, disabled, etc.)
+- 10 edge cases (keyboard hints, case, whitespace, role=button, etc.)
+
 ## Cleanup
 
 Pause auto-clicking when you are done:
