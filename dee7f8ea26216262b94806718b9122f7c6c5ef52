@@ -1,0 +1,49 @@
+.cursor/rules/agent-orchestration/RULE.md
+  38dca6528f31d097 1-36
+.cursor/skills/github-manager/SKILL.md
+  38dca6528f31d097 1-89
+.cursor/skills/github-manager/references/pr-workflows.md
+  38dca6528f31d097 1-79
+.cursor/skills/github-manager/scripts/gh_identity.py
+  38dca6528f31d097 1-414
+.cursor/rules/agent-harness/RULE.md
+  38dca6528f31d097 44-68
+.cursor/skills/github-manager/LESSONS.md
+  38dca6528f31d097 1-10
+.cursor/skills/README.md
+  38dca6528f31d097 26
+.cursor/skills/github-manager/AGENTS.md
+  38dca6528f31d097 1-63
+.cursor/rules/github-repo-identity/RULE.md
+  38dca6528f31d097 1-23
+.cursor/skills/github-manager/references/review-checklist.md
+  38dca6528f31d097 1-43
+.cursor/skills/github-manager/references/gh-identity.md
+  38dca6528f31d097 1-61
+.cursor/MEMORY.md
+  38dca6528f31d097 12-13,17
+.cursor/skills/github-manager/README.md
+  38dca6528f31d097 1-43
+.cursor/skills/github-manager/tests/test_gh_identity.py
+  38dca6528f31d097 1-207
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "dee7f8ea26216262b94806718b9122f7c6c5ef52",
+  "prompts": {
+    "38dca6528f31d097": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "994eac33-d95a-47c6-bb42-bf89d005e349",
+        "model": "gpt-5.4-xhigh"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 1108,
+      "total_deletions": 12,
+      "accepted_lines": 1097,
+      "overriden_lines": 0
+    }
+  }
+}
