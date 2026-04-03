@@ -1,0 +1,27 @@
+.cursor/skills/launch-cursor-autoapprove/issues/009-accept-not-clicked-at-session-start.md
+  6e9f92bbde744661 1-49
+.cursor/skills/launch-cursor-autoapprove/scripts/devtools_auto_accept.js
+  6e9f92bbde744661 730
+.cursor/skills/launch-cursor-autoapprove/tests/fixtures/real-prompts/skip-accept-diff-dialog.json
+  6e9f92bbde744661 1-16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "3156307b420f130c91bc99634fed73d57f3e3778",
+  "prompts": {
+    "6e9f92bbde744661": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "d3d89965-14f8-4617-ad44-7b05307098dd",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 66,
+      "total_deletions": 0,
+      "accepted_lines": 66,
+      "overriden_lines": 0
+    }
+  }
+}
