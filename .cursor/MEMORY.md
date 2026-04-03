@@ -9,7 +9,9 @@
 
 - Substantive rule/skill changes should update the affected docs plus `LESSONS.md`, repo-local `.cursor/MEMORY.md`, and a worklog artifact in the same branch when the user wants the artifacts tracked.
 - For auto-approve validation, treat `caa status` and `caa history` as the source of truth; window titles are convenience labels, not proof that the right renderer is bound.
+- Before any `gh` command in this repo, switch to the personal GitHub login with `github-manager/scripts/gh_identity.py enter --target-user QuentinMeow`, then restore the previously active login with `leave` when the work is done. Do not change `git config` as part of that flow.
+- For non-trivial work in this repo, prefer independent agent perspectives such as goal-auditor, step-back reviewer, design skeptic, and test skeptic before locking in a solution.
 
 ## Gotchas
 
-- On this machine, git pushes use the personal SSH identity `QuentinMeow`, but `gh` is currently authenticated as enterprise account `qmiao_pins`; `gh pr create` can fail with GraphQL unauthorized even after a successful push.
+- Git SSH auth and `gh` API auth are independent on this machine, so a push can succeed while `gh` still points at the wrong GitHub account.

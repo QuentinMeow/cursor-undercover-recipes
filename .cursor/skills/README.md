@@ -23,6 +23,7 @@ material or setup scripts it needs.
 
 | Skill | Description |
 |-------|-------------|
+| `github-manager` | Manage `gh` identity switching plus evidence-first PR analysis, review, and cleanup workflows without touching git config. |
 | `launch-cursor-autoapprove` | Launch a dedicated Cursor window with DOM auto-accept injected via CDP. Simple `on`/`off` gate toggle for a dedicated agent window. |
 
 Each skill keeps its public `README.md` short. When a user wants deeper
