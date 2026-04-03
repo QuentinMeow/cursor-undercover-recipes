@@ -1,0 +1,29 @@
+.cursor/skills/launch-cursor-autoapprove/references/manual-testing.md
+  b887439f6c57ab24 360,362,365-366,371-395
+.cursor/skills/launch-cursor-autoapprove/LESSONS.md
+  b887439f6c57ab24 115-119
+.cursor/skills/launch-cursor-autoapprove/scripts/stress_test.py
+  b887439f6c57ab24 2,4-6,8-10,21,28-29,32-33,40,169-172,178-181,186,188,211,231,235-239,244-248,255-256,269,271-274,285,288,301-304,307-309,319-323,328,350,352-353,356-362,371,373-376,379-397,402-403,409-520,524
+.cursor/skills/launch-cursor-autoapprove/references/implementation.md
+  b887439f6c57ab24 410,412-415,423-430
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "2ea62742dbfda67ac2569ff0473092de99c85356",
+  "prompts": {
+    "b887439f6c57ab24": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "11335d9e-bcc3-472b-be68-c67bfc463497",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 260,
+      "total_deletions": 122,
+      "accepted_lines": 260,
+      "overriden_lines": 0
+    }
+  }
+}
