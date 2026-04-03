@@ -1,0 +1,16 @@
+{
+  "name": "run-this-time-only-with-hint",
+  "description": "MCP tool approval: Cancel + Run This Time Only with keyboard hint",
+  "source": "real Cursor UI capture, sanitized",
+  "spec": {
+    "role": "dialog",
+    "modal": true,
+    "buttons": [
+      { "var": "a", "text": "Cancel" },
+      { "var": "b", "text": "Run This Time Only (⌃⏎)" }
+    ]
+  },
+  "expect_click": true,
+  "expect_id": "run_this_time",
+  "expect_single_click": true
+}

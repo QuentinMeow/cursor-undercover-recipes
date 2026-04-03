@@ -1,0 +1,16 @@
+{
+  "name": "skip-accept-diff-dialog",
+  "description": "Diff-accept dialog: Skip + Accept with keyboard hint (session start)",
+  "source": "real Cursor UI capture 2026-04-02, sanitized",
+  "spec": {
+    "role": "dialog",
+    "modal": true,
+    "buttons": [
+      { "var": "a", "text": "Skip" },
+      { "var": "b", "text": "Accept \u21a9" }
+    ]
+  },
+  "expect_click": true,
+  "expect_id": "accept",
+  "expect_single_click": true
+}

@@ -10,12 +10,33 @@ Design constraints:
 - one-or-more dedicated Cursor processes (one per workspace, each with its own `--user-data-dir`)
 - one DOM injector per dedicated process
 - one multi-session state file tracking all active sessions
-- no global shell hook
+- no global shell hook (stale hooks are detected and warned)
 - no AX watcher
 - no process-wide keystroke spam
 
 This narrow scope is why this is the supported approach and older approaches
 were retired.
+
+## Architecture (Observer + Policy + Event Sink)
+
+The injector uses a three-layer architecture:
+
+1. **Surface Observer**: A `MutationObserver` detects DOM changes immediately.
+   A fallback poll (`setInterval` at 2s) catches anything the observer misses.
+2. **Policy Engine**: Separates candidate discovery (finding buttons) from
+   click decisions (eligibility guards, fingerprint cooldown).
+3. **Event Sink**: All decisions (click, blocked, unknown) are queued in
+   `state.eventQueue`. The launcher drains this queue via CDP and persists
+   events to `history.jsonl` and per-prompt artifact files under
+   `~/.cursor/launch-autoapprove/prompt-artifacts/`.
+
+Prompt fingerprinting (sorted button labels within the prompt root) prevents
+the same unresolved prompt from being clicked repeatedly every poll cycle.
+Fingerprints have an 8-second cooldown.
+
+A feature-flagged state probe (`state.enableStateProbe`) can check for
+internal Cursor approval indicators before DOM scanning. This is off by
+default and intended for future hardening as internal APIs stabilize.
 
 ## CLI Surface (`launcher.py`)
 
@@ -93,13 +114,23 @@ After global install:
 ### Event History (`history.jsonl`)
 
 `~/.cursor/launch-autoapprove/history.jsonl` is an append-only NDJSON log
-of session lifecycle and gate events. It rotates at 5 MB. Each line is a
-JSON object with at least `ts`, `record_type`, `workspace`, and `slug`.
+of all skill events. It rotates at 5 MB. Each line is a JSON object with at
+least `ts`, `record_type`, `workspace`, and `slug`.
 
 Recorded event types:
 - `session` — launch, stop
 - `gate` — on, off
-- `click` — auto-click events (when reported by injector)
+- `click` — auto-click events (drained from injector queue by launcher)
+- `blocked_candidate` — buttons in trusted context that failed eligibility
+- `unknown_prompt` — buttons outside trusted context (potential missing patterns)
+- `state_probe` — internal state probe results (when feature-flagged)
+
+The `click`, `blocked_candidate`, and `unknown_prompt` events include a
+`fingerprint` field (sorted button labels within the prompt root), a `prompt`
+subtree capture, and the eligibility `reason`.
+
+Per-prompt artifact files are also written to
+`~/.cursor/launch-autoapprove/prompt-artifacts/` for blocked and unknown events.
 
 View with `caa history [-w SLUG] [-n LIMIT] [--json]`.
 
@@ -214,13 +245,26 @@ workbench-first heuristic is used.
 This prevents development confusion where running the repo launcher silently
 loads stale installed JS.
 
+### Stale-Hook Detection
+
+At launch and status time, the launcher scans for retired approval hooks in
+`.cursor/hooks.json` (both repo-local and `~/.cursor/hooks.json`). If any
+hook command matches patterns from retired skills (`auto-approval`,
+`cursor-autoapprove`, `personal-cursor-quickapprove`), a WARNING is printed
+to stderr. This prevents the split-brain scenario where two approval systems
+run simultaneously.
+
 ## DOM Injector Internals (`devtools_auto_accept.js`)
 
-### Timers and State
+### Timers, Observer, and State
 
-- Poll interval: `2000ms` (`state.interval`)
+- `MutationObserver` on `document.body` (childList, subtree, attributes)
+  with 300ms debounce fires `checkAndClick` on DOM changes
+- Fallback poll interval: `2000ms` (`state.interval`)
 - Title sync interval: `3000ms` (`state.titleTimer`)
 - Tracks click history in memory (`state.clicks`, max 100 entries)
+- Event queue (`state.eventQueue`, max 200 entries) for launcher to drain
+- Fingerprint cooldown map (`state.fingerprintCooldowns`, 8s per fingerprint)
 
 ### Candidate Discovery
 
@@ -324,7 +368,22 @@ Candidates are prioritized by `kind`:
 2. `connection`
 3. `resume`
 
-Only one candidate is clicked per poll interval.
+Only one candidate is clicked per poll interval (or observer-triggered cycle).
+
+### Click Deduplication (Fingerprint Cooldown)
+
+Each prompt's fingerprint is computed from the sorted normalized labels of
+all buttons within the prompt root. After a click, the fingerprint enters an
+8-second cooldown. During cooldown, the same prompt cannot be clicked again.
+This prevents the double-click problem where a prompt that doesn't immediately
+disappear gets clicked on every poll cycle.
+
+### Event Queue and Launcher Drain
+
+All click, blocked, and unknown events are pushed to `state.eventQueue`.
+The launcher drains this queue via CDP `Runtime.evaluate` during `status`,
+`on`, and periodic checks. Drained events are persisted to `history.jsonl`
+and (for blocked/unknown) to per-prompt artifact files.
 
 ## Hash Handshake and Reload
 
@@ -407,12 +466,15 @@ interaction.
 
 ### Stress Test
 
-`scripts/stress_test.py` now supports two harness modes:
+`scripts/stress_test.py` supports three harness modes:
 
 - `--mode snapshot` (default): captures real live UI snapshots and screenshots.
 - `--mode synthetic`: runs probe-based assertions.
   - `--suite meaningful` (default for synthetic): short, combined, high-signal cases.
   - `--suite full`: original full matrix for deep regression checks.
+- `--mode replay`: loads sanitized real-prompt fixture JSON files from
+  `tests/fixtures/real-prompts/` and replays them as CDP-injected probes.
+  Asserts click correctness and single-click deduplication.
 
 Each probe is injected via `createElement` + `setAttribute` (not `innerHTML`,
 which unreliably sets ARIA attributes), waits one poll interval, and verifies
@@ -430,6 +492,19 @@ Artifact-first output:
   - `logs/<run-id>-harness-synthetic/cases/<N>.json` with spec, expected/actual result, and
   `acceptDebugSnapshot()` output before/after injection
 
+### Real-Prompt Fixture Corpus
+
+Sanitized real prompt captures live in
+`tests/fixtures/real-prompts/*.json`. Each fixture specifies:
+
+- `spec`: probe injection parameters (role, modal, buttons)
+- `expect_click`: whether the injector should click
+- `expect_id`: which pattern ID should match
+- `expect_single_click`: whether only one click should occur (dedupe check)
+
+New misses from production should be sanitized and added as fixtures to
+prevent regression.
+
 ## Known Limits
 
 - DOM selectors are best-effort against a changing product UI.
@@ -438,6 +513,8 @@ Artifact-first output:
   changes where prompts are rendered.
 - CDP port allocation uses a local free-port probe and can race on very busy
   hosts (rare).
+- The state probe is experimental and off by default. Internal Cursor APIs
+  may change without notice.
 
 ## Related Docs
 

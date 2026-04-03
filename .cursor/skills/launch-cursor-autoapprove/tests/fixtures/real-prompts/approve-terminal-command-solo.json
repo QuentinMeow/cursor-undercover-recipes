@@ -1,0 +1,15 @@
+{
+  "name": "approve-terminal-command-solo",
+  "description": "Single-action modal: Approve Terminal Command (no dismiss sibling)",
+  "source": "real Cursor UI capture, sanitized",
+  "spec": {
+    "role": "alertdialog",
+    "modal": true,
+    "buttons": [
+      { "var": "a", "text": "Approve Terminal Command" }
+    ]
+  },
+  "expect_click": true,
+  "expect_id": "approve_terminal_command",
+  "expect_single_click": true
+}

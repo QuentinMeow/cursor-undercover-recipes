@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Auto-approve harness: short synthetic suite + real snapshot mode.
+"""Auto-approve harness: synthetic suite, real snapshot, and replay modes.
 
 Modes:
   - synthetic: inject probe prompts and assert click behavior.
   - snapshot: capture live UI snapshots only (no synthetic prompt injection).
+  - replay: load sanitized real-prompt fixture files and replay them as probes.
 
 Defaults:
   - mode=snapshot (real UI, artifact-first)
@@ -479,6 +480,145 @@ def _run_snapshot(args: argparse.Namespace, port: int, target: str | None, out_d
     return 0
 
 
+FIXTURES_DIR = Path(__file__).parent.parent / "tests" / "fixtures" / "real-prompts"
+
+
+def _load_fixtures(fixtures_dir: Path | None = None) -> list[dict]:
+    """Load real-prompt fixture JSON files from the fixtures directory."""
+    fdir = fixtures_dir or FIXTURES_DIR
+    if not fdir.is_dir():
+        return []
+    fixtures = []
+    for p in sorted(fdir.glob("*.json")):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            data["_source_file"] = str(p)
+            fixtures.append(data)
+        except (json.JSONDecodeError, OSError):
+            continue
+    return fixtures
+
+
+def _run_replay(args: argparse.Namespace, port: int, target: str | None, out_dir: Path) -> int:
+    """Replay sanitized real-prompt fixtures as probes and validate click behavior."""
+    fixtures_dir = Path(args.fixtures_dir) if args.fixtures_dir else FIXTURES_DIR
+    fixtures = _load_fixtures(fixtures_dir)
+    if not fixtures:
+        print(f"No fixtures found in {fixtures_dir}", file=sys.stderr)
+        return 1
+
+    total = len(fixtures)
+    passed = 0
+    failed = 0
+    results: list[dict] = []
+
+    screenshots_dir = out_dir / "screenshots"
+    case_dir = out_dir / "cases"
+    screenshots_dir.mkdir(parents=True, exist_ok=True)
+    case_dir.mkdir(parents=True, exist_ok=True)
+
+    injector_interval = _get_injector_interval_seconds(port, target)
+    effective_wait = max(args.poll_interval or 0.0, injector_interval + 0.4)
+
+    print(f"Replaying {total} real-prompt fixture(s) on port {port}, target {target or 'auto'}", flush=True)
+    print(f"Fixtures dir: {fixtures_dir}", flush=True)
+    print(f"Injector interval: {injector_interval:.2f}s; per-case wait: {effective_wait:.2f}s", flush=True)
+    print(f"Artifacts: {out_dir}", flush=True)
+    print("=" * 72, flush=True)
+
+    for i, fixture in enumerate(fixtures, 1):
+        name = fixture.get("name", f"fixture-{i}")
+        spec = fixture.get("spec", {})
+        expect_click = fixture.get("expect_click", True)
+        expect_id = fixture.get("expect_id")
+        expect_single = fixture.get("expect_single_click", False)
+        probe_id = f"__aa_replay_{i}"
+
+        clicks_before = _get_clicks(port, target)
+        before_debug = _get_debug_snapshot(port, target)
+        before_png = _save_png(port, target, screenshots_dir / f"{i:02d}-before.png")
+
+        _inject_probe(port, target, spec, probe_id)
+        time.sleep(effective_wait)
+
+        clicks_after = _get_clicks(port, target)
+        delta = clicks_after - clicks_before
+        clicked = delta > 0
+        recent = _get_recent(port, target)
+        last_id = recent[-1]["id"] if recent else None
+        after_debug = _get_debug_snapshot(port, target)
+        after_png = _save_png(port, target, screenshots_dir / f"{i:02d}-after.png")
+
+        if expect_single and delta > 1:
+            time.sleep(effective_wait)
+            clicks_recheck = _get_clicks(port, target)
+            extra_delta = clicks_recheck - clicks_after
+        else:
+            extra_delta = 0
+
+        _remove_probe(port, target, probe_id)
+
+        ok = clicked == expect_click
+        if ok and expect_click and expect_id:
+            ok = last_id == expect_id
+        single_ok = True
+        if ok and expect_single and delta > 1:
+            single_ok = False
+            ok = False
+
+        status = "PASS" if ok else "FAIL"
+        if ok:
+            passed += 1
+        else:
+            failed += 1
+
+        result_entry = {
+            "case": i,
+            "name": name,
+            "status": status,
+            "expected_click": expect_click,
+            "actual_click": clicked,
+            "expected_id": expect_id,
+            "actual_id": last_id if clicked else None,
+            "delta": delta,
+            "single_click_ok": single_ok,
+            "extra_delta": extra_delta,
+            "source_file": fixture.get("_source_file", ""),
+            "before_screenshot": before_png,
+            "after_screenshot": after_png,
+            "buttons_seen_before": len(before_debug.get("visibleButtons", [])),
+            "buttons_seen_after": len(after_debug.get("visibleButtons", [])),
+            "eligible_seen_after": len(after_debug.get("eligible", [])),
+        }
+        results.append(result_entry)
+
+        print(f"  [{i:2d}/{total}] {'✓' if ok else '✗'} {status:4s}  {name}", flush=True)
+        if not ok:
+            detail = f"expected click={expect_click} id={expect_id}, got click={clicked} id={last_id} delta={delta}"
+            if not single_ok:
+                detail += f" (MULTI-CLICK: {delta} clicks, expected single)"
+            print(f"         {detail}", flush=True)
+
+        (case_dir / f"{i:02d}.json").write_text(
+            json.dumps(
+                {
+                    **result_entry,
+                    "spec": spec,
+                    "debug_before": before_debug,
+                    "debug_after": after_debug,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+    print("=" * 72, flush=True)
+    print(f"Results: {passed}/{total} passed, {failed} failed", flush=True)
+    (out_dir / "replay-results.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
+    print(f"Results saved to: {out_dir / 'replay-results.json'}", flush=True)
+    return 0 if failed == 0 else 1
+
+
 def _resolve_target(port: int, target: str | None) -> str | None:
     if target:
         return target
@@ -492,7 +632,7 @@ def _resolve_target(port: int, target: str | None) -> str | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Auto-approve harness")
-    parser.add_argument("--mode", choices=["snapshot", "synthetic"], default="snapshot")
+    parser.add_argument("--mode", choices=["snapshot", "synthetic", "replay"], default="snapshot")
     parser.add_argument("--suite", choices=["meaningful", "full"], default="meaningful")
     parser.add_argument("--port", type=int, default=9222)
     parser.add_argument("--target", help="CDP target ID")
@@ -500,11 +640,12 @@ def main() -> int:
         "--poll-interval",
         type=float,
         default=None,
-        help="Synthetic mode: probe settle wait in seconds (default: injector interval + margin)",
+        help="Synthetic/replay mode: probe settle wait in seconds (default: injector interval + margin)",
     )
     parser.add_argument("--duration", type=float, default=SNAPSHOT_DURATION, help="Snapshot mode duration in seconds")
     parser.add_argument("--interval", type=float, default=SNAPSHOT_INTERVAL, help="Snapshot mode sample interval in seconds")
     parser.add_argument("--outdir", help="Output run directory (default: logs/<run-id>-<mode>)")
+    parser.add_argument("--fixtures-dir", help="Replay mode: path to fixtures directory")
     args = parser.parse_args()
 
     port = args.port
@@ -517,6 +658,8 @@ def main() -> int:
 
     if args.mode == "snapshot":
         return _run_snapshot(args, port, target, out_dir)
+    if args.mode == "replay":
+        return _run_replay(args, port, target, out_dir)
     return _run_synthetic(args, port, target, out_dir)
 
 

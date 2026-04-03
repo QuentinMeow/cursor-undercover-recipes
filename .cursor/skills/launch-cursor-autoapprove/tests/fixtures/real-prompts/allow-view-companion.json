@@ -1,0 +1,16 @@
+{
+  "name": "allow-view-companion",
+  "description": "Tool-call approval: Allow + View buttons (companion pattern)",
+  "source": "real Cursor UI capture, sanitized",
+  "spec": {
+    "role": "dialog",
+    "modal": true,
+    "buttons": [
+      { "var": "a", "text": "View" },
+      { "var": "b", "text": "Allow" }
+    ]
+  },
+  "expect_click": true,
+  "expect_id": "allow",
+  "expect_single_click": true
+}
