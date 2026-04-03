@@ -1,0 +1,55 @@
+.cursor/skills/launch-cursor-autoapprove/references/manual-testing.md
+  8553b45dabcac4b6 190-241
+.cursor/skills/launch-cursor-autoapprove/scripts/devtools_auto_accept.js
+  8553b45dabcac4b6 33-36,42-45,50,54,104,136,138-139,185,217,221-234,282
+.cursor/skills/launch-cursor-autoapprove/references/implementation.md
+  8553b45dabcac4b6 71,85-86,92-103,131,133-151,197,276-277,280,283-284,288-289
+  82c81204708ce937 290
+.cursor/skills/launch-cursor-autoapprove/README.md
+  8553b45dabcac4b6 59,76
+.cursor/skills/launch-cursor-autoapprove/SKILL.md
+  8553b45dabcac4b6 97,118-120
+.cursor/skills/launch-cursor-autoapprove/scripts/launcher.py
+  8553b45dabcac4b6 60-62,164-187,248-253,269,296,539-540,546,550-563,566-570,572-579,583-591,613-619,623,633,636-639,643,645,650-651,654,664,689-690,703,973,978,986-987,990-1014,1019,1023-1030,1038-1040,1058-1060,1170-1182,1185-1186,1189-1190,1216-1217,1224,1246-1250,1253-1260,1262,1266-1267,1270-1271,1287-1288,1295,1299-1300,1389-1455,1501-1508
+.cursor/skills/launch-cursor-autoapprove/issues/004-cdp-targets-wrong-workbench-in-multi-window.md
+  8553b45dabcac4b6 1-43
+.cursor/skills/launch-cursor-autoapprove/LESSONS.md
+  8553b45dabcac4b6 3-21
+.cursor/rules/agent-harness/RULE.md
+  8553b45dabcac4b6 1-61
+.cursor/rules/repo-discovery/RULE.md
+  8553b45dabcac4b6 32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "5e06686d9c0bf1d46530a87382d95be3aef8d367",
+  "prompts": {
+    "82c81204708ce937": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "75c80821-aa55-4852-86e9-e73025e38152",
+        "model": "gpt-5.4-xhigh"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 3,
+      "total_deletions": 3,
+      "accepted_lines": 78,
+      "overriden_lines": 0
+    },
+    "8553b45dabcac4b6": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "74141fb1-3bfe-41b1-98d4-3c81c86b4f5d",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 520,
+      "total_deletions": 68,
+      "accepted_lines": 520,
+      "overriden_lines": 0
+    }
+  }
+}
