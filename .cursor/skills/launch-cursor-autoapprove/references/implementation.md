@@ -407,12 +407,12 @@ interaction.
 
 ### Stress Test
 
-`scripts/stress_test.py` runs 50 synthetic probe scenarios via CDP:
+`scripts/stress_test.py` now supports two harness modes:
 
-- 20 compound surfaces (dismiss+approval, companion+approval combinations)
-- 10 single-action modal probes
-- 10 false-positive guards (excluded zones, invisible, disabled, long labels)
-- 10 edge cases (keyboard hints, case normalization, role=button, pointer-events)
+- `--mode snapshot` (default): captures real live UI snapshots and screenshots.
+- `--mode synthetic`: runs probe-based assertions.
+  - `--suite meaningful` (default for synthetic): short, combined, high-signal cases.
+  - `--suite full`: original full matrix for deep regression checks.
 
 Each probe is injected via `createElement` + `setAttribute` (not `innerHTML`,
 which unreliably sets ARIA attributes), waits one poll interval, and verifies
@@ -420,9 +420,14 @@ whether the injector clicked the correct button or correctly ignored it.
 
 Artifact-first output:
 
-- `logs/<run-id>/stress-test-results.json` for summary pass/fail
-- `logs/<run-id>/screenshots/*-before.png` and `*-after.png` per case
-- `logs/<run-id>/cases/<N>.json` with spec, expected/actual result, and
+- snapshot mode:
+  - `logs/<run-id>-harness-snapshot/snapshot-summary.json`
+  - `logs/<run-id>-harness-snapshot/snapshots/<tick>.json`
+  - `logs/<run-id>-harness-snapshot/screenshots/<tick>.png`
+- synthetic mode:
+  - `logs/<run-id>-harness-synthetic/stress-test-results.json`
+  - `logs/<run-id>-harness-synthetic/screenshots/*-before.png` and `*-after.png`
+  - `logs/<run-id>-harness-synthetic/cases/<N>.json` with spec, expected/actual result, and
   `acceptDebugSnapshot()` output before/after injection
 
 ## Known Limits

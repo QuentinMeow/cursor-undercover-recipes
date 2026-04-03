@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
-"""Stress test for the auto-approve injector.
+"""Auto-approve harness: short synthetic suite + real snapshot mode.
 
-Injects 50 synthetic approval prompts via CDP and verifies that the
-injector clicks the right ones and ignores the wrong ones.
+Modes:
+  - synthetic: inject probe prompts and assert click behavior.
+  - snapshot: capture live UI snapshots only (no synthetic prompt injection).
 
-Categories:
-  1-20:  Compound approval surfaces (approval + dismiss/companion combos)
-  21-30: Temp-file-style single-action modals
-  31-40: False-positive guards (should NOT be clicked)
-  41-50: Edge cases (keyboard hints, long labels, excluded zones, etc.)
-
-Usage:
-  python3 stress_test.py [--port 9222] [--target TARGET_ID]
+Defaults:
+  - mode=snapshot (real UI, artifact-first)
+  - synthetic suite=meaningful (short set of high-signal cases)
 """
 from __future__ import annotations
 
@@ -22,22 +18,26 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Reuse launcher's CDP helpers
+# Reuse launcher's CDP helpers.
 LAUNCHER = Path(__file__).parent / "launcher.py"
 sys.path.insert(0, str(LAUNCHER.parent))
 
 import launcher  # noqa: E402
 
 POLL_INTERVAL = 3.0
+SNAPSHOT_INTERVAL = 2.5
+SNAPSHOT_DURATION = 60.0
 
 
-def _run_id() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M-UTC-stress-test")
+def _run_id(suffix: str) -> str:
+    return datetime.now(timezone.utc).strftime(f"%Y%m%d-%H%M-UTC-{suffix}")
+
 
 def _btn(var: str, text: str, **kwargs: object) -> dict:
     return {"var": var, "text": text, **kwargs}
 
-# Each test case: (name, spec_dict, expected_click, expected_id_if_clicked)
+
+# Full matrix (kept for optional deep checks).
 TEST_CASES: list[tuple[str, dict, bool, str | None]] = [
     # --- Category 1: Compound approval surfaces (dismiss + approval) ---
     ("dismiss+allow: Cancel+Allow",
@@ -166,23 +166,27 @@ TEST_CASES: list[tuple[str, dict, bool, str | None]] = [
      True, "approve_terminal_command"),
 ]
 
+# 1-indexed into TEST_CASES.
+MEANINGFUL_CASE_INDEXES = [
+    1, 2, 11, 20, 23, 27, 32, 34, 37, 41, 43, 46, 50
+]
+
 
 def _build_probe_js(spec: dict, probe_id: str) -> str:
-    """Build JS that creates a probe via createElement (innerHTML unreliable for role attrs)."""
     root_role = spec.get("role", "dialog")
     root_modal = spec.get("modal", True)
-    root_style = spec.get("style", "position:fixed;z-index:2147483647;top:10px;right:10px;background:#333;padding:8px;display:flex;gap:4px")
+    root_style = spec.get(
+        "style",
+        "position:fixed;z-index:2147483647;top:10px;right:10px;background:#333;padding:8px;display:flex;gap:4px",
+    )
     buttons = spec.get("buttons", [])
     excluded_zone = spec.get("excluded_zone")
     root_visible = spec.get("root_visible", True)
 
-    lines = [f"const old = document.getElementById('{probe_id}');",
-             "if (old) old.remove();"]
-
+    lines = [f"const old = document.getElementById('{probe_id}');", "if (old) old.remove();"]
     if excluded_zone:
-        lines.append(f"const zone = document.createElement('div');")
+        lines.append("const zone = document.createElement('div');")
         lines.append(f"zone.id = '{excluded_zone}';")
-
     lines.append("const d = document.createElement('div');")
     lines.append(f"d.id = '{probe_id}';")
     if root_role:
@@ -204,9 +208,7 @@ def _build_probe_js(spec: dict, probe_id: str) -> str:
         lines.append(f"b_{btn['var']}.textContent = '{text}';")
         lines.append(f"b_{btn['var']}.setAttribute('data-probe-button', '{btn['var']}');")
         lines.append(
-            f"b_{btn['var']}.addEventListener('click', () => {{ "
-            f"d.setAttribute('data-clicked', '{btn['var']}'); d.remove(); "
-            f"}}, {{ once: true }});"
+            f"b_{btn['var']}.addEventListener('click', () => {{ d.setAttribute('data-clicked', '{btn['var']}'); d.remove(); }}, {{ once: true }});"
         )
         if role:
             lines.append(f"b_{btn['var']}.setAttribute('role', '{role}');")
@@ -226,28 +228,32 @@ def _build_probe_js(spec: dict, probe_id: str) -> str:
 
 
 def _inject_probe(port: int, target_id: str | None, spec: dict, probe_id: str) -> None:
-    """Inject a synthetic approval prompt into the page."""
-    js = _build_probe_js(spec, probe_id)
-    launcher._cdp_evaluate(port, js, target_id=target_id)
+    launcher._cdp_evaluate(port, _build_probe_js(spec, probe_id), target_id=target_id)
 
 
 def _remove_probe(port: int, target_id: str | None, probe_id: str) -> None:
-    js = f"(() => {{ document.getElementById('{probe_id}')?.remove(); return true; }})()"
-    launcher._cdp_evaluate(port, js, target_id=target_id)
+    launcher._cdp_evaluate(
+        port,
+        f"(() => {{ document.getElementById('{probe_id}')?.remove(); return true; }})()",
+        target_id=target_id,
+    )
 
 
 def _get_clicks(port: int, target_id: str | None) -> int:
     result = launcher._cdp_evaluate(
-        port, "typeof acceptStatus === 'function' ? acceptStatus().totalClicks : -1",
-        target_id=target_id)
-    return result.get("result", {}).get("result", {}).get("value", -1)
+        port,
+        "typeof acceptStatus === 'function' ? acceptStatus().totalClicks : -1",
+        target_id=target_id,
+    )
+    return int(result.get("result", {}).get("result", {}).get("value", -1))
 
 
 def _get_recent(port: int, target_id: str | None) -> list[dict]:
     result = launcher._cdp_evaluate(
         port,
         "typeof acceptStatus === 'function' ? JSON.stringify(acceptStatus().recentClicks) : '[]'",
-        target_id=target_id)
+        target_id=target_id,
+    )
     raw = result.get("result", {}).get("result", {}).get("value", "[]")
     return json.loads(raw)
 
@@ -260,12 +266,12 @@ def _get_injector_interval_seconds(port: int, target_id: str | None) -> float:
     )
     ms = result.get("result", {}).get("result", {}).get("value", 2000)
     try:
-        ms_f = float(ms)
+        value = float(ms)
     except (TypeError, ValueError):
-        ms_f = 2000.0
-    if ms_f <= 0:
-        ms_f = 2000.0
-    return ms_f / 1000.0
+        value = 2000.0
+    if value <= 0:
+        value = 2000.0
+    return value / 1000.0
 
 
 def _get_debug_snapshot(port: int, target_id: str | None) -> dict:
@@ -276,10 +282,10 @@ def _get_debug_snapshot(port: int, target_id: str | None) -> dict:
     )
     raw = result.get("result", {}).get("result", {}).get("value", "{}")
     try:
-        data = json.loads(raw)
-        return data if isinstance(data, dict) else {}
+        parsed = json.loads(raw)
     except json.JSONDecodeError:
         return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _save_png(port: int, target_id: str | None, out_path: Path) -> str | None:
@@ -292,52 +298,36 @@ def _save_png(port: int, target_id: str | None, out_path: Path) -> str | None:
     return str(out_path)
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Stress test auto-approve injector")
-    parser.add_argument("--port", type=int, default=9222)
-    parser.add_argument("--target", help="CDP target ID")
-    parser.add_argument("--poll-interval", type=float, default=None,
-                        help="Probe settle wait in seconds (default: injector interval + margin)")
-    parser.add_argument("--outdir", help="Output run directory (default: logs/<run-id>)")
-    args = parser.parse_args()
+def _select_cases(suite: str) -> list[tuple[str, dict, bool, str | None]]:
+    if suite == "full":
+        return TEST_CASES
+    return [TEST_CASES[i - 1] for i in MEANINGFUL_CASE_INDEXES]
 
-    port = args.port
-    target = args.target
 
-    if not target:
-        state = launcher._load_state()
-        sessions_dict = state.get("sessions", {})
-        for _key, sess in sessions_dict.items():
-            if isinstance(sess, dict) and sess.get("cdp_port") == port:
-                target = sess.get("cdp_target_id")
-                break
-
-    injector_interval = _get_injector_interval_seconds(port, target)
-    effective_wait = max(args.poll_interval or 0.0, injector_interval + 0.4)
-
-    total = len(TEST_CASES)
+def _run_synthetic(args: argparse.Namespace, port: int, target: str | None, out_dir: Path) -> int:
+    selected = _select_cases(args.suite)
+    total = len(selected)
     passed = 0
     failed = 0
     results: list[dict] = []
 
-    if args.outdir:
-        out_dir = Path(args.outdir).expanduser().resolve()
-    else:
-        out_dir = Path(__file__).parent.parent / "logs" / _run_id()
     screenshots_dir = out_dir / "screenshots"
     case_dir = out_dir / "cases"
     screenshots_dir.mkdir(parents=True, exist_ok=True)
     case_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Running {total} stress test cases on port {port}, target {target or 'auto'}", flush=True)
+    injector_interval = _get_injector_interval_seconds(port, target)
+    effective_wait = max(args.poll_interval or 0.0, injector_interval + 0.4)
+
+    print(f"Running {total} synthetic case(s) on port {port}, target {target or 'auto'}", flush=True)
+    print(f"Suite: {args.suite}", flush=True)
     print(f"Injector interval: {injector_interval:.2f}s; per-case wait: {effective_wait:.2f}s", flush=True)
     print(f"Artifacts: {out_dir}", flush=True)
     print("=" * 72, flush=True)
 
-    for i, (name, spec, expect_click, expect_id) in enumerate(TEST_CASES, 1):
+    for i, (name, spec, expect_click, expect_id) in enumerate(selected, 1):
         probe_id = f"__aa_stress_{i}"
         clicks_before = _get_clicks(port, target)
-
         before_debug = _get_debug_snapshot(port, target)
         before_png = _save_png(port, target, screenshots_dir / f"{i:02d}-before.png")
 
@@ -347,28 +337,29 @@ def main() -> int:
         clicks_after = _get_clicks(port, target)
         delta = clicks_after - clicks_before
         clicked = delta > 0
-
         recent = _get_recent(port, target)
         last_id = recent[-1]["id"] if recent else None
         after_debug = _get_debug_snapshot(port, target)
         after_png = _save_png(port, target, screenshots_dir / f"{i:02d}-after.png")
-
         _remove_probe(port, target, probe_id)
 
         ok = clicked == expect_click
         if ok and expect_click and expect_id:
             ok = last_id == expect_id
-
         status = "PASS" if ok else "FAIL"
-        if not ok:
-            failed += 1
-        else:
+        if ok:
             passed += 1
+        else:
+            failed += 1
 
         results.append({
-            "case": i, "name": name, "status": status,
-            "expected_click": expect_click, "actual_click": clicked,
-            "expected_id": expect_id, "actual_id": last_id if clicked else None,
+            "case": i,
+            "name": name,
+            "status": status,
+            "expected_click": expect_click,
+            "actual_click": clicked,
+            "expected_id": expect_id,
+            "actual_id": last_id if clicked else None,
             "delta": delta,
             "before_screenshot": before_png,
             "after_screenshot": after_png,
@@ -377,41 +368,157 @@ def main() -> int:
             "eligible_seen_after": len(after_debug.get("eligible", [])),
         })
 
-        marker = "✓" if ok else "✗"
-        print(f"  [{i:2d}/{total}] {marker} {status:4s}  {name}", flush=True)
+        print(f"  [{i:2d}/{total}] {'✓' if ok else '✗'} {status:4s}  {name}", flush=True)
         if not ok:
-            print(f"         expected click={expect_click} id={expect_id}, got click={clicked} id={last_id} delta={delta}", flush=True)
+            print(
+                f"         expected click={expect_click} id={expect_id}, got click={clicked} id={last_id} delta={delta}",
+                flush=True,
+            )
 
-        per_case = {
-            "case": i,
-            "name": name,
-            "spec": spec,
-            "status": status,
-            "expected_click": expect_click,
-            "expected_id": expect_id,
-            "actual_click": clicked,
-            "actual_id": last_id if clicked else None,
-            "delta": delta,
-            "before_screenshot": before_png,
-            "after_screenshot": after_png,
-            "debug_before": before_debug,
-            "debug_after": after_debug,
-        }
         (case_dir / f"{i:02d}.json").write_text(
-            json.dumps(per_case, indent=2), encoding="utf-8"
+            json.dumps(
+                {
+                    "case": i,
+                    "name": name,
+                    "spec": spec,
+                    "status": status,
+                    "expected_click": expect_click,
+                    "expected_id": expect_id,
+                    "actual_click": clicked,
+                    "actual_id": last_id if clicked else None,
+                    "delta": delta,
+                    "before_screenshot": before_png,
+                    "after_screenshot": after_png,
+                    "debug_before": before_debug,
+                    "debug_after": after_debug,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
         )
 
     print("=" * 72, flush=True)
     print(f"Results: {passed}/{total} passed, {failed} failed", flush=True)
-
-    out_path = out_dir / "stress-test-results.json"
-    out_path.write_text(json.dumps(results, indent=2), encoding="utf-8")
-    print(f"Results saved to: {out_path}", flush=True)
+    (out_dir / "stress-test-results.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
+    print(f"Results saved to: {out_dir / 'stress-test-results.json'}", flush=True)
     print(f"Screenshots saved to: {screenshots_dir}", flush=True)
     print(f"Per-case debug JSON saved to: {case_dir}", flush=True)
-
     return 0 if failed == 0 else 1
 
 
+def _run_snapshot(args: argparse.Namespace, port: int, target: str | None, out_dir: Path) -> int:
+    snapshots_dir = out_dir / "snapshots"
+    screenshots_dir = out_dir / "screenshots"
+    snapshots_dir.mkdir(parents=True, exist_ok=True)
+    screenshots_dir.mkdir(parents=True, exist_ok=True)
+
+    duration = max(5.0, float(args.duration))
+    interval = max(0.8, float(args.interval))
+    deadline = time.time() + duration
+    start_clicks = _get_clicks(port, target)
+    previous_clicks = start_clicks
+    tick = 0
+    events: list[dict] = []
+
+    print(f"Running real snapshot mode for {duration:.1f}s (interval {interval:.1f}s)", flush=True)
+    print(f"Artifacts: {out_dir}", flush=True)
+    print("=" * 72, flush=True)
+
+    while time.time() < deadline:
+        tick += 1
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        debug = _get_debug_snapshot(port, target)
+        clicks = _get_clicks(port, target)
+        delta = clicks - previous_clicks
+        screenshot = _save_png(port, target, screenshots_dir / f"{tick:03d}-{stamp}.png")
+
+        row = {
+            "tick": tick,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "clicks": clicks,
+            "delta": delta,
+            "eligible_count": len(debug.get("eligible", [])),
+            "candidate_count": len(debug.get("candidates", [])),
+            "strategyVersion": debug.get("strategyVersion"),
+            "screenshot": screenshot,
+            "debug": debug,
+        }
+        (snapshots_dir / f"{tick:03d}.json").write_text(json.dumps(row, indent=2), encoding="utf-8")
+        if delta > 0 or row["eligible_count"] > 0:
+            events.append({
+                "tick": tick,
+                "delta": delta,
+                "eligible_count": row["eligible_count"],
+                "screenshot": screenshot,
+            })
+        print(
+            f"  [{tick:03d}] clicks={clicks} delta={delta} eligible={row['eligible_count']} candidates={row['candidate_count']}",
+            flush=True,
+        )
+        previous_clicks = clicks
+        time.sleep(interval)
+
+    end_clicks = _get_clicks(port, target)
+    summary = {
+        "mode": "snapshot",
+        "duration_seconds": duration,
+        "interval_seconds": interval,
+        "ticks": tick,
+        "start_clicks": start_clicks,
+        "end_clicks": end_clicks,
+        "delta_clicks": end_clicks - start_clicks,
+        "event_count": len(events),
+        "events": events,
+    }
+    (out_dir / "snapshot-summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    print("=" * 72, flush=True)
+    print(f"Snapshot summary: clicks {start_clicks} -> {end_clicks} (delta {end_clicks - start_clicks})", flush=True)
+    print(f"Summary saved to: {out_dir / 'snapshot-summary.json'}", flush=True)
+    print(f"Snapshots saved to: {snapshots_dir}", flush=True)
+    print(f"Screenshots saved to: {screenshots_dir}", flush=True)
+    return 0
+
+
+def _resolve_target(port: int, target: str | None) -> str | None:
+    if target:
+        return target
+    state = launcher._load_state()
+    sessions_dict = state.get("sessions", {})
+    for _key, sess in sessions_dict.items():
+        if isinstance(sess, dict) and sess.get("cdp_port") == port:
+            return sess.get("cdp_target_id")
+    return None
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Auto-approve harness")
+    parser.add_argument("--mode", choices=["snapshot", "synthetic"], default="snapshot")
+    parser.add_argument("--suite", choices=["meaningful", "full"], default="meaningful")
+    parser.add_argument("--port", type=int, default=9222)
+    parser.add_argument("--target", help="CDP target ID")
+    parser.add_argument(
+        "--poll-interval",
+        type=float,
+        default=None,
+        help="Synthetic mode: probe settle wait in seconds (default: injector interval + margin)",
+    )
+    parser.add_argument("--duration", type=float, default=SNAPSHOT_DURATION, help="Snapshot mode duration in seconds")
+    parser.add_argument("--interval", type=float, default=SNAPSHOT_INTERVAL, help="Snapshot mode sample interval in seconds")
+    parser.add_argument("--outdir", help="Output run directory (default: logs/<run-id>-<mode>)")
+    args = parser.parse_args()
+
+    port = args.port
+    target = _resolve_target(port, args.target)
+
+    if args.outdir:
+        out_dir = Path(args.outdir).expanduser().resolve()
+    else:
+        out_dir = Path(__file__).parent.parent / "logs" / _run_id(f"harness-{args.mode}")
+
+    if args.mode == "snapshot":
+        return _run_snapshot(args, port, target, out_dir)
+    return _run_synthetic(args, port, target, out_dir)
+
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

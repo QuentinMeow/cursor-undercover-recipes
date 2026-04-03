@@ -112,6 +112,11 @@
   artifacts are the fastest way to understand "what button existed" and "why guard
   logic accepted/rejected it."
 
+- **Prefer real snapshot harnesses for day-to-day confidence**: Synthetic probes are
+  useful for deterministic regression checks, but routine validation should collect
+  snapshots from real Cursor UI states so selector drift and context assumptions are
+  tested against actual product surfaces.
+
 - **Use context-first acceptance, not label-only acceptance**: Exact label matching
   is still brittle if context is weak. Require trusted prompt surfaces (modal roots
   or composer/chat context anchored to the real input box) before evaluating
