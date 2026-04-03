@@ -243,7 +243,8 @@ Approval labels are matched by exact normalized text:
   - parenthesized hints, e.g. `(⌃⏎)`
   - trailing glyphs, e.g. `↩`
 - Compare with `===` against known patterns:
-  - `accept all`, `accept`, `always allow`, `allow`
+  - `accept all`, `accept`, `approve`, `approve request`,
+    `approve terminal command`, `always allow`, `allow`
   - `run this time only`, `run command`, `run`
   - `apply`, `execute`, `continue`
   - `switch`, `switch mode`, `change mode`, `confirm`

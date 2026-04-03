@@ -22,6 +22,9 @@
   const APPROVAL_PATTERNS = [
     { pattern: "accept all", id: "accept_all" },
     { pattern: "accept", id: "accept" },
+    { pattern: "approve", id: "approve" },
+    { pattern: "approve request", id: "approve_request" },
+    { pattern: "approve terminal command", id: "approve_terminal_command" },
     { pattern: "always allow", id: "always_allow" },
     { pattern: "allow", id: "allow" },
     { pattern: "run this time only", id: "run_this_time" },
