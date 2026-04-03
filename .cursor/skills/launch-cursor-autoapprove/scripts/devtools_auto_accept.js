@@ -67,6 +67,7 @@
     '[class*="secondary-button"]',
     '[class*="text-button"]',
     '[class*="action-label"]',
+    '.view-allow-btn-container-inner > div',
   ];
   const PROMPT_ROOT_SELECTORS = [
     '[role="dialog"]',
@@ -78,7 +79,6 @@
     "don't allow", "decline",
   ]);
   const COMPANION_PATTERNS = new Set(["view", "stop", "details", "show details"]);
-  const TRAILING_ESC_HINT_RE = /\s+(?:esc|escape)$/;
 
   const RESUME_DATA_LINK = "command:composer.resumeCurrentChat";
 
@@ -127,7 +127,11 @@
 
   function isInExcludedZone(el) {
     for (const sel of EXCLUDED_ZONES) {
-      if (el.closest(sel)) return true;
+      const zone = el.closest(sel);
+      if (zone) {
+        if (zone.querySelector("div.full-input-box")) return false;
+        return true;
+      }
     }
     return false;
   }
@@ -137,11 +141,11 @@
       .replace(/\s*\([⌃⌥⇧⌘⎋⏎↩\s\w]{1,6}\)\s*$/, "")
       .replace(/[\s\u21A9\u23CE\u21E7\u2318\u2325\u238B\u232B\u2326\u21E5]+$/, "")
       .trim();
-    // Cursor shell-approval cards render dismiss buttons like "Skip Esc".
-    // Treat the trailing plain-text Esc token as a keyboard hint, not label text.
-    if (/\s/.test(stripped)) {
-      stripped = stripped.replace(TRAILING_ESC_HINT_RE, "").trim();
-    }
+    // Strip trailing "Esc"/"Escape" keyboard hint suffix.
+    // Cursor renders this as adjacent spans so textContent may be "SkipEsc"
+    // (no whitespace) or "Skip Esc" (with whitespace). Require at least 2
+    // preceding chars so standalone "Esc" is not hollowed out.
+    stripped = stripped.replace(/(.{2,}?)\s*(?:esc|escape)$/i, "$1").trim();
     return stripped;
   }
 
@@ -305,11 +309,14 @@
   }
 
   function _isComposerSurface(el) {
-    const surface = el.closest(
-      '[class*="composer"], [class*="chat"], [class*="conversation"], [id*="composer"]'
-    );
-    if (!surface) return false;
-    return !!surface.querySelector("div.full-input-box");
+    const inputBox = document.querySelector("div.full-input-box");
+    if (!inputBox) return false;
+    let node = inputBox;
+    for (let d = 0; d < 8 && node && node !== document.body; d++) {
+      if (node.contains(el)) return true;
+      node = node.parentElement;
+    }
+    return false;
   }
 
   function _hasTrustedPromptContext(btn) {
@@ -364,12 +371,16 @@
 
     const inputBox = document.querySelector("div.full-input-box");
     if (inputBox) {
-      let sib = inputBox.previousElementSibling;
-      let depth = 0;
-      while (sib && depth < 5) {
-        collectApprovalMatches(sib, buttons, seen);
-        sib = sib.previousElementSibling;
-        depth++;
+      let ancestor = inputBox;
+      for (let aDepth = 0; ancestor && aDepth < 4 && buttons.length === 0; aDepth++) {
+        let sib = ancestor.previousElementSibling;
+        let sibIdx = 0;
+        while (sib && sibIdx < 5) {
+          collectApprovalMatches(sib, buttons, seen);
+          sib = sib.previousElementSibling;
+          sibIdx++;
+        }
+        ancestor = ancestor.parentElement;
       }
     }
 
@@ -382,9 +393,15 @@
     }
 
     if (buttons.length === 0 && inputBox) {
-      const composerRoot = inputBox.closest(
-        '[class*="composer"], [class*="chat"], [class*="conversation"], [id*="composer"]'
-      );
+      let composerRoot = null;
+      let node = inputBox;
+      for (let i = 0; i < 8 && node && node !== document.body; i++) {
+        const cn = (node.className || "").toString();
+        if (/composer|chat|conversation/i.test(cn) || (node.id && /composer/i.test(node.id))) {
+          composerRoot = node;
+        }
+        node = node.parentElement;
+      }
       if (composerRoot) {
         collectApprovalMatches(composerRoot, buttons, seen);
       }
