@@ -1,0 +1,23 @@
+.cursor/rules/memory-keeper/RULE.md
+  390933deda1bd635 34-50,65-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "5dbf36a9aa0e01a9c07edd6822982f7e2cd5b112",
+  "prompts": {
+    "390933deda1bd635": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "235bd6ab-e201-4f7d-ad2a-6122d90e0401",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 21,
+      "total_deletions": 0,
+      "accepted_lines": 21,
+      "overriden_lines": 0
+    }
+  }
+}
