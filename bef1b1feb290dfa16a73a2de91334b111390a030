@@ -1,0 +1,43 @@
+.cursor/skills/launch-cursor-autoapprove/README.md
+  aad94ba0cb233c4f 74,76
+.cursor/skills/launch-cursor-autoapprove/references/manual-testing.md
+  aad94ba0cb233c4f 304,308-322,462-464
+.cursor/skills/launch-cursor-autoapprove/tests/fixtures/real-prompts/approve-terminal-with-command.json
+  aad94ba0cb233c4f 1-17
+.cursor/skills/launch-cursor-autoapprove/SKILL.md
+  aad94ba0cb233c4f 95,98
+.cursor/skills/launch-cursor-autoapprove/scripts/devtools_auto_accept.js
+  aad94ba0cb233c4f 509-569,623,636,649-651,662-663,677-678,791
+.cursor/skills/launch-cursor-autoapprove/tests/fixtures/real-prompts/allow-view-with-command.json
+  aad94ba0cb233c4f 1-18
+.cursor/skills/launch-cursor-autoapprove/scripts/stress_test.py
+  aad94ba0cb233c4f 224-232,587-593,604-610,628-629,645-647
+.cursor/skills/launch-cursor-autoapprove/LESSONS.md
+  aad94ba0cb233c4f 245,247-269
+.cursor/skills/launch-cursor-autoapprove/tests/fixtures/real-prompts/run-multiline-command.json
+  aad94ba0cb233c4f 1-18
+.cursor/skills/launch-cursor-autoapprove/scripts/launcher.py
+  aad94ba0cb233c4f 64-66,377-415,448-449,520-521,542,1446-1453,1925-1994,1997-1999,2008,2011,2017,2055-2064,2121-2141,2143,2180-2182,2307-2308
+.cursor/skills/launch-cursor-autoapprove/references/implementation.md
+  aad94ba0cb233c4f 51,98,135-136,143-162,409-424,430-431,477,485-486,505-506
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "bef1b1feb290dfa16a73a2de91334b111390a030",
+  "prompts": {
+    "aad94ba0cb233c4f": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "08a0e564-c312-42ea-b04b-2616458ab834",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 418,
+      "total_deletions": 16,
+      "accepted_lines": 418,
+      "overriden_lines": 0
+    }
+  }
+}
