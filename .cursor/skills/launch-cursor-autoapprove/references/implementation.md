@@ -48,7 +48,7 @@ default and intended for future hardening as internal APIs stabilize.
 | `status` | `-w PATH\|SLUG` (optional) | Print session details. Shows all sessions if `-w` omitted; ambiguous slugs use the picker. |
 | `stop` | `-w PATH\|SLUG` (optional), `--all` | Turn gate OFF, terminate dedicated process, and remove session entry when shutdown succeeds. `--all` must not be combined with `-w` or a positional workspace. |
 | `alias` | `set <name> <path>`, `remove <name>`, `list` | Manage workspace aliases stored in `config.json`. See [Workspace Aliases](#workspace-aliases-configjson) below. |
-| `history` | `-w SLUG`, `-n LIMIT`, `--json` | Show persisted event log (session/gate/click events). |
+| `history` | `-w SLUG`, `-n LIMIT`, `--json`, `--commands` | Show persisted event log (session/gate/click events). `--commands` reads the dedicated command ledger with readable multiline output. |
 | `screenshot` | `-w PATH\|SLUG`, `-o FILE` | Capture PNG screenshot of the dedicated window via CDP. |
 | `diagnose` | `-w PATH\|SLUG` | Self-debug: screenshot + DOM snapshot + synthetic probe + summary. |
 | `help` | optional `COMMAND` topic | Print usage examples, command help, and deeper-doc paths. |
@@ -95,6 +95,7 @@ After global install:
 | `~/.cursor/launch-autoapprove/state.json` | Persisted multi-session state (auto-GC'd on every load) |
 | `~/.cursor/launch-autoapprove/config.json` | Workspace aliases and user configuration |
 | `~/.cursor/launch-autoapprove/history.jsonl` | Append-only NDJSON event log (rotates at 5 MB) |
+| `~/.cursor/launch-autoapprove/commands.jsonl` | Dedicated command-approval ledger (rotates at 10 MB) |
 | `~/.cursor/launch-autoapprove/dedicated-profile-<slug>/` | Per-workspace Cursor profile |
 | `~/.cursor/skills/global-launch-cursor-autoapprove/` | Global slash-command docs |
 
@@ -131,12 +132,34 @@ Recorded event types:
 
 The `click`, `blocked_candidate`, and `unknown_prompt` events include a
 `fingerprint` field (sorted button labels within the prompt root), a `prompt`
-subtree capture, and the eligibility `reason`.
+subtree capture, the eligibility `reason`, and a `command` object when terminal
+command text was extractable from the prompt surface.
 
 Per-prompt artifact files are also written to
 `~/.cursor/launch-autoapprove/prompt-artifacts/` for blocked and unknown events.
 
 View with `caa history [-w SLUG] [-n LIMIT] [--json]`.
+
+### Command Ledger (`commands.jsonl`)
+
+`~/.cursor/launch-autoapprove/commands.jsonl` is a dedicated append-only NDJSON
+log of approved terminal commands. It rotates at 10 MB (separate from the
+general event history). Each line contains:
+
+- `ts` — UTC ISO timestamp
+- `workspace`, `slug` — session context
+- `pattern_id`, `reason` — which approval pattern matched and why it was eligible
+- `command` — the full command text with original newlines preserved
+- `lineCount` — number of lines in the command
+- `preview` — first line of the command, capped at 120 chars
+- `source` — where the text was extracted from (`code_block` or `prompt_text`)
+
+View with `caa history --commands [-w SLUG] [-n LIMIT] [--json]`.
+
+**Privacy note**: approved commands may contain secrets, tokens, or sensitive
+paths. The command ledger is a diagnostic record stored locally under
+`~/.cursor/launch-autoapprove/`. Do not share ledger contents without
+sanitizing first.
 
 Legacy single-session format (flat `{pid, cdp_port, workspace}`) is auto-migrated
 on first read. The legacy `dedicated-profile/` directory is renamed to
@@ -383,12 +406,29 @@ all buttons within the prompt root. After a click, the fingerprint enters an
 This prevents the double-click problem where a prompt that doesn't immediately
 disappear gets clicked on every poll cycle.
 
+### Command Text Extraction
+
+When an approval button is about to be clicked, the injector attempts to
+extract the associated terminal command text from the prompt surface:
+
+1. Walk up from the button to the nearest prompt root or a parent containing
+   `<pre>`/`<code>` elements.
+2. If a code block is found, capture its `innerText` (preserves newlines).
+3. Otherwise, capture the root's `innerText` with button labels filtered out.
+4. The result is capped at 5000 characters.
+
+The extracted `command` object (`text`, `lineCount`, `preview`, `source`) is
+attached to click, blocked, and unknown events. A short `commandPreview` and
+`commandLines` are also stored in the in-memory click history for `status`
+display.
+
 ### Event Queue and Launcher Drain
 
 All click, blocked, and unknown events are pushed to `state.eventQueue`.
 The launcher drains this queue via CDP `Runtime.evaluate` during `status`,
 `on`, and periodic checks. Drained events are persisted to `history.jsonl`
-and (for blocked/unknown) to per-prompt artifact files.
+and (for blocked/unknown) to per-prompt artifact files. Click events with
+command text are also written to the dedicated `commands.jsonl` ledger.
 
 ## Hash Handshake and Reload
 
@@ -434,6 +474,7 @@ settings remain there until manually removed.
 - injector hash (with drift warning if mismatched)
 - current window title
 - recent click entries (last 3 printed)
+- last approved command preview (first line + line count) when available
 - WARNING if multiple workbench targets exist on the port
 - WARNING if the bound target is missing
 
@@ -441,6 +482,8 @@ Use this output as primary evidence during manual validation.
 
 `caa history` provides a durable event log complementing the in-memory
 status — even after sessions are stopped or the process crashes.
+`caa history --commands` reads the dedicated command ledger and renders
+approved commands with preserved multiline formatting.
 
 ## Self-Debug Commands
 
@@ -459,7 +502,8 @@ Runs a 4-step self-contained diagnostic without human involvement:
 1. **Screenshot** — captures current window state as PNG
 2. **DOM snapshot** — evaluates a JS expression that collects all visible
    button-like elements with their text, excluded-zone status, dialog
-   membership, and the current injector `acceptStatus()`
+   membership, command text candidates from active dialogs, and the current
+   injector `acceptStatus()`
 3. **Synthetic probe** — injects a View+Allow dialog, waits one poll interval,
    checks if click count incremented and the probe was clicked
 4. **Summary** — reports PASS/FAIL with all artifacts saved to a timestamped

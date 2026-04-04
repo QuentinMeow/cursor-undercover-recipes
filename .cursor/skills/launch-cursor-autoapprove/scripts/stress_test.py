@@ -221,6 +221,15 @@ def _build_probe_js(spec: dict, probe_id: str) -> str:
             lines.append(f"b_{btn['var']}.style.cssText = '{style}';")
         lines.append(f"d.appendChild(b_{btn['var']});")
 
+    content = spec.get("content")
+    if content:
+        escaped = json.dumps(content)
+        lines.append(f"const pre = document.createElement('pre');")
+        lines.append(f"const code = document.createElement('code');")
+        lines.append(f"code.textContent = {escaped};")
+        lines.append("pre.appendChild(code);")
+        lines.append("d.insertBefore(pre, d.firstChild);")
+
     if excluded_zone:
         lines.append("zone.appendChild(d);")
         lines.append("document.body.appendChild(zone);")
@@ -575,6 +584,13 @@ def _run_replay(args: argparse.Namespace, port: int, target: str | None, out_dir
         else:
             extra_delta = 0
 
+        last_command = None
+        if recent:
+            last_command = {
+                "preview": recent[-1].get("commandPreview"),
+                "lines": recent[-1].get("commandLines"),
+            }
+
         _remove_probe(port, target, probe_id)
 
         ok = clicked == expect_click
@@ -584,6 +600,14 @@ def _run_replay(args: argparse.Namespace, port: int, target: str | None, out_dir
         if ok and expect_single and delta > 1:
             single_ok = False
             ok = False
+
+        expect_command_preview = fixture.get("expect_command_preview")
+        command_ok = True
+        if ok and expect_command_preview and last_command:
+            actual_preview = last_command.get("preview") or ""
+            if expect_command_preview not in actual_preview:
+                command_ok = False
+                ok = False
 
         status = "PASS" if ok else "FAIL"
         if ok:
@@ -601,6 +625,8 @@ def _run_replay(args: argparse.Namespace, port: int, target: str | None, out_dir
             "actual_id": last_id if clicked else None,
             "delta": delta,
             "single_click_ok": single_ok,
+            "command_ok": command_ok,
+            "last_command": last_command,
             "extra_delta": extra_delta,
             "source_file": fixture.get("_source_file", ""),
             "before_screenshot": before_png,
@@ -616,6 +642,9 @@ def _run_replay(args: argparse.Namespace, port: int, target: str | None, out_dir
             detail = f"expected click={expect_click} id={expect_id}, got click={clicked} id={last_id} delta={delta}"
             if not single_ok:
                 detail += f" (MULTI-CLICK: {delta} clicks, expected single)"
+            if not command_ok:
+                actual_preview = (last_command or {}).get("preview") or ""
+                detail += f" (COMMAND: expected '{expect_command_preview}' in '{actual_preview}')"
             print(f"         {detail}", flush=True)
 
         (case_dir / f"{i:02d}.json").write_text(

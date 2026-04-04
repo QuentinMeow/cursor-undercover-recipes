@@ -301,8 +301,25 @@ Expected result:
 Expected result:
 
 - Shows timestamped entries for session launches, gate toggles
+- Click entries now include a command preview when command text was extracted
 - `-w <slug>` filters to a specific workspace
 - `--json` outputs NDJSON for machine consumption
+
+## Test 6b: Command History
+
+1. After approving at least one terminal command (e.g. a shell command card):
+
+```bash
+/usr/bin/python3 "$LAUNCHER" history --commands
+```
+
+Expected result:
+
+- Shows only approved commands with readable multiline formatting
+- Each entry shows timestamp, slug, pattern ID, and the full command with `$` prefix
+- Multiline commands display each line on its own row
+- `--json` outputs NDJSON entries from `commands.jsonl`
+- `status` also shows a `LastCmd:` line with the first-line preview
 
 ## Best Evidence
 
@@ -442,7 +459,9 @@ After running any approval-producing action:
 Expected result:
 
 - `Drained:` line shows click events persisted to history
-- `history.jsonl` contains `click` records with `fingerprint` and `prompt` fields
+- `history.jsonl` contains `click` records with `fingerprint`, `prompt`, and `command` fields
+- `commands.jsonl` contains entries for clicks that had extractable command text
+- `LastCmd:` line shows first-line preview of the most recently approved command
 - If a prompt was missed: `UNKNOWN:` line shows the unmatched prompt text
 - Artifact files in `~/.cursor/launch-autoapprove/prompt-artifacts/` for any
   blocked or unknown events

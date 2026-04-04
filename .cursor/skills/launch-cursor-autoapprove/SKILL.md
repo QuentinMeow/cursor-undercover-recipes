@@ -92,10 +92,10 @@ lifecycle with `on`/`off`/`stop`.
 | `launch [-w PATH] [PATH\|ALIAS]` | Open dedicated Cursor, inject DOM script, gate ON. Accepts a concrete path (relative or absolute) or a registered alias. Auto-registers the directory name as an alias. Blocks only if the same workspace is already running. Multiple workspaces can run simultaneously. |
 | `on [-w PATH\|SLUG]` | Resume auto-clicking (`startAccept()` via CDP). Reloads stale in-window injector code when hash differs. Auto-detected if only one session, otherwise opens an interactive picker in a TTY. |
 | `off [-w PATH\|SLUG]` | Pause auto-clicking (`stopAccept()` via CDP) while keeping the dedicated window open. Auto-detected if only one session, otherwise opens an interactive picker in a TTY. |
-| `status [-w PATH\|SLUG]` | Show session details. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
+| `status [-w PATH\|SLUG]` | Show session details including last approved command preview. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
 | `stop [-w PATH\|SLUG] [--all]` | Pause gate, close dedicated Cursor process, and remove session when shutdown succeeds. Without `-w`, it prefers running sessions when any are alive; if none are running, it falls back to stale entries for cleanup. Use `--all` to stop every session, but do not combine `--all` with `-w` or a positional workspace. |
 | `alias [set\|remove\|list]` | Manage workspace aliases stored in `config.json`. `set <name> <path>` registers a new alias (validates the path exists and the name is not already taken). `remove <name>` deletes one. `list` shows all. |
-| `history [-w SLUG] [-n LIMIT] [--json]` | Show durable event log of session/gate/click events. Persisted across sessions. |
+| `history [-w SLUG] [-n LIMIT] [--json] [--commands]` | Show durable event log of session/gate/click events. Persisted across sessions. Use `--commands` for a dedicated command-approval view with readable multiline formatting. |
 | `screenshot [-w PATH\|SLUG] [-o FILE]` | Capture PNG screenshot of the dedicated Cursor window via CDP. |
 | `diagnose [-w PATH\|SLUG]` | Self-debug: screenshot + DOM snapshot + synthetic probe. Saves artifacts to a timestamped directory. |
 | `help [COMMAND]` | Show usage examples, subcommand help, and paths to the deeper docs. |

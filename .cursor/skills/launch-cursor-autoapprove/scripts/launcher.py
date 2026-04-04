@@ -61,6 +61,9 @@ CDP_INJECT_RETRIES = 6
 HISTORY_PATH = RUNTIME_DIR / "history.jsonl"
 HISTORY_MAX_BYTES = 5 * 1024 * 1024  # rotate at 5 MB
 
+COMMAND_LEDGER_PATH = RUNTIME_DIR / "commands.jsonl"
+COMMAND_LEDGER_MAX_BYTES = 10 * 1024 * 1024  # rotate at 10 MB
+
 CONFIG_PATH = RUNTIME_DIR / "config.json"
 
 STALE_HOOK_PATTERNS = [
@@ -371,6 +374,45 @@ def _save_prompt_artifact(event: dict, slug: str) -> str | None:
         return None
 
 
+def _log_command(event: dict, workspace: str = "", slug: str = "") -> None:
+    """Append a command approval record to the dedicated command ledger.
+
+    Only writes an entry when the event carries a non-empty command payload.
+    The command ledger is separate from the general history.jsonl so
+    terminal-command records are not diluted by gate/session noise and
+    can have a longer retention window.
+    """
+    command_data = event.get("command")
+    if not command_data or not isinstance(command_data, dict):
+        return
+    command_text = command_data.get("text", "")
+    if not command_text:
+        return
+    try:
+        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "ts": event.get("ts", datetime.now(timezone.utc).isoformat()),
+            "workspace": workspace,
+            "slug": slug,
+            "pattern_id": event.get("pattern_id", ""),
+            "reason": event.get("reason", ""),
+            "command": command_text,
+            "lineCount": command_data.get("lineCount", 1),
+            "preview": command_data.get("preview", command_text.split("\n")[0][:120]),
+            "source": command_data.get("source", "unknown"),
+        }
+        line = json.dumps(entry, default=str) + "\n"
+        if COMMAND_LEDGER_PATH.exists() and COMMAND_LEDGER_PATH.stat().st_size > COMMAND_LEDGER_MAX_BYTES:
+            rotated = COMMAND_LEDGER_PATH.with_suffix(".1.jsonl")
+            with contextlib.suppress(OSError):
+                rotated.unlink(missing_ok=True)
+            COMMAND_LEDGER_PATH.rename(rotated)
+        with open(COMMAND_LEDGER_PATH, "a", encoding="utf-8") as f:
+            f.write(line)
+    except OSError:
+        pass
+
+
 _DRAIN_EVENTS_EXPR = r"""
 (() => {
   if (typeof globalThis.__cursorAutoAccept === 'undefined') return '[]';
@@ -403,6 +445,8 @@ def _drain_injector_events(port: int, target_id: str | None,
         )
         if record_type in ("blocked_candidate", "unknown_prompt"):
             _save_prompt_artifact(ev, slug)
+        if record_type == "click":
+            _log_command(ev, workspace, slug)
         persisted.append(ev)
     return persisted
 
@@ -473,6 +517,8 @@ def _help_examples(topic: str | None = None) -> list[str]:
             "  caa history",
             "  caa history -w my-project",
             "  caa history -n 50 --json",
+            "  caa history --commands",
+            "  caa history --commands -w my-project --json",
         ],
         "help": [
             "Examples:",
@@ -493,6 +539,7 @@ def _help_examples(topic: str | None = None) -> list[str]:
         "  caa status",
         "  caa stop --all",
         "  caa history -w my-project",
+        "  caa history --commands",
         "  caa help off",
         "",
         "Aliases:",
@@ -1396,6 +1443,14 @@ def _print_session_status(session: dict) -> None:
             recent = gate.get("recentClicks", [])
             if recent:
                 print(f"Recent:    {json.dumps(recent[-3:])}")
+                for click in reversed(recent):
+                    cmd_preview = click.get("commandPreview")
+                    if cmd_preview:
+                        cmd_lines = click.get("commandLines", 1)
+                        cmd_ts = click.get("ts", "")[:19]
+                        suffix = f" ({cmd_lines} lines)" if cmd_lines and cmd_lines > 1 else ""
+                        print(f"LastCmd:   {cmd_preview}{suffix}")
+                        break
         else:
             print("Gate:      unknown (CDP or injector status unavailable)")
 
@@ -1867,8 +1922,81 @@ def cmd_alias(args: argparse.Namespace) -> int:
     return 1
 
 
+def _show_command_history(args: argparse.Namespace) -> int:
+    """Show command approval history with readable multiline formatting."""
+    workspace_filter = getattr(args, "workspace", None)
+    limit = getattr(args, "limit", 20) or 20
+    as_json = getattr(args, "json_output", False)
+
+    if not COMMAND_LEDGER_PATH.exists():
+        print("No command history yet.")
+        return 0
+
+    raw_lines: list[str] = []
+    try:
+        with open(COMMAND_LEDGER_PATH, "r", encoding="utf-8") as f:
+            raw_lines = f.readlines()
+    except OSError as exc:
+        print(f"Cannot read command ledger: {exc}", file=sys.stderr)
+        return 1
+
+    entries: list[dict] = []
+    for raw_line in raw_lines:
+        raw_line = raw_line.strip()
+        if not raw_line:
+            continue
+        try:
+            entry = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        if workspace_filter:
+            ws = entry.get("workspace", "")
+            sl = entry.get("slug", "")
+            if workspace_filter not in (ws, sl) and _repo_slug(ws) != workspace_filter:
+                continue
+        entries.append(entry)
+
+    entries = entries[-limit:]
+
+    if as_json:
+        for e in entries:
+            print(json.dumps(e))
+        return 0
+
+    if not entries:
+        print("No matching command entries.")
+        return 0
+
+    for i, e in enumerate(entries):
+        if i > 0:
+            print()
+        ts = e.get("ts", "?")[:19]
+        slug = e.get("slug", "?")
+        pattern = e.get("pattern_id", "?")
+        reason = e.get("reason", "")
+        line_count = e.get("lineCount", 1)
+        source = e.get("source", "")
+        meta_parts = [f"[{reason}]"] if reason else []
+        if line_count and line_count > 1:
+            meta_parts.append(f"{line_count} lines")
+        if source:
+            meta_parts.append(source)
+        meta = " ".join(meta_parts)
+        print(f"{ts}  {slug}  {pattern} {meta}")
+        command = e.get("command", "")
+        if command:
+            for j, line in enumerate(command.split("\n")):
+                prefix = "  $ " if j == 0 else "    "
+                print(f"{prefix}{line}")
+
+    return 0
+
+
 def cmd_history(args: argparse.Namespace) -> int:
     """Show persisted event history."""
+    if getattr(args, "commands", False):
+        return _show_command_history(args)
+
     workspace_filter = getattr(args, "workspace", None)
     limit = getattr(args, "limit", 20) or 20
     as_json = getattr(args, "json_output", False)
@@ -1877,16 +2005,16 @@ def cmd_history(args: argparse.Namespace) -> int:
         print("No history yet.")
         return 0
 
-    lines: list[str] = []
+    raw_lines: list[str] = []
     try:
         with open(HISTORY_PATH, "r", encoding="utf-8") as f:
-            lines = f.readlines()
+            raw_lines = f.readlines()
     except OSError as exc:
         print(f"Cannot read history: {exc}", file=sys.stderr)
         return 1
 
     entries: list[dict] = []
-    for raw_line in lines:
+    for raw_line in raw_lines:
         raw_line = raw_line.strip()
         if not raw_line:
             continue
@@ -1924,7 +2052,16 @@ def cmd_history(args: argparse.Namespace) -> int:
             pid_val = e.get("pid", "")
             detail = f"session {action} (PID {pid_val})"
         elif rtype == "click":
-            detail = f"click {e.get('kind', '?')} {e.get('pattern_id', '?')}: {e.get('text', '')}"
+            cmd_preview = ""
+            cmd_data = e.get("command")
+            if isinstance(cmd_data, dict) and cmd_data.get("preview"):
+                cmd_preview = f" | {cmd_data['preview']}"
+            elif isinstance(cmd_data, dict) and cmd_data.get("text"):
+                cmd_preview = f" | {cmd_data['text'].split(chr(10))[0][:80]}"
+            detail = (
+                f"click {e.get('kind', '?')} {e.get('pattern_id', '?')}: "
+                f"{e.get('text', '')}{cmd_preview}"
+            )
         elif rtype == "blocked_candidate":
             detail = f"blocked {e.get('reason', '?')}: {e.get('text', '')[:40]}"
         elif rtype == "unknown_prompt":
@@ -1981,8 +2118,29 @@ _DIAGNOSE_DOM_EXPR = r"""(() => {
       rows.push({ text, excluded, inDialog, tag: el.tagName.toLowerCase(), role: el.getAttribute('role') || '', aria: (el.getAttribute('aria-label') || '').slice(0, 80) });
     }
   }
+  const commandCandidates = [];
+  const dialogs = document.querySelectorAll('[role="dialog"],[role="alertdialog"],[aria-modal="true"]');
+  for (const dialog of dialogs) {
+    if (!isVis(dialog)) continue;
+    let found = false;
+    for (const sel of ['pre code', 'pre', 'code']) {
+      for (const node of dialog.querySelectorAll(sel)) {
+        const t = (node.innerText || node.textContent || '').trim();
+        if (t.length >= 2 && t.length <= 5000) {
+          commandCandidates.push({ text: t, lineCount: t.split('\n').length, source: 'code_block', dialogRole: dialog.getAttribute('role') || '' });
+          found = true;
+        }
+      }
+    }
+    if (!found) {
+      const ft = (dialog.innerText || '').trim();
+      if (ft.length >= 2 && ft.length <= 5000) {
+        commandCandidates.push({ text: ft.slice(0, 5000), lineCount: ft.split('\n').length, source: 'dialog_text', dialogRole: dialog.getAttribute('role') || '' });
+      }
+    }
+  }
   const status = typeof acceptStatus === 'function' ? acceptStatus() : null;
-  return { buttons: rows, injectorStatus: status, timestamp: new Date().toISOString() };
+  return { buttons: rows, commandCandidates: commandCandidates, injectorStatus: status, timestamp: new Date().toISOString() };
 })()"""
 
 
@@ -2019,7 +2177,9 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
         (out_dir / "dom-snapshot.json").write_text(
             json.dumps(dom_data, indent=2) if dom_data else "{}", encoding="utf-8")
         btn_count = len(dom_data.get("buttons", [])) if isinstance(dom_data, dict) else 0
-        print(f"[2/4] DOM snapshot: {btn_count} visible buttons captured")
+        cmd_count = len(dom_data.get("commandCandidates", [])) if isinstance(dom_data, dict) else 0
+        cmd_suffix = f", {cmd_count} command candidate(s)" if cmd_count else ""
+        print(f"[2/4] DOM snapshot: {btn_count} visible buttons captured{cmd_suffix}")
     except (ConnectionRefusedError, OSError, RuntimeError) as exc:
         print(f"[2/4] DOM snapshot failed: {exc}")
 
@@ -2144,6 +2304,8 @@ def build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argument
     p_history.add_argument("--limit", "-n", type=int, default=20, help="Max entries (default 20)")
     p_history.add_argument("--json", dest="json_output", action="store_true",
                            help="Output as NDJSON")
+    p_history.add_argument("--commands", action="store_true",
+                           help="Show only approved commands with readable multiline formatting")
     p_history.set_defaults(func=cmd_history)
     command_parsers["history"] = p_history
 

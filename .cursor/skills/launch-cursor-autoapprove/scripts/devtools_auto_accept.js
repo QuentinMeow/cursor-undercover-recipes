@@ -506,6 +506,68 @@
   }
 
   // -----------------------------------------------------------------------
+  // Command text extraction (preserves multiline formatting)
+  // -----------------------------------------------------------------------
+
+  const COMMAND_TEXT_CAP = 5000;
+
+  function _extractCommandText(el) {
+    let root = el.closest(PROMPT_ROOT_SELECTORS.join(", "));
+    if (!root) {
+      let node = el.parentElement;
+      for (let d = 0; d < 5 && node && node !== document.body; d++) {
+        if (node.querySelector("pre, code")) {
+          root = node;
+          break;
+        }
+        node = node.parentElement;
+      }
+    }
+    if (!root) root = el.parentElement;
+    if (!root) return null;
+
+    for (const sel of ["pre code", "pre", "code"]) {
+      for (const node of root.querySelectorAll(sel)) {
+        const text = (node.innerText || node.textContent || "").trim();
+        if (text.length >= 2 && text.length <= COMMAND_TEXT_CAP) {
+          const lines = text.split("\n");
+          return {
+            text: text,
+            lineCount: lines.length,
+            preview: lines[0].slice(0, 120),
+            source: "code_block",
+          };
+        }
+      }
+    }
+
+    const fullText = (root.innerText || root.textContent || "").trim();
+    if (!fullText || fullText.length < 2) return null;
+
+    const buttonTexts = new Set();
+    for (const sel of BUTTON_SELECTORS) {
+      for (const btn of root.querySelectorAll(sel)) {
+        const t = (btn.textContent || "").trim();
+        if (t) buttonTexts.add(t);
+      }
+    }
+    const filtered = fullText
+      .split("\n")
+      .filter((line) => line.trim() && !buttonTexts.has(line.trim()))
+      .join("\n")
+      .trim();
+    if (!filtered || filtered.length < 2) return null;
+    const capped = filtered.slice(0, COMMAND_TEXT_CAP);
+    const lines = capped.split("\n");
+    return {
+      text: capped,
+      lineCount: lines.length,
+      preview: lines[0].slice(0, 120),
+      source: "prompt_text",
+    };
+  }
+
+  // -----------------------------------------------------------------------
   // Click execution
   // -----------------------------------------------------------------------
 
@@ -558,6 +620,7 @@
         surface: _debugSurface(btn.el),
         fingerprint: btn.fingerprint,
         prompt: _capturePromptSubtree(btn.el),
+        command: _extractCommandText(btn.el),
       });
     }
 
@@ -570,6 +633,7 @@
         surface: _debugSurface(btn.el),
         fingerprint: btn.fingerprint,
         prompt: _capturePromptSubtree(btn.el),
+        command: _extractCommandText(btn.el),
       });
     }
 
@@ -582,6 +646,9 @@
       return;
     }
 
+    const command = _extractCommandText(btn.el);
+    const promptCapture = _capturePromptSubtree(btn.el);
+
     clickEl(btn.el);
     _markClicked(btn.fingerprint);
     state.totalClicks++;
@@ -592,6 +659,8 @@
       text: btn.text,
       reason: btn.reason,
       fingerprint: btn.fingerprint,
+      commandPreview: command ? command.preview : null,
+      commandLines: command ? command.lineCount : null,
     };
     state.clicks.push(entry);
     if (state.clicks.length > 100) {
@@ -605,7 +674,8 @@
       text: btn.text,
       reason: btn.reason,
       fingerprint: btn.fingerprint,
-      prompt: _capturePromptSubtree(btn.el),
+      prompt: promptCapture,
+      command: command,
     });
 
     console.log(
@@ -718,6 +788,7 @@
         hasCompanionNearby: hasNearbyCompanion(btn.el),
         isModalSingleActionApprove: isModalSingleActionApprove(btn),
         prompt: _capturePromptSubtree(btn.el),
+        command: _extractCommandText(btn.el),
       };
     });
     return {

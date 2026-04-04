@@ -71,9 +71,9 @@ built-in usage summary, `caa help` for examples and doc paths, or
 | `launch [--workspace PATH] [PATH]` | Start dedicated Cursor process, inject script, gate ON. Blocks only if the same workspace is already running; other workspaces can run in parallel. |
 | `on` | Turn gate ON. Reloads injector code when in-window hash differs from the current injector file. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
 | `off` | Turn gate OFF without closing the dedicated window. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
-| `status` | Show PID, CDP port, workspace, gate state, click count, injector hash, current title, and recent clicks. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
+| `status` | Show PID, CDP port, workspace, gate state, click count, injector hash, current title, recent clicks, and last approved command preview. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
 | `stop` | Turn gate OFF, close the dedicated Cursor process, and clear local session state when shutdown succeeds. Without `-w`, it prefers running sessions when any are alive; if none are running, it falls back to stale entries for cleanup. Use `--all` to stop every session, and do not combine `--all` with `-w` or a positional workspace. |
-| `history [-w SLUG] [-n N] [--json]` | Show durable event log (session/gate/click events). |
+| `history [-w SLUG] [-n N] [--json] [--commands]` | Show durable event log (session/gate/click events). Use `--commands` to show only approved commands with readable multiline formatting from the dedicated command ledger. |
 | `alias [set\|remove\|list]` | Manage workspace aliases stored in `config.json`. Auto-registered on launch. |
 | `screenshot [-w SLUG] [-o FILE]` | Capture PNG screenshot of the dedicated window via CDP. |
 | `diagnose [-w SLUG]` | Self-debug: screenshot + DOM snapshot + synthetic probe + summary. |

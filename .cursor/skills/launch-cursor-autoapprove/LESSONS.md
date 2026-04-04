@@ -242,4 +242,28 @@
   simultaneously makes every failure ambiguous. Detect and warn about conflicting
   configurations at startup, not after hours of debugging.
 
+## Command Text Extraction
 
+- **Button labels alone are not enough for post-hoc debugging**: Knowing that
+  "Run" was clicked does not tell you what command was approved. Extracting the
+  command text from the prompt surface before clicking and persisting it in a
+  dedicated ledger makes approval auditing possible.
+
+- **Extract before clicking, not after**: The DOM may change immediately after
+  `el.click()` (the prompt may close). Always capture command text and prompt
+  subtree before the click, not after.
+
+- **Prefer `innerText` over `textContent` for human-readable output**:
+  `textContent` flattens all descendant text without whitespace boundaries.
+  `innerText` preserves visual formatting including newlines, making multiline
+  commands readable in persisted logs.
+
+- **Separate the command ledger from the general event log**: The general
+  `history.jsonl` mixes session/gate/click/blocked/unknown events and rotates
+  at 5 MB. A dedicated `commands.jsonl` with a larger rotation window (10 MB)
+  ensures approved commands are not diluted or rotated away by high-frequency
+  gate toggles.
+
+- **Approved commands may contain secrets**: Tokens, passwords, and sensitive
+  paths can appear in terminal commands. The command ledger is a local
+  diagnostic record; treat it with the same caution as shell history.

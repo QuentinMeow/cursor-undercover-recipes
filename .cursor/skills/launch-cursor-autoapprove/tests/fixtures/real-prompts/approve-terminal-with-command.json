@@ -1,0 +1,17 @@
+{
+  "name": "approve-terminal-with-command",
+  "description": "Approve Terminal Command modal with embedded command text",
+  "source": "synthetic fixture for command extraction testing",
+  "spec": {
+    "role": "alertdialog",
+    "modal": true,
+    "content": "sudo rm -rf /tmp/build-cache",
+    "buttons": [
+      { "var": "a", "text": "Approve Terminal Command" }
+    ]
+  },
+  "expect_click": true,
+  "expect_id": "approve_terminal_command",
+  "expect_single_click": true,
+  "expect_command_preview": "sudo rm -rf /tmp/build-cache"
+}

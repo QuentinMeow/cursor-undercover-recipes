@@ -1,0 +1,18 @@
+{
+  "name": "run-multiline-command",
+  "description": "Shell command card with multiline command in code block",
+  "source": "synthetic fixture for command extraction testing",
+  "spec": {
+    "role": "dialog",
+    "modal": true,
+    "content": "npm install --save-dev typescript\n&& npm run build\n&& echo 'done'",
+    "buttons": [
+      { "var": "a", "text": "Skip Esc" },
+      { "var": "b", "text": "Run ↩" }
+    ]
+  },
+  "expect_click": true,
+  "expect_id": "run",
+  "expect_single_click": true,
+  "expect_command_preview": "npm install --save-dev typescript"
+}
