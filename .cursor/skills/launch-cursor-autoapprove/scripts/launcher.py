@@ -7,6 +7,7 @@ Subcommands:
     on      Resume auto-clicking (startAccept via CDP)
     off     Pause auto-clicking (stopAccept via CDP)
     status  Show gate state and click count
+    share-safe  Toggle discreet window title for screen sharing
     stop    Pause gate and end session
     help    Show usage examples and deeper docs
 """
@@ -325,6 +326,7 @@ def _clear_injector_expression() -> str:
   delete globalThis.startAccept;
   delete globalThis.stopAccept;
   delete globalThis.acceptStatus;
+  delete globalThis.setShareSafeTitle;
   delete globalThis.__cursorAutoAcceptScriptHash;
   delete globalThis.__cursorAutoAcceptRepoSlug;
 })()
@@ -525,6 +527,13 @@ def _help_examples(topic: str | None = None) -> list[str]:
             "  caa help",
             "  caa help off",
         ],
+        "share-safe": [
+            "Examples:",
+            "  caa share-safe              # toggle discreet vs branded title",
+            "  caa share-safe --on         # discreet (hide autoapprove in title bar)",
+            "  caa share-safe --off        # branded title again",
+            "  caa share-safe -w my-project --on",
+        ],
     }
     if topic in topic_examples:
         return topic_examples[topic]
@@ -540,6 +549,7 @@ def _help_examples(topic: str | None = None) -> list[str]:
         "  caa stop --all",
         "  caa history -w my-project",
         "  caa history --commands",
+        "  caa share-safe --on",
         "  caa help off",
         "",
         "Aliases:",
@@ -548,7 +558,7 @@ def _help_examples(topic: str | None = None) -> list[str]:
         "  - use 'caa alias list' to see all aliases",
         "",
         "Multi-session behavior:",
-        "  - 'on', 'off', and 'stop' open an arrow-key picker in an interactive terminal",
+        "  - 'on', 'off', 'stop', and 'share-safe' open an arrow-key picker in an interactive terminal",
         "  - 'status -w <slug>' also uses the picker when that slug matches multiple sessions",
         "  - use -w <slug> or -w <full-path> to skip the picker",
         "",
@@ -571,7 +581,8 @@ def cmd_help(args: argparse.Namespace) -> int:
         target = command_parsers.get(topic)
         if target is None:
             print(f"Unknown help topic '{topic}'.", file=sys.stderr)
-            print("Available topics: launch, on, off, status, stop, history, help", file=sys.stderr)
+            topics = ", ".join(sorted(command_parsers.keys()))
+            print(f"Available topics: {topics}", file=sys.stderr)
             return 1
         target.print_help()
     else:
@@ -1091,13 +1102,21 @@ document.title = {title_json};
 
 
 def _cdp_gate(port: int, action: str, title: str | None = None,
-              target_id: str | None = None) -> dict | None:
+              target_id: str | None = None, *,
+              share_safe: bool = False) -> dict | None:
     """Call startAccept/stopAccept/acceptStatus via CDP. Returns parsed status or None."""
-    title_expr = _title_sync_expr(title) if title else ""
     if action == "on":
-        expr = f"{title_expr} startAccept(); JSON.stringify(acceptStatus())"
+        if share_safe:
+            expr = "setShareSafeTitle(true); startAccept(); JSON.stringify(acceptStatus())"
+        else:
+            title_expr = _title_sync_expr(title) if title else ""
+            expr = f"{title_expr} startAccept(); JSON.stringify(acceptStatus())"
     elif action == "off":
-        expr = f"stopAccept(); {title_expr} JSON.stringify(acceptStatus())"
+        if share_safe:
+            expr = "setShareSafeTitle(true); stopAccept(); JSON.stringify(acceptStatus())"
+        else:
+            title_expr = _title_sync_expr(title) if title else ""
+            expr = f"stopAccept(); {title_expr} JSON.stringify(acceptStatus())"
     elif action == "status":
         expr = "JSON.stringify(acceptStatus())"
     else:
@@ -1429,6 +1448,9 @@ def _print_session_status(session: dict) -> None:
             title = _cdp_title(port, target_id=bound_target)
             print(f"Gate:      {label}")
             print(f"Clicks:    {clicks}")
+            if "shareSafeTitle" in gate:
+                tmode = "discreet" if gate.get("shareSafeTitle") else "branded"
+                print(f"Title:     {tmode}")
             print(f"Injector:  {_format_injector_hash(gate.get('scriptHash'))}")
             expected_hash: str | None = None
             try:
@@ -1485,8 +1507,14 @@ def _stop_session(session: dict) -> bool:
 
     if pid and _pid_is_alive(pid):
         if port:
-            _cdp_gate(port, "off", title=disabled_title,
-                      target_id=session.get("cdp_target_id"))
+            share_safe = bool(session.get("share_safe_title"))
+            _cdp_gate(
+                port,
+                "off",
+                title=disabled_title,
+                target_id=session.get("cdp_target_id"),
+                share_safe=share_safe,
+            )
         _log_event("session", workspace, slug, action="stop", pid=pid)
         if _terminate_pid(pid):
             print(f"[{slug}] Auto-approve OFF. Dedicated Cursor (PID {pid}) closed.")
@@ -1740,10 +1768,20 @@ def cmd_on(args: argparse.Namespace) -> int:
                 state_data["sessions"][ws_key]["cdp_target_id"] = bound_target
                 _save_state(state_data)
 
-    result = _cdp_gate(port, "on", title=enabled_title, target_id=bound_target)
+    share_safe = bool(session.get("share_safe_title"))
+    result = _cdp_gate(
+        port,
+        "on",
+        title=enabled_title,
+        target_id=bound_target,
+        share_safe=share_safe,
+    )
     if result:
         print(f"Auto-approve ON (total clicks so far: {result.get('totalClicks', 0)})")
-        print(f"Window title target: {enabled_title}")
+        if share_safe:
+            print("Window title: discreet (screen-share safe; captured at inject time)")
+        else:
+            print(f"Window title target: {enabled_title}")
         if bound_target:
             print(f"Bound target: {bound_target}")
         if result.get("scriptHash"):
@@ -1773,15 +1811,100 @@ def cmd_off(args: argparse.Namespace) -> int:
         print(f"Dedicated Cursor (PID {pid}) is no longer running.", file=sys.stderr)
         return 1
 
-    result = _cdp_gate(port, "off", title=disabled_title, target_id=bound_target)
+    share_safe = bool(session.get("share_safe_title"))
+    result = _cdp_gate(
+        port,
+        "off",
+        title=disabled_title,
+        target_id=bound_target,
+        share_safe=share_safe,
+    )
     if result:
         print(f"Auto-approve OFF (total clicks: {result.get('totalClicks', 0)})")
-        print(f"Window title target: {disabled_title}")
+        if share_safe:
+            print("Window title: discreet (screen-share safe; captured at inject time)")
+        else:
+            print(f"Window title target: {disabled_title}")
         _log_event("gate", workspace, slug, action="off",
                    cdp_target_id=bound_target)
     else:
         print("Failed to stop auto-approve.", file=sys.stderr)
         return 1
+    return 0
+
+
+def _cdp_set_share_safe_title(port: int, enabled: bool,
+                              target_id: str | None = None) -> dict | None:
+    """Toggle injector title mode. Returns parsed acceptStatus or None."""
+    lit = "true" if enabled else "false"
+    expr = f"setShareSafeTitle({lit}); JSON.stringify(acceptStatus())"
+    try:
+        result = _cdp_evaluate(port, expr, target_id=target_id)
+        value = result.get("result", {}).get("result", {}).get("value")
+        if isinstance(value, str):
+            return json.loads(value)
+        return value
+    except (ConnectionRefusedError, OSError, RuntimeError, json.JSONDecodeError) as exc:
+        print(f"CDP error: {exc}", file=sys.stderr)
+        return None
+
+
+def cmd_share_safe(args: argparse.Namespace) -> int:
+    """Persist per-session preference and apply discreet vs branded window title."""
+    state = _load_state()
+    session = _resolve_session(
+        args, state, allow_interactive=True, command_name="share-safe",
+    )
+    if not session:
+        return 1
+
+    port = session.get("cdp_port")
+    pid = session.get("pid")
+    workspace = session["workspace"]
+    slug = session.get("slug", _repo_slug(workspace))
+    bound_target = session.get("cdp_target_id")
+
+    mode = getattr(args, "share_mode", None)
+    current = bool(session.get("share_safe_title", False))
+    if mode == "on":
+        new_val = True
+    elif mode == "off":
+        new_val = False
+    else:
+        new_val = not current
+
+    if not pid or not _pid_is_alive(pid) or not port:
+        print(
+            "Dedicated Cursor is not running; start it with 'launch' before "
+            "changing the title mode.",
+            file=sys.stderr,
+        )
+        return 1
+
+    result = _cdp_set_share_safe_title(port, new_val, target_id=bound_target)
+    if not result:
+        print(
+            "Could not set discreet/branded title mode (injector missing or too old). "
+            "Re-run the global installer, then 'on' to reload the injector.",
+            file=sys.stderr,
+        )
+        return 1
+
+    state_data = _load_state(gc=False)
+    ws_key = session["workspace"]
+    if ws_key in state_data.get("sessions", {}):
+        state_data["sessions"][ws_key]["share_safe_title"] = new_val
+        _save_state(state_data)
+
+    label = "discreet" if new_val else "branded"
+    print(f"[{slug}] Window title mode: {label}")
+    if new_val:
+        print(
+            "  Uses the title captured when the injector first loaded. "
+            "Re-inject (run 'on' after an installer update) if the bar looks stale."
+        )
+    _log_event("gate", workspace, slug, action="share_safe_title",
+               share_safe_title=new_val, cdp_target_id=bound_target)
     return 0
 
 
@@ -2274,6 +2397,33 @@ def build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argument
     p_off.add_argument("workspace_pos", nargs="?", help=ws_help)
     p_off.set_defaults(func=cmd_off)
     command_parsers["off"] = p_off
+
+    p_share = sub.add_parser(
+        "share-safe",
+        help=(
+            "Discreet window title for screen sharing (hides autoapprove branding). "
+            "Omit --on/--off to toggle."
+        ),
+    )
+    p_share.add_argument("--workspace", "-w", help=ws_help)
+    p_share.add_argument("workspace_pos", nargs="?", help=ws_help)
+    share_grp = p_share.add_mutually_exclusive_group()
+    share_grp.add_argument(
+        "--on",
+        dest="share_mode",
+        action="store_const",
+        const="on",
+        help="Use discreet title (restore native bar text from inject time)",
+    )
+    share_grp.add_argument(
+        "--off",
+        dest="share_mode",
+        action="store_const",
+        const="off",
+        help="Use branded autoapprove title again",
+    )
+    p_share.set_defaults(func=cmd_share_safe, share_mode=None)
+    command_parsers["share-safe"] = p_share
 
     p_status = sub.add_parser("status", help="Show gate state and click count")
     p_status.add_argument("--workspace", "-w", help="Workspace path or slug (shows all if omitted)")

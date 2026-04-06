@@ -98,6 +98,7 @@ lifecycle with `on`/`off`/`stop`.
 | `history [-w SLUG] [-n LIMIT] [--json] [--commands]` | Show durable event log of session/gate/click events. Persisted across sessions. Use `--commands` for a dedicated command-approval view with readable multiline formatting. |
 | `screenshot [-w PATH\|SLUG] [-o FILE]` | Capture PNG screenshot of the dedicated Cursor window via CDP. |
 | `diagnose [-w PATH\|SLUG]` | Self-debug: screenshot + DOM snapshot + synthetic probe. Saves artifacts to a timestamped directory. |
+| `share-safe [--on\|--off] [-w PATH\|SLUG]` | Discreet window title for screen sharing: restores the title captured at injector load instead of `autoapprove … <repo>`. Cursor’s usual title often still includes the workspace or file name—this mode only removes the autoapprove branding. Toggle with no flags, or set `--on` / `--off`. Preference is stored on the **current session** (cleared when you `stop` or the session is garbage-collected) and reapplied after `on` / injector reload. |
 | `help [COMMAND]` | Show usage examples, subcommand help, and paths to the deeper docs. |
 
 `on` and `off` auto-detect the target when only one running session is active.
@@ -127,7 +128,10 @@ use `caa --help` (or the full launcher path with `--help`).
    with a 2s fallback poll, and clicks matches.
 5. The injector continuously maintains the window title
    (`autoapprove ✅ <repo>` or `autoapprove ⏸ <repo>`) via a 3-second
-   interval, so the title self-heals if Cursor resets it.
+   interval, so the title self-heals if Cursor resets it — unless
+   **share-safe** mode is on (`caa share-safe --on`), in which case the
+   title bar reuses the text captured when the script was first injected
+   (normal Cursor-style title for that moment).
 6. `on`/`off` call `startAccept()`/`stopAccept()` via CDP -- no manual
    DevTools interaction needed.
 7. Process-level isolation: the dedicated window is a separate OS process,
