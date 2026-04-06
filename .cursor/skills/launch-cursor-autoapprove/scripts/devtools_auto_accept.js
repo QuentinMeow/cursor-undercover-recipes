@@ -67,6 +67,7 @@
     '[class*="secondary-button"]',
     '[class*="text-button"]',
     '[class*="action-label"]',
+    '[class*="anysphere-button"]',
     '.view-allow-btn-container-inner > div',
   ];
   const PROMPT_ROOT_SELECTORS = [

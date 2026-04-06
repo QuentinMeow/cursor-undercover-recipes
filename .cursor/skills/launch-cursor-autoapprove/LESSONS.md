@@ -267,3 +267,20 @@
 - **Approved commands may contain secrets**: Tokens, passwords, and sensitive
   paths can appear in terminal commands. The command ledger is a local
   diagnostic record; treat it with the same caution as shell history.
+
+## Button Component Class Drift
+
+- **Cursor's button component classes diverge across surfaces**: Shell command
+  approval cards use classes like `primary-button` and `text-button`, but MCP
+  tool call prompts use `anysphere-button` and `anysphere-text-button` (the
+  Anysphere component library). A selector list built against one surface will
+  silently miss the other. When adding `BUTTON_SELECTORS`, cover both legacy
+  naming conventions (`primary-button`, `text-button`) and the current component
+  library (`anysphere-button`).
+
+- **Absent buttons are harder to debug than blocked buttons**: When a button is
+  found but blocked by policy, the injector emits `blocked_candidate` or
+  `unknown_prompt` events with full context. When a button is never found
+  (selector miss), there is zero telemetry — the injector simply sees no
+  candidates. Use `diagnose` or live CDP DOM inspection to compare what the
+  broader DOM contains versus what `BUTTON_SELECTORS` actually match.
