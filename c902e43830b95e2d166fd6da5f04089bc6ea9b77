@@ -1,0 +1,45 @@
+.cursor/skills/github-manager/README.md
+  90078c99cdad3d94 5-8,13,21-30,33,37-43,47-50
+.cursor/skills/github-manager/references/review-checklist.md
+  90078c99cdad3d94 3-5
+.cursor/skills/github-manager/references/pr-workflows.md
+  90078c99cdad3d94 3-7
+.cursor/skills/github-manager/references/splitting-strategy.md
+  90078c99cdad3d94 3-4
+.cursor/skills/github-manager/references/reviewer-best-practices.md
+  90078c99cdad3d94 93,119-120
+.cursor/skills/github-manager/scripts/install.sh
+  90078c99cdad3d94 1-201
+.cursor/skills/github-manager/references/pr-summary-format.md
+  90078c99cdad3d94 37-41
+.cursor/skills/github-manager/AGENTS.md
+  90078c99cdad3d94 2,10-15,19-35,43,52-53,61-66,68-71,75-77
+.cursor/skills/README.md
+  90078c99cdad3d94 26,56-59
+.cursor/skills/github-manager/references/analysis-commands.md
+  90078c99cdad3d94 4-5,7
+.cursor/skills/github-manager/references/pr-workflows-comprehensive.md
+  90078c99cdad3d94 1-11,14,126-128,130-133,136-139,165,483-490,494-496,498,513-514,521,677,1395-1397,1401-1403,1405-1407
+.cursor/skills/github-manager/SKILL.md
+  90078c99cdad3d94 4-8,13-16,18-22,24-30,36,42-43,49-50,52-69,71-106,108-109,111-116,119,122-123,125-140,143
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "c902e43830b95e2d166fd6da5f04089bc6ea9b77",
+  "prompts": {
+    "90078c99cdad3d94": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "643c8aa3-4544-47ea-92f7-8aacdfccbfe5",
+        "model": "composer-2"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 468,
+      "total_deletions": 195,
+      "accepted_lines": 456,
+      "overriden_lines": 0
+    }
+  }
+}
