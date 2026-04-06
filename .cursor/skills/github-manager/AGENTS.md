@@ -1,5 +1,5 @@
 ---
-description: 
+description:
 alwaysApply: true
 ---
 
@@ -7,23 +7,32 @@ alwaysApply: true
 
 ## Summary
 
-This folder owns the `github-manager` skill. It covers repo-local `gh`
-identity switching, evidence-first PR workflows, and GitHub review hygiene.
-Keep human onboarding in `README.md`, agent guardrails here, and deeper
-workflow detail in `references/`.
+This folder owns the `github-manager` skill: repo-local `gh` identity switching,
+evidence-first PR workflows, stacked-PR operations (Aviator), and review hygiene.
+The **comprehensive** PR stack content lives in
+`references/pr-workflows-comprehensive.md` (superset of an internal company
+`github-pr-manager` skill). Keep human onboarding in `README.md`, agent rules
+here, and overflow in `references/`.
 
 ## Folder Structure
 
-- `README.md` -- human-facing overview and quick start.
-- `AGENTS.md` -- this file.
-- `SKILL.md` -- agent entrypoint and core workflow.
-- `LESSONS.md` -- generic lessons that future agents should read first.
-- `references/gh-identity.md` -- identity switching workflow and recovery.
-- `references/pr-workflows.md` -- diff retrieval, summaries, and cleanup.
-- `references/review-checklist.md` -- structured review checklist.
-- `scripts/gh_identity.py` -- repo-local `gh` identity helper.
-- `tests/test_gh_identity.py` -- unit tests for state handling and fail-closed
-  behavior.
+- `README.md` — human-facing overview and quick start.
+- `AGENTS.md` — this file.
+- `SKILL.md` — agent entrypoint (identity + links; keep under ~500 lines).
+- `LESSONS.md` — generic lessons; read before behavior changes.
+- `references/gh-identity.md` — identity switching workflow and recovery.
+- `references/pr-workflows.md` — short right-diff-first cheat sheet.
+- `references/pr-workflows-comprehensive.md` — Section 1, scenarios A–E, `av`, merge strategies, troubleshooting (large).
+- `references/pr-summary-format.md` — PR body templates and TODO markers.
+- `references/code-review-checklist.md` — full review + Conventional Comments.
+- `references/review-checklist.md` — shorter review lens.
+- `references/splitting-strategy.md` — how to split large PRs.
+- `references/analysis-commands.md` — numstat / classification helpers.
+- `references/reviewer-best-practices.md` — research-backed review tips.
+- `scripts/gh_identity.py` — `gh` identity helper.
+- `scripts/install.sh` — install to `~/.cursor/skills/global-github-manager/` or another repo.
+- `tests/test_gh_identity.py` — unit tests for identity state.
+- `logs/<run-id>/` — gitignored PR-body scratch (see SKILL.md).
 
 ## Handy Commands
 
@@ -31,6 +40,7 @@ workflow detail in `references/`.
 python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/gh_identity.py" status --target-user QuentinMeow
 python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/gh_identity.py" enter --target-user QuentinMeow --dry-run
 python3 -m unittest discover -s "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/tests"
+bash "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/install.sh" --target global --dry-run
 ```
 
 ## Guidance To AI Agent Tasks
@@ -39,8 +49,8 @@ python3 -m unittest discover -s "$(git rev-parse --show-toplevel)/.cursor/skills
 
 1. Read `LESSONS.md` before changing identity or PR workflow behavior.
 2. Read `README.md` before changing public-facing docs.
-3. Read `SKILL.md` before changing invocation or workflow guidance.
-4. Read the relevant file under `references/` before changing technical claims.
+3. Read `SKILL.md` before changing invocation or workflow routing.
+4. Read `references/pr-workflows-comprehensive.md` before changing stacked-PR or Section 1 claims.
 5. Read `scripts/gh_identity.py` before changing identity behavior.
 6. Read `tests/test_gh_identity.py` before changing switch or restore logic.
 
@@ -48,31 +58,21 @@ python3 -m unittest discover -s "$(git rev-parse --show-toplevel)/.cursor/skills
 
 - Never commit tokens, private hostnames, work-account identifiers, or other
   sensitive account details.
-- This skill may inspect `gh` auth state, but it must never change `git
-  config`.
-- Identity helpers must fail closed on ambiguous state instead of guessing
-  which account to restore.
-- Keep PR workflow guidance generic and evidence-first; do not assume a
-  specific employer, repo, or stack-management tool.
-- Keep scripts self-contained; do not add cross-skill imports.
+- Never change `git config` from this skill.
+- Identity helpers must fail closed on ambiguous state.
+- Generalize employer-specific tool names in the comprehensive reference; keep
+  optional `.agent-files/pr` paths as **org convention**, with personal default
+  under `logs/` per `SKILL.md`.
+- Keep scripts self-contained; no cross-skill imports.
 - Treat `.agents/worklog/*.md` (except `.gitkeep`), `.cursor/MEMORY.md`,
-  `.cursor/skills/**/logs/**`, and ad hoc PR-body scratch files as local-only
-  artifacts. Keep them out of commits unless the user explicitly asks for
-  those exact paths to be versioned.
-- If one of those ignored artifacts is already tracked, remember that
-  `.gitignore` will not untrack it. Remove it from the index as part of the
-  fix instead of assuming ignore rules are enough.
-- `QuentinMeow` examples are intentional for this repo's personal remote. If
-  this skill is copied elsewhere, update the target login rather than copying
-  the literal username.
+  `logs/**`, and ad hoc PR-body files as local-only unless the user explicitly
+  asks to version them.
+- `QuentinMeow` in examples is intentional for this repo’s personal remote;
+  update the target login when forking the skill elsewhere.
 
 ### Verification
 
-- After changing `scripts/gh_identity.py`, run:
-  `python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/gh_identity.py" status --target-user QuentinMeow`
-- After changing switch logic, also run:
-  `python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/gh_identity.py" enter --target-user QuentinMeow --dry-run`
-- After changing tests or switch logic, run:
-  `python3 -m unittest discover -s "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/tests"`
-- After doc changes, keep `README.md` short and push overflow into
+- After `gh_identity.py` changes: `unittest` + `status` / `enter --dry-run`.
+- After `install.sh` changes: `--dry-run` for global and repo targets.
+- After doc edits: keep `README.md` and `SKILL.md` short; push detail into
   `references/`.

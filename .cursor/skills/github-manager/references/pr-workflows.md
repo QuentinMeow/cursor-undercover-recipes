@@ -1,5 +1,10 @@
 # PR Workflows
 
+For **stacked PRs, AIO-merge, Aviator (`av`), and full Section 1** (comment
+surfaces, rate limits, PR body upload), read
+[pr-workflows-comprehensive.md](pr-workflows-comprehensive.md). This file stays
+a short cheat sheet aligned with that reference.
+
 ## Right Diff First
 
 Every PR workflow starts by resolving the real base branch from GitHub. Never

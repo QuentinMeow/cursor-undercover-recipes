@@ -1,99 +1,145 @@
 ---
 name: github-manager
 description: >-
-  Manage GitHub CLI workflows safely: switch `gh` identity without touching git
-  config, analyze PRs from the correct diff, review code with a structured
-  checklist, and clean up branches or worktrees carefully. Use when working
-  with `gh` auth, PR summaries, PR reviews, stacked PR planning, or repo GitHub
-  identity mismatches.
+  Personal superset of GitHub workflows: switch `gh` identity without touching
+  git config; evidence-first PR diffs; PR summaries (format + upload); systematic
+  code review; stacked PRs with Aviator (`av`); AIO-merge vs stacked-merge; merge
+  queues and post-merge cleanup. Use for `gh` auth mismatches, PR descriptions,
+  reviews, splitting stacks, addressing feedback, or merging stacked work.
 ---
 
 # GitHub Manager
 
-Use this skill when GitHub CLI auth or PR workflow needs more structure than
-ad-hoc `gh` commands.
+This skill combines **repo-local `gh` identity switching** (personal) with the
+full **PR lifecycle** content from an internal `github-pr-manager` workflow
+(company-oriented): same rigor, generalized org-specific examples, and paths
+suited to this repository.
 
-## Quick Start
+| Layer | What |
+|-------|------|
+| **This file** | Quick start, identity, where to read next, critical rules |
+| **[pr-workflows-comprehensive.md](references/pr-workflows-comprehensive.md)** | Section 1 (get the right diff), scenarios A–E, Aviator, merge strategies, troubleshooting |
+| **Focused references** | Summary format, review checklists, splitting, analysis commands |
 
-1. Inspect the current state:
+---
+
+## Quick Start (identity)
+
+Before any `gh pr` / `gh api` work that must land on the right GitHub user:
+
+1. Inspect state:
 
    ```bash
    python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/gh_identity.py" status --target-user QuentinMeow
    ```
 
-2. Switch `gh` to the repo's intended user before GitHub API work:
+2. Switch `gh` to the intended account:
 
    ```bash
    python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/gh_identity.py" enter --target-user QuentinMeow
    ```
 
-3. Run the `gh` work.
-4. Restore the previously active account afterward:
+3. Run PR commands (`gh pr view`, `gh pr create`, etc.).
+4. Restore the previous `gh` user when done:
 
    ```bash
    python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/gh_identity.py" leave
    ```
 
-## Identity Workflow
+`git` over SSH and `gh` API auth are independent. This skill **never** edits
+`git config`. See [gh-identity.md](references/gh-identity.md).
 
-- `git` over SSH and `gh` API auth are independent. A push can succeed while
-  `gh pr create` fails or targets the wrong account.
-- The helper stores restore state in the repo's git directory. `leave`
-  restores the previously active `gh` user without touching `git config`.
-- `enter` fails closed if the target user is not already logged into `gh`.
-  The one-time bootstrap is `gh auth login` in Cursor's terminal.
-- This skill never edits `git config`. If commit author settings also need to
-  change, stop and ask the user.
+---
 
-## PR Workflow
+## Scenario routing
 
-Follow this order:
+Use **[pr-workflows-comprehensive.md](references/pr-workflows-comprehensive.md)**
+for detail. Every scenario **starts with Section 1** there (resolve real base/head
+from GitHub — never assume `main`).
 
-1. Resolve the real base and head from GitHub before diffing anything.
-2. Use GitHub or remote-tracking refs for file counts and line counts.
-3. Read the full diff before writing summaries or split plans.
-4. Read all review-comment surfaces before claiming feedback is addressed.
-5. Inspect `git status`, `git diff`, and `git diff --cached` before committing
-   or opening a PR so local-only artifacts do not ride along.
-6. Back up PR bodies to a gitignored scratch path such as
-   `.cursor/skills/github-manager/logs/<run-id>/` or `/tmp/` before
-   overwriting them.
-7. Split by concern first. Treat line counts as a prompt to think, not a hard
-   law.
+| Scenario | When |
+|----------|------|
+| **A** | Write or update a PR summary, or perform a structured review |
+| **B** | Split a large PR into stacked PRs (`av`) |
+| **C** | Address review feedback across a stack |
+| **D** | Merge (AIO-merge default vs stacked-merge) |
+| **E** | Post-merge branch/worktree cleanup |
 
-See:
+**Most common path:** Prerequisites in the comprehensive doc → Section 1 →
+Scenario A → [pr-summary-format.md](references/pr-summary-format.md).
 
-- [GitHub identity switching](references/gh-identity.md)
-- [PR workflows](references/pr-workflows.md)
-- [Review checklist](references/review-checklist.md)
+---
 
-## Critical Rules
+## Prerequisites (short)
 
-- Never assume `main` or `master` is the PR base.
-- Never substitute a working-tree diff for the PR diff.
-- Never publish counts or claims that are not grounded in GitHub data or the
-  actual diff.
-- Never `git add -f` or commit repo-local artifacts such as
-  `.agents/worklog/*.md` (except `.gitkeep`), `.cursor/MEMORY.md`,
-  `.cursor/skills/**/logs/**`, or PR-body scratch files unless the user
-  explicitly asks for those exact files in the diff.
-- If an ignored file is already tracked, remove it from the index instead of
-  assuming `.gitignore` will fix it.
-- Never hardcode or commit work-account identifiers, private hostnames, or
-  tokens.
-- Never use this skill to change `git config`.
+| Tool | Need |
+|------|------|
+| `gh` | Always — install and `gh auth login` **inside Cursor's terminal** if agents lack auth |
+| `git` | Always |
+| `av` (Aviator) | Scenarios B–E only — `brew install aviator-co/tap/av`, then `av init` in repo root |
+
+SSH **certificate**-based org remotes: use your organization's documented cert
+tooling; `gh auth login` alone does not replace SSH for `git push`. See the
+comprehensive doc.
+
+---
+
+## Focused references
+
+| Doc | Role |
+|-----|------|
+| [pr-workflows-comprehensive.md](references/pr-workflows-comprehensive.md) | Section 1, API limits, PR body backup paths, scenarios A–E, troubleshooting |
+| [pr-summary-format.md](references/pr-summary-format.md) | TL;DR, Goal, collapsed sections, TODO markers, test plan |
+| [pr-workflows.md](references/pr-workflows.md) | Right-diff-first cheat sheet (still read Section 1 for stacks) |
+| [code-review-checklist.md](references/code-review-checklist.md) | Full review checklist + Conventional Comments |
+| [review-checklist.md](references/review-checklist.md) | Shorter review + safety lens |
+| [splitting-strategy.md](references/splitting-strategy.md) | How to split by concern |
+| [analysis-commands.md](references/analysis-commands.md) | Classification script and numstat helpers |
+| [reviewer-best-practices.md](references/reviewer-best-practices.md) | Research-backed review guidance |
+
+---
+
+## PR body backups (personal default)
+
+Prefer gitignored files under:
+
+`.cursor/skills/github-manager/logs/<YYYYMMDD-HHMM-TZ>-<slug>.md`
+
+Some org repos use `.agent-files/pr/` instead; never commit draft bodies. See
+Section 3 in the comprehensive reference.
+
+---
+
+## Global install (other machines)
+
+Install a copy under `~/.cursor/skills/global-github-manager/` so Cursor can
+invoke **`/global-github-manager`**:
+
+```bash
+bash "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/install.sh" --target global --force
+```
+
+Repo-local skill path stays `.cursor/skills/github-manager/` when working in
+this repository.
+
+---
+
+## Critical rules
+
+- Never assume the PR base branch; always read `baseRefName` from GitHub.
+- Never use the working tree as a substitute for `gh pr diff` / remote refs.
+- Never fabricate line counts — use `gh api .../pulls/<PR>/files` as documented.
+- Never pass PR bodies via shell heredocs; write a file, then `-F body=@file.md`.
+- Never `git add -f` skill logs, worklogs, or scratch PR files unless the user
+  explicitly wants them committed.
+
+---
 
 ## Testing
 
-Run the unit tests after changing the identity helper:
+After changing `gh_identity.py`:
 
 ```bash
 python3 -m unittest discover -s "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/tests"
-```
-
-Also run these lightweight checks after script changes:
-
-```bash
 python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/gh_identity.py" status --target-user QuentinMeow
-python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/gh_identity.py" enter --target-user QuentinMeow --dry-run
 ```
