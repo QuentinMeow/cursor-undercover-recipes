@@ -1,0 +1,27 @@
+.cursor/skills/launch-cursor-autoapprove/scripts/devtools_auto_accept.js
+  90078c99cdad3d94 70
+.cursor/skills/launch-cursor-autoapprove/issues/012-mcp-tool-call-run-button-not-matched.md
+  90078c99cdad3d94 1-98
+.cursor/skills/launch-cursor-autoapprove/LESSONS.md
+  90078c99cdad3d94 270-286
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "1104192603f6715a28f085080836eb2066e439cf",
+  "prompts": {
+    "90078c99cdad3d94": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "643c8aa3-4544-47ea-92f7-8aacdfccbfe5",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 116,
+      "total_deletions": 0,
+      "accepted_lines": 116,
+      "overriden_lines": 0
+    }
+  }
+}
