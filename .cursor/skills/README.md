@@ -23,7 +23,7 @@ material or setup scripts it needs.
 
 | Skill | Description |
 |-------|-------------|
-| `github-manager` | Manage `gh` identity switching plus evidence-first PR analysis, review, and cleanup workflows without touching git config. |
+| `github-manager` | Manage `gh` identity switching plus evidence-first PR workflows: summaries, structured review, stacked PRs (Aviator), merge strategies — superset of an internal `github-pr-manager` pattern. Install globally via `scripts/install.sh`. |
 | `launch-cursor-autoapprove` | Launch a dedicated Cursor window with DOM auto-accept injected via CDP. Simple `on`/`off` gate toggle for a dedicated agent window. |
 
 Each skill keeps its public `README.md` short. When a user wants deeper
@@ -53,4 +53,7 @@ Skills that support cross-repo installation include an `install.sh` script:
 .cursor/skills/<skill-name>/scripts/install.sh --target /path/to/repo
 ```
 
-Some skills intentionally rename their global copy to `global-<skill-name>` so the global slash command stays distinct from a repo-local install of the same skill.
+Use `--force` to overwrite an existing install. Some skills intentionally rename
+their global copy to `global-<skill-name>` so the global slash command stays
+distinct (e.g. `launch-cursor-autoapprove` → `/global-launch-cursor-autoapprove`,
+`github-manager` → `/global-github-manager`).

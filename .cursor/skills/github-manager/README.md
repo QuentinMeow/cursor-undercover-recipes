@@ -2,21 +2,15 @@
 
 ## Summary
 
-`github-manager` helps agents and humans work safely with GitHub when `git`
-and `gh` can point at different identities. It provides a repo-local `gh`
-identity helper plus concise guidance for evidence-first PR analysis, review,
-and cleanup.
+`github-manager` is a **personal superset** skill: repo-local **`gh` identity
+switching** (without touching `git` config) plus an evidence-first **PR
+lifecycle** guide merged from an internal company `github-pr-manager` workflow.
+Use it for summaries, reviews, stacked PRs (Aviator), merge strategy, and safe
+cleanup.
 
 ## Quick Start
 
-### Prerequisites
-
-- `git`
-- `gh`
-- The target GitHub account authenticated in Cursor at least once with
-  `gh auth login`
-
-### Identity Commands
+### Identity
 
 ```bash
 python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/gh_identity.py" status --target-user QuentinMeow
@@ -24,20 +18,33 @@ python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/
 python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/gh_identity.py" leave
 ```
 
-If `enter` says the target user is not logged into `gh`, run `gh auth login`
-once in Cursor's terminal and retry.
+### Deep PR workflows
+
+Open [SKILL.md](SKILL.md), then follow links into
+[references/pr-workflows-comprehensive.md](references/pr-workflows-comprehensive.md)
+for Section 1 (always get the real PR base) and scenarios A–E.
+
+### Global copy on another machine
+
+```bash
+bash "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/install.sh" --target global --force
+```
+
+Then use Cursor slash command **`/global-github-manager`**.
 
 ## How It Works
 
-- `gh_identity.py` records the previously active `gh` login inside the repo's
-  git directory, so `leave` can restore it later without touching `git config`.
-- `status` shows the current `gh` login, origin remote URL, and any saved
-  restore state.
-- PR guidance in this skill follows a simple rule: get the right diff first,
-  then review, summarize, split, or merge based on evidence.
+- **`scripts/gh_identity.py`** — saves the active `gh` user before `enter`,
+  restores it on `leave`, using state under the repo’s `.git/` directory.
+- **Comprehensive reference** — stacked PRs, AIO-merge vs stacked-merge,
+  `av` CLI, merge queues, and troubleshooting live in
+  `references/pr-workflows-comprehensive.md`.
+- **PR summaries** — templates and TODO markers in
+  `references/pr-summary-format.md`.
 
 ## Deep Dive
 
-- [GitHub identity switching](references/gh-identity.md)
-- [PR workflows](references/pr-workflows.md)
-- [Review checklist](references/review-checklist.md)
+- [SKILL.md](SKILL.md) — entrypoint and scenario routing
+- [references/gh-identity.md](references/gh-identity.md)
+- [references/pr-workflows-comprehensive.md](references/pr-workflows-comprehensive.md)
+- [references/pr-summary-format.md](references/pr-summary-format.md)

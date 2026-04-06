@@ -1,6 +1,8 @@
 # Review Checklist
 
-Use this when reviewing PRs locally or before posting GitHub comments.
+Use this when reviewing PRs locally or before posting GitHub comments. For a
+**full** systematic pass (correctness, security, Conventional Comments
+templates), use [code-review-checklist.md](code-review-checklist.md).
 
 ## Correctness
 
