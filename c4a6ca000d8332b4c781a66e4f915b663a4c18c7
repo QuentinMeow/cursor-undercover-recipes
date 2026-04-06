@@ -1,0 +1,33 @@
+.cursor/rules/repo-discovery/RULE.md
+  cde7699580d940ab 38
+.cursor/skills/launch-cursor-autoapprove/SKILL.md
+  cde7699580d940ab 101,131-134
+.cursor/skills/launch-cursor-autoapprove/scripts/launcher.py
+  cde7699580d940ab 10,530-536,552,584-585,1105-1106,1109-1113,1115-1119,1451-1453,1510-1517,1771-1778,1781-1784,1814-1821,1824-1827,1836-1910,2401-2427
+.cursor/skills/launch-cursor-autoapprove/README.md
+  cde7699580d940ab 80
+.cursor/rules/undercover-discipline/RULE.md
+  cde7699580d940ab 1-30
+.cursor/skills/launch-cursor-autoapprove/scripts/devtools_auto_accept.js
+  cde7699580d940ab 13,22-31,37-38,118-119,741-760,778-787,846,900,910,913,918
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "c4a6ca000d8332b4c781a66e4f915b663a4c18c7",
+  "prompts": {
+    "cde7699580d940ab": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "08f95cd4-c20a-4a56-bbd7-c34a11ebcde8",
+        "model": "composer-2"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 259,
+      "total_deletions": 24,
+      "accepted_lines": 249,
+      "overriden_lines": 0
+    }
+  }
+}
