@@ -121,6 +121,10 @@ for src in sorted(src_root.rglob("*")):
         continue
     if rel.parts and rel.parts[0] == "logs":
         continue
+    if "__pycache__" in rel.parts:
+        continue
+    if src.suffix == ".pyc":
+        continue
     dst = dst_root / rel
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.exists() and not force:
