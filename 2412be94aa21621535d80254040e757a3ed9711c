@@ -1,0 +1,228 @@
+.cursor/skills/launch-cursor-autoapprove/SKILL.md
+  cde7699580d940ab 101,131-134
+.cursor/rules/undercover-discipline/RULE.md
+  cde7699580d940ab 1-30
+.cursor/skills/launch-cursor-autoapprove/scripts/devtools_auto_accept.js
+  cde7699580d940ab 13,22-31,37-38,118-119,741-760,778-787,846,900,910,913,918
+.cursor/skills/launch-cursor-autoapprove/scripts/launcher.py
+  cde7699580d940ab 10,530-536,552,584-585,1105-1106,1109-1113,1115-1119,1451-1453,1510-1517,1771-1778,1781-1784,1814-1821,1824-1827,1836-1910,2401-2427
+.cursor/skills/launch-cursor-autoapprove/README.md
+  cde7699580d940ab 80
+.cursor/rules/repo-discovery/RULE.md
+  cde7699580d940ab 38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "2412be94aa21621535d80254040e757a3ed9711c",
+  "prompts": {
+    "239c682f06be74c8": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "18d2c6c9-c5e7-4b5f-89b1-0372169727df",
+        "model": "gpt-5.4-xhigh"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 138,
+      "total_deletions": 4,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    },
+    "390933deda1bd635": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "235bd6ab-e201-4f7d-ad2a-6122d90e0401",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 1021,
+      "total_deletions": 263,
+      "accepted_lines": 272,
+      "overriden_lines": 0
+    },
+    "483f1e0df6c1e97e": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "68f7a6ca-3f72-49bb-8435-d52f32e19574",
+        "model": "gpt-5.4-xhigh"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 1875,
+      "total_deletions": 117,
+      "accepted_lines": 532,
+      "overriden_lines": 0
+    },
+    "535a28e39dd02e8c": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "068af4a1-5249-4251-a973-461f54152b64",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 538,
+      "total_deletions": 88,
+      "accepted_lines": 316,
+      "overriden_lines": 0
+    },
+    "53e6f209b25dc3aa": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "849c6261-8f22-4b94-b3e7-a26cc17dc254",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 461,
+      "total_deletions": 0,
+      "accepted_lines": 43,
+      "overriden_lines": 0
+    },
+    "65a8887c802280ea": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "02fbd004-7134-40db-a1f9-a1cbb62b471c",
+        "model": "gpt-5.4-xhigh"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "6e9f92bbde744661": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "d3d89965-14f8-4617-ad44-7b05307098dd",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 66,
+      "total_deletions": 0,
+      "accepted_lines": 464,
+      "overriden_lines": 0
+    },
+    "7b661cdd2424c524": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "73f3cc23-e102-414b-906e-7d2955dc59eb",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 334,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "8553b45dabcac4b6": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "74141fb1-3bfe-41b1-98d4-3c81c86b4f5d",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 520,
+      "total_deletions": 68,
+      "accepted_lines": 282,
+      "overriden_lines": 0
+    },
+    "9a4cbede4ea33939": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "1039881c-b41e-4d30-8531-2394798246bb",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 38,
+      "total_deletions": 4,
+      "accepted_lines": 12,
+      "overriden_lines": 0
+    },
+    "aad94ba0cb233c4f": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "08a0e564-c312-42ea-b04b-2616458ab834",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 418,
+      "total_deletions": 16,
+      "accepted_lines": 243,
+      "overriden_lines": 0
+    },
+    "b887439f6c57ab24": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "11335d9e-bcc3-472b-be68-c67bfc463497",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 260,
+      "total_deletions": 122,
+      "accepted_lines": 55,
+      "overriden_lines": 0
+    },
+    "bdf5719455f8858e": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "8d906728-dabc-4f2b-961f-28214a4a0205",
+        "model": "gpt-5.4-xhigh"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 107,
+      "overriden_lines": 0
+    },
+    "cde7699580d940ab": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "08f95cd4-c20a-4a56-bbd7-c34a11ebcde8",
+        "model": "composer-2"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 259,
+      "total_deletions": 24,
+      "accepted_lines": 247,
+      "overriden_lines": 0
+    },
+    "e59877a5f607a434": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "756a610b-cf4c-4b5e-a291-3d9d557288aa",
+        "model": "gpt-5.3-codex-xhigh"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 651,
+      "total_deletions": 275,
+      "accepted_lines": 215,
+      "overriden_lines": 0
+    },
+    "ec9207235c61c6d8": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "1e565e9b-79bd-4ddb-8085-270c4f7e9e35",
+        "model": "claude-4.6-opus-high-thinking"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 146,
+      "total_deletions": 23,
+      "accepted_lines": 73,
+      "overriden_lines": 0
+    }
+  }
+}
