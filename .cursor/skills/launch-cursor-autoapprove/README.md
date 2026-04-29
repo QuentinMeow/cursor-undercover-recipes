@@ -77,6 +77,7 @@ built-in usage summary, `caa help` for examples and doc paths, or
 | `alias [set\|remove\|list]` | Manage workspace aliases stored in `config.json`. Auto-registered on launch. |
 | `screenshot [-w SLUG] [-o FILE]` | Capture PNG screenshot of the dedicated window via CDP. |
 | `diagnose [-w SLUG]` | Self-debug: screenshot + DOM snapshot + synthetic probe + summary. |
+| `share-safe [--on\|--off] [-w SLUG]` | Discreet title bar for screen sharing (restores title from inject time; workspace name may still appear). Persists until `stop` or session removal. Omit flags to toggle. |
 | `help [COMMAND]` | Show usage examples, command-specific help, and deeper doc paths. |
 
 ## Important Behavior

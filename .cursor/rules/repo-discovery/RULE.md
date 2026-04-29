@@ -35,3 +35,4 @@ Use these supporting rules as the task demands:
 8. `.cursor/rules/instrument-first/RULE.md` for deploying instrumentation before forming hypotheses.
 9. `.cursor/rules/autonomous-recovery/RULE.md` for the self-correction loop when stuck (step back without human coaching).
 10. `.cursor/rules/version-coupling-guard/RULE.md` when skills depend on external software versions (DOM selectors, APIs, CLIs).
+11. `.cursor/rules/undercover-discipline/RULE.md` when work visibility, screen sharing, or secrecy around personal rules/automation matters.

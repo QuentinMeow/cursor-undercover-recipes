@@ -10,6 +10,7 @@
 // persist durably.
 //
 // API:  startAccept()  stopAccept()  acceptStatus()  acceptDebugSnapshot()
+//       setShareSafeTitle(bool)
 (function () {
   "use strict";
 
@@ -18,11 +19,23 @@
     return;
   }
 
+  // Capture Cursor's native title once at inject time so we can restore it in
+  // screen-share mode (before any branded title runs).
+  const NATURAL_DOC_TITLE_AT_INJECT = document.title;
+  const _naturalTitlebarEl = document.querySelector(
+    '[id="workbench.parts.titlebar"] .window-title-text'
+  );
+  const NATURAL_TITLEBAR_TEXT_AT_INJECT = _naturalTitlebarEl
+    ? String(_naturalTitlebarEl.textContent || "")
+    : "";
+
   const LOG_PREFIX = "[autoAccept]";
   const SCRIPT_HASH = globalThis.__cursorAutoAcceptScriptHash || "unknown";
   const REPO_SLUG = globalThis.__cursorAutoAcceptRepoSlug || "workspace";
   const STRATEGY_VERSION = "2026-04-observer-policy";
   const TITLE_SYNC_INTERVAL = 3000;
+  /** Faster ping while discreet so Cursor cannot show a fresh native title for long. */
+  const TITLE_SYNC_INTERVAL_SHARE_SAFE = 500;
   const OBSERVER_DEBOUNCE_MS = 300;
   const FINGERPRINT_COOLDOWN_MS = 8000;
   const EVENT_QUEUE_MAX = 200;
@@ -102,6 +115,8 @@
     enableResume: true,
     enableConnectionRetry: true,
     enableStateProbe: false,
+    /** When true, stop overriding the window title with autoapprove branding. */
+    shareSafeTitle: false,
   };
 
   // -----------------------------------------------------------------------
@@ -723,6 +738,26 @@
   // -----------------------------------------------------------------------
 
   function _syncTitle() {
+    if (state.shareSafeTitle) {
+      const docTitle = NATURAL_DOC_TITLE_AT_INJECT;
+      const barText =
+        NATURAL_TITLEBAR_TEXT_AT_INJECT || NATURAL_DOC_TITLE_AT_INJECT || docTitle;
+      document.title = docTitle;
+      const titleButton = document.querySelector(
+        '[id="workbench.parts.titlebar"] .window-title-text'
+      );
+      if (titleButton) {
+        titleButton.textContent = barText;
+        titleButton.title = barText;
+        titleButton.setAttribute("aria-label", barText);
+      }
+      const titleContainer = document.querySelector(
+        '[id="workbench.parts.titlebar"] .window-title'
+      );
+      if (titleContainer) titleContainer.title = barText;
+      return;
+    }
+
     const emoji = state.running ? "\u2705" : "\u23F8";
     const title = `autoapprove ${emoji} ${REPO_SLUG}`;
     document.title = title;
@@ -738,6 +773,18 @@
       '[id="workbench.parts.titlebar"] .window-title'
     );
     if (titleContainer) titleContainer.title = title;
+  }
+
+  function _ensureTitleTimer() {
+    if (state.titleTimer) clearInterval(state.titleTimer);
+    const ms = state.shareSafeTitle ? TITLE_SYNC_INTERVAL_SHARE_SAFE : TITLE_SYNC_INTERVAL;
+    state.titleTimer = setInterval(_syncTitle, ms);
+  }
+
+  function setShareSafeTitle(enabled) {
+    state.shareSafeTitle = Boolean(enabled);
+    _syncTitle();
+    _ensureTitleTimer();
   }
 
   // -----------------------------------------------------------------------
@@ -796,6 +843,7 @@
       scriptHash: state.scriptHash,
       running: state.running,
       totalClicks: state.totalClicks,
+      shareSafeTitle: state.shareSafeTitle,
       observerActive: !!state.observer,
       eventQueueLength: state.eventQueue.length,
       cooldownEntries: state.fingerprintCooldowns.size,
@@ -849,6 +897,7 @@
       eventQueueLength: state.eventQueue.length,
       cooldownEntries: state.fingerprintCooldowns.size,
       recentClicks: state.clicks.slice(-10),
+      shareSafeTitle: state.shareSafeTitle,
     };
     console.log(`${LOG_PREFIX} status`, JSON.stringify(s, null, 2));
     return s;
@@ -858,14 +907,15 @@
   // Bootstrap
   // -----------------------------------------------------------------------
 
-  state.titleTimer = setInterval(_syncTitle, TITLE_SYNC_INTERVAL);
+  _ensureTitleTimer();
   _syncTitle();
 
-  globalThis.__cursorAutoAccept = { start, stop, status, state };
+  globalThis.__cursorAutoAccept = { start, stop, status, state, setShareSafeTitle };
   globalThis.startAccept = start;
   globalThis.stopAccept = stop;
   globalThis.acceptStatus = status;
   globalThis.acceptDebugSnapshot = debugSnapshot;
+  globalThis.setShareSafeTitle = setShareSafeTitle;
 
   console.log(
     `${LOG_PREFIX} loaded (${SCRIPT_HASH}) — startAccept() / stopAccept() / acceptStatus()`
