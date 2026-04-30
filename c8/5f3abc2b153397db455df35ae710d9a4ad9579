@@ -1,0 +1,33 @@
+.cursor/skills/launch-cursor-autoapprove/references/manual-testing.md
+  02c5438baf4946a7 519-532
+.cursor/skills/launch-cursor-autoapprove/SKILL.md
+  02c5438baf4946a7 99
+.cursor/skills/launch-cursor-autoapprove/AGENTS.md
+  02c5438baf4946a7 26-27
+.cursor/skills/launch-cursor-autoapprove/scripts/launcher.py
+  02c5438baf4946a7 31,129-221,1899-1909,2736-2740
+.cursor/skills/launch-cursor-autoapprove/references/implementation.md
+  02c5438baf4946a7 46,253-258
+.cursor/skills/launch-cursor-autoapprove/README.md
+  02c5438baf4946a7 73,88-89
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "c85f3abc2b153397db455df35ae710d9a4ad9579",
+  "prompts": {
+    "02c5438baf4946a7": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "d83a36b2-e1d7-4f72-b018-170dfa2a40f4",
+        "model": "gpt-5.5-extra-high"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 137,
+      "total_deletions": 7,
+      "accepted_lines": 137,
+      "overriden_lines": 0
+    }
+  }
+}
