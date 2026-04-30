@@ -52,6 +52,7 @@
     { pattern: "approve terminal command", id: "approve_terminal_command" },
     { pattern: "always allow", id: "always_allow" },
     { pattern: "allow", id: "allow" },
+    { pattern: "allow scripts", id: "allow_scripts" },
     { pattern: "run this time only", id: "run_this_time" },
     { pattern: "run command", id: "run_command" },
     { pattern: "run", id: "run" },

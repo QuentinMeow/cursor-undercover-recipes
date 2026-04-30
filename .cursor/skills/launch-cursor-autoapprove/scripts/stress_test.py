@@ -167,11 +167,15 @@ TEST_CASES: list[tuple[str, dict, bool, str | None]] = [
      True, "approve_terminal_command"),
     ("edge_plain_text_esc_hint: Skip Esc+Run ↩",
      {"buttons": [_btn("a", "Skip Esc"), _btn("b", "Run ↩")]}, True, "run"),
+    ("edge_allow_scripts_hint: Skip+Allow scripts",
+     {"buttons": [_btn("a", "Skip"), _btn("b", "Allow scripts (⌃⏎)")]}, True, "allow_scripts"),
+    ("edge_allow_scripts_solo: Allow scripts (solo, no guard)",
+     {"buttons": [_btn("a", "Allow scripts")]}, False, None),
 ]
 
 # 1-indexed into TEST_CASES.
 MEANINGFUL_CASE_INDEXES = [
-    1, 2, 11, 20, 23, 27, 32, 34, 37, 41, 43, 46, 50, 51
+    1, 2, 11, 20, 23, 27, 32, 34, 37, 41, 43, 46, 50, 51, 52, 53
 ]
 
 

@@ -135,10 +135,11 @@
   automation into something predictable enough for day-to-day use.
 
 - **Approval synonyms drift across Cursor surfaces**: Some permission prompts
-  use `Approve` wording rather than `Accept`/`Allow`/`Run`. Keep the label list
-  updated with exact synonym variants (`approve`, `approve request`, etc.) and
-  verify with real prompt surfaces whenever users report `Waiting for Approval`
-  plus unchanged click counters.
+  use `Approve` wording rather than `Accept`/`Allow`/`Run`, and compound labels
+  like `Allow scripts` do not match the shorter `allow` pattern. Keep the label
+  list updated with exact synonym variants (`approve`, `approve request`,
+  `allow scripts`, etc.) and verify with real prompt surfaces whenever users
+  report `Waiting for Approval` plus unchanged click counters.
 
 - **Keyboard hints can be plain text, not just glyphs**: Cursor shell approval
   cards may render dismiss buttons like `Skip Esc` instead of plain `Skip`.

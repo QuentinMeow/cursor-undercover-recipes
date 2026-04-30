@@ -334,7 +334,7 @@ Approval labels are matched by exact normalized text:
   - trailing plain-text `Esc`/`Escape` hints on dismiss buttons, e.g. `Skip Esc`
 - Compare with `===` against known patterns:
   - `accept all`, `accept`, `approve`, `approve request`,
-    `approve terminal command`, `always allow`, `allow`
+    `approve terminal command`, `always allow`, `allow`, `allow scripts`
   - `run this time only`, `run command`, `run`
   - `apply`, `execute`, `continue`
   - `switch`, `switch mode`, `change mode`, `confirm`
