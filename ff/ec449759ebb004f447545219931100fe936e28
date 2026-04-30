@@ -1,0 +1,27 @@
+.cursor/skills/launch-cursor-autoapprove/scripts/stress_test.py
+  afcf885c82bfb305 195-197
+.cursor/skills/launch-cursor-autoapprove/tests/fixtures/real-prompts/delete-file-reject-accept.json
+  afcf885c82bfb305 1-19
+.cursor/skills/launch-cursor-autoapprove/scripts/devtools_auto_accept.js
+  afcf885c82bfb305 85-89,95-105,283-296,300-301,412-486,529-532,583
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "ffec449759ebb004f447545219931100fe936e28",
+  "prompts": {
+    "afcf885c82bfb305": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "34fd3358-8615-4018-bd5b-9bf1b6242684",
+        "model": "gpt-5.5-extra-high"
+      },
+      "human_author": "QuentinMeow",
+      "messages": [],
+      "total_additions": 137,
+      "total_deletions": 5,
+      "accepted_lines": 134,
+      "overriden_lines": 0
+    }
+  }
+}
