@@ -1,0 +1,19 @@
+{
+  "name": "delete-file-reject-accept",
+  "description": "File delete approval card: Delete file with Reject + Accept in an embedded editor surface",
+  "source": "real Cursor UI miss reported 2026-04-30, sanitized",
+  "spec": {
+    "role": null,
+    "modal": false,
+    "excluded_zone": "workbench.parts.editor",
+    "class": "composer-tool-former-message",
+    "content": "Delete profile_node.cpython-312.pyc",
+    "buttons": [
+      { "var": "a", "text": "Reject", "tag": "span", "style": "cursor:pointer" },
+      { "var": "b", "text": "Accept", "tag": "span", "style": "cursor:pointer" }
+    ]
+  },
+  "expect_click": true,
+  "expect_id": "accept",
+  "expect_single_click": true
+}
