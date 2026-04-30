@@ -192,6 +192,9 @@ def _build_probe_js(spec: dict, probe_id: str) -> str:
         lines.append(f"zone.id = '{excluded_zone}';")
     lines.append("const d = document.createElement('div');")
     lines.append(f"d.id = '{probe_id}';")
+    root_class = spec.get("class")
+    if root_class:
+        lines.append(f"d.className = {json.dumps(str(root_class))};")
     if root_role:
         lines.append(f"d.setAttribute('role', '{root_role}');")
     if root_modal:

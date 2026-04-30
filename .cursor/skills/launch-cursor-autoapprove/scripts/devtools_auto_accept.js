@@ -82,10 +82,26 @@
     '[class*="action-label"]',
     '.view-allow-btn-container-inner > div',
   ];
+  const LOOSE_TEXT_CONTROL_SELECTORS = [
+    ...BUTTON_SELECTORS,
+    "div",
+    "span",
+  ];
   const PROMPT_ROOT_SELECTORS = [
     '[role="dialog"]',
     '[role="alertdialog"]',
     '[aria-modal="true"]',
+  ];
+  const DELETE_FILE_PROMPT_PATTERN = /\bdelete(?:\s+file)?\b/i;
+  const DELETE_FILE_SEARCH_ROOT_SELECTORS = [
+    ".composer-tool-former-message",
+    ".composer-human-message-container",
+    ".human-message-with-todos-wrapper",
+    ".composer-message",
+    ".conversations",
+    '[class*="composer"]',
+    '[class*="message"]',
+    '[class*="tool"]',
   ];
   const DISMISS_PATTERNS = new Set([
     "skip", "cancel", "dismiss", "deny", "not now", "close", "reject",
@@ -264,11 +280,25 @@
   // Discovery layer: find approval candidates
   // -----------------------------------------------------------------------
 
-  function matchesApproval(el) {
+  function isLikelyLooseTextControl(el) {
+    const tag = el.tagName.toLowerCase();
+    if (tag !== "div" && tag !== "span") return true;
+    const role = (el.getAttribute("role") || "").toLowerCase();
+    const classes = (el.className || "").toString();
+    const cursor = window.getComputedStyle(el).cursor;
+    return (
+      role === "button" ||
+      /button|action|accept|reject/i.test(classes) ||
+      cursor === "pointer"
+    );
+  }
+
+  function matchesApproval(el, options = {}) {
     if (!el || !el.textContent) return null;
     const raw = el.textContent.trim();
     if (raw.length > 60) return null;
-    if (isInExcludedZone(el)) return null;
+    if (isInExcludedZone(el) && !options.allowExcluded) return null;
+    if (options.allowLooseText && !isLikelyLooseTextControl(el)) return null;
     const stripped = normalizeLabel(raw);
     for (const { pattern, id } of APPROVAL_PATTERNS) {
       if (stripped === pattern && isVisible(el) && isClickable(el)) {
@@ -379,6 +409,81 @@
     }
   }
 
+  function _findDeleteFilePromptRoot(el) {
+    let node = el;
+    for (let depth = 0; node && node !== document.body && depth < 8; depth++) {
+      const text = (node.textContent || "").trim();
+      if (text.length <= 2000 && DELETE_FILE_PROMPT_PATTERN.test(text)) {
+        return node;
+      }
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  function _hasLooseLabel(root, labelSet) {
+    const seen = new Set();
+    for (const sel of LOOSE_TEXT_CONTROL_SELECTORS) {
+      for (const el of root.querySelectorAll(sel)) {
+        if (seen.has(el)) continue;
+        seen.add(el);
+        if (!el.textContent || !isVisible(el) || !isClickable(el)) continue;
+        const raw = el.textContent.trim();
+        if (!raw || raw.length > 60) continue;
+        if (labelSet.has(normalizeLabel(raw)) && isLikelyLooseTextControl(el)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function isDeleteFileChangeApprove(btn) {
+    if (!btn || btn.kind !== "approval" || btn.id !== "accept" || !btn.el) return false;
+    const root = _findDeleteFilePromptRoot(btn.el);
+    if (!root || !isVisible(root)) return false;
+    return _hasLooseLabel(root, DISMISS_PATTERNS);
+  }
+
+  function collectDeleteFileChangeMatches(root, out, seen) {
+    const containerSeen = new Set();
+    const containers = [];
+    function addContainer(el) {
+      if (el && !containerSeen.has(el)) {
+        containerSeen.add(el);
+        containers.push(el);
+      }
+    }
+    addContainer(root);
+    for (const sel of DELETE_FILE_SEARCH_ROOT_SELECTORS) {
+      for (const el of root.querySelectorAll(sel)) addContainer(el);
+    }
+
+    for (const container of containers) {
+      const text = (container.textContent || "").trim();
+      if (
+        !text ||
+        text.length > 2000 ||
+        !DELETE_FILE_PROMPT_PATTERN.test(text) ||
+        !isVisible(container)
+      ) {
+        continue;
+      }
+
+      for (const sel of LOOSE_TEXT_CONTROL_SELECTORS) {
+        for (const el of container.querySelectorAll(sel)) {
+          if (seen.has(el)) continue;
+          seen.add(el);
+          const m = matchesApproval(el, {
+            allowExcluded: true,
+            allowLooseText: true,
+          });
+          if (m) out.push({ el, kind: "approval", ...m });
+        }
+      }
+    }
+  }
+
   function findApprovalButtons() {
     const buttons = [];
     const seen = new Set();
@@ -419,6 +524,10 @@
       if (composerRoot) {
         collectApprovalMatches(composerRoot, buttons, seen);
       }
+    }
+
+    if (buttons.length === 0) {
+      collectDeleteFileChangeMatches(document.body, buttons, seen);
     }
 
     if (state.enableResume) {
@@ -471,6 +580,7 @@
   // -----------------------------------------------------------------------
 
   function _eligibilityReason(btn) {
+    if (isDeleteFileChangeApprove(btn)) return "delete_file_change";
     if (!_hasTrustedPromptContext(btn)) return null;
     if (btn.kind === "resume") return "resume";
     if (hasNearbyDismissal(btn.el)) return "dismiss";
