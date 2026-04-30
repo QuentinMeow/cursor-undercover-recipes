@@ -52,6 +52,7 @@ If you set the alias:
 
 ```bash
 caa launch ~/code/my-project
+caa launch-ssh my-devbox /home/user/code/project
 caa on
 caa off
 caa status
@@ -68,7 +69,8 @@ built-in usage summary, `caa help` for examples and doc paths, or
 
 | Command | Behavior |
 |---|---|
-| `launch [--workspace PATH] [PATH]` | Start dedicated Cursor process, inject script, gate ON. Blocks only if the same workspace is already running; other workspaces can run in parallel. |
+| `launch [--workspace PATH] [PATH]` | Start dedicated Cursor process for a local workspace, inject script, gate ON. Blocks only if the same workspace is already running; other workspaces can run in parallel. |
+| `launch-ssh <host> [/absolute/remote/path]` | Start dedicated Cursor connected to an SSH remote host from `~/.ssh/config`, inject script, gate ON. Optionally specify an absolute remote directory path. |
 | `on` | Turn gate ON. Reloads injector code when in-window hash differs from the current injector file. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
 | `off` | Turn gate OFF without closing the dedicated window. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
 | `status` | Show PID, CDP port, workspace, gate state, click count, injector hash, current title, recent clicks, and last approved command preview. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |

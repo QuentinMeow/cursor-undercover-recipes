@@ -10,7 +10,7 @@ target that succeeds." This caused:
 - `caa status` reporting Gate ON while the visible window showed paused
 - `caa on`/`off` toggling the wrong page
 - Window title being set on an unrelated window (e.g., a manually opened
-  `pinkube` repo getting the `autoapprove ✅ cursor-undercover-recipes` title)
+  `other-repo` workspace getting the `autoapprove ✅ demo-repo` title)
 - Click count stuck at 0 because the injector was running on a different
   renderer than the one the user interacted with
 

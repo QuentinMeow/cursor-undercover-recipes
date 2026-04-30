@@ -42,7 +42,8 @@ default and intended for future hardening as internal APIs stabilize.
 
 | Command | Flags | Behavior |
 |---|---|---|
-| `launch` | `--workspace`/`-w`, positional `PATH` | Start dedicated Cursor for workspace, inject script, turn gate ON. |
+| `launch` | `--workspace`/`-w`, positional `PATH` | Start dedicated Cursor for a local workspace, inject script, turn gate ON. |
+| `launch-ssh` | positional `HOST`, optional absolute `PATH` | Start dedicated Cursor connected to an SSH remote host via `--folder-uri`, inject script, turn gate ON. |
 | `on` | `-w PATH\|SLUG` (optional) | Turn gate ON; reload script if hash drift is detected. |
 | `off` | `-w PATH\|SLUG` (optional) | Turn gate OFF; keep dedicated window open. |
 | `status` | `-w PATH\|SLUG` (optional) | Print session details. Shows all sessions if `-w` omitted; ambiguous slugs use the picker. |
@@ -51,6 +52,7 @@ default and intended for future hardening as internal APIs stabilize.
 | `history` | `-w SLUG`, `-n LIMIT`, `--json`, `--commands` | Show persisted event log (session/gate/click events). `--commands` reads the dedicated command ledger with readable multiline output. |
 | `screenshot` | `-w PATH\|SLUG`, `-o FILE` | Capture PNG screenshot of the dedicated window via CDP. |
 | `diagnose` | `-w PATH\|SLUG` | Self-debug: screenshot + DOM snapshot + synthetic probe + summary. |
+| `share-safe` | `--on`, `--off`, `-w PATH\|SLUG` | Toggle a discreet window title for screen sharing, or set it explicitly with `--on` / `--off`. |
 | `help` | optional `COMMAND` topic | Print usage examples, command help, and deeper-doc paths. |
 
 Behavior notes:
@@ -104,17 +106,23 @@ After global install:
 ```json
 {
   "sessions": {
-    "<workspace-path>": {
+    "<workspace-path-or-ssh-uri>": {
       "pid": 12345,
       "cdp_port": 9222,
-      "workspace": "<workspace-path>",
-      "slug": "<directory-name>",
+      "workspace": "<workspace-path-or-ssh-uri>",
+      "slug": "<directory-name-or-ssh-slug>",
       "launched_at": "<UTC ISO timestamp>",
-      "cdp_target_id": "<CDP page target ID>"
+      "cdp_target_id": "<CDP page target ID>",
+      "kind": "ssh",
+      "ssh_host": "<ssh-config-host>",
+      "remote_path": "/path/on/remote"
     }
   }
 }
 ```
+
+For local workspace sessions, `kind`, `ssh_host`, and `remote_path` are absent.
+For SSH sessions, the key is a `vscode-remote://ssh-remote+<host>/<path>` URI.
 
 ### Event History (`history.jsonl`)
 
@@ -171,10 +179,13 @@ Every call to `_load_state()` prunes invalid sessions. A session is removed
 when ANY of these conditions is true:
 
 - **PID dead** — the Cursor process exited (a dead PID cannot be revived).
-- **Workspace path missing** — the directory in the session key no longer
-  exists on disk. This catches ghost sessions from bad launch paths. If the
-  Cursor process is still alive, it is terminated first since a window on a
-  non-existent path is always broken.
+- **Workspace path missing** (local sessions only) — the directory in the
+  session key no longer exists on disk. This catches ghost sessions from bad
+  launch paths. If the Cursor process is still alive, it is terminated first
+  since a window on a non-existent path is always broken.
+
+SSH sessions skip the workspace-path-exists check since the path is remote.
+They are only pruned when their PID is dead.
 
 ### Workspace Resolution
 
@@ -186,8 +197,9 @@ when ANY of these conditions is true:
 3. Treat `<arg>` as an alias name — look it up in `config.json`.
 4. If no match is found, error out with a list of known aliases.
 
-This prevents ghost sessions from bare-name arguments (e.g. `caa launch gocmp`
-from the home directory resolving to the non-existent `~/gocmp`).
+This prevents ghost sessions from bare-name arguments (e.g.
+`caa launch example-lib` from the home directory resolving to the
+non-existent `~/example-lib`).
 
 ### Workspace Aliases (`config.json`)
 
@@ -197,8 +209,8 @@ aliases:
 ```json
 {
   "aliases": {
-    "gocmp": "/Users/qmiao/code/gocmp",
-    "recipes": "/Users/qmiao/code/cursor-undercover-recipes"
+    "example-lib": "/Users/you/code/example-lib",
+    "demo-repo": "/Users/you/code/demo-repo"
   }
 }
 ```
@@ -206,12 +218,12 @@ aliases:
 Aliases are populated two ways:
 
 - **Automatic**: Every successful `caa launch <path>` auto-registers the
-  directory basename as an alias (e.g. launching `/Users/qmiao/code/gocmp`
-  registers `gocmp`). It does not overwrite if the name already points to a
-  different path.
-- **Explicit**: `caa alias set <name> <path>` registers a custom name. The
-  path must exist and the name must not collide with an existing alias for a
-  different path.
+  directory basename as an alias (e.g. launching `/Users/you/code/example-lib`
+  registers `example-lib`). It does not overwrite if the name already points
+  to a different path.
+- **Explicit**: `caa alias set <name> <path-or-ssh-uri>` registers a custom
+  name. Local paths must exist; SSH folder URIs are accepted as-is. The name
+  must not collide with an existing alias for a different target.
 
 `caa alias list` shows all aliases. `caa alias remove <name>` deletes one.
 
@@ -229,9 +241,9 @@ When you run `caa launch --workspace <path>`:
 8. Launch Cursor with:
    - `--remote-debugging-port=<port>`
    - `--user-data-dir ~/.cursor/launch-autoapprove/dedicated-profile-<slug>`
-   - `<workspace>`
+   - `<workspace>` (local launch) or `--folder-uri <vscode-remote URI>` (SSH launch)
 9. Wait for a new Cursor main PID that includes the expected launch args.
-10. Save session to `state.json` under the workspace path key.
+10. Save session to `state.json` under the workspace path (local) or folder URI (SSH) key.
 11. Inject `devtools_auto_accept.js` via CDP `Runtime.evaluate`.
 12. Call `startAccept()` and sync title to `autoapprove ✅ <repo>`.
 
@@ -504,7 +516,7 @@ Runs a 4-step self-contained diagnostic without human involvement:
    button-like elements with their text, excluded-zone status, dialog
    membership, command text candidates from active dialogs, and the current
    injector `acceptStatus()`
-3. **Synthetic probe** — injects a View+Allow dialog, waits one poll interval,
+3. **Synthetic probe** — injects a View+Allow dialog, waits about 4 seconds,
    checks if click count incremented and the probe was clicked
 4. **Summary** — reports PASS/FAIL with all artifacts saved to a timestamped
    directory

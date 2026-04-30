@@ -91,7 +91,7 @@
   entries to accumulate and confuse every subsequent command.
 
 - **Bare-name workspace arguments resolve relative to CWD, not intent**:
-  `Path("gocmp").resolve()` becomes `$CWD/gocmp`, which may not exist.
+  `Path("example-lib").resolve()` becomes `$CWD/example-lib`, which may not exist.
   The launcher must validate that the resolved path is an existing directory.
   Do not guess with hardcoded search parents (e.g. `~/code`) — that is
   environment-specific and breaks for other users. Instead, use an explicit
