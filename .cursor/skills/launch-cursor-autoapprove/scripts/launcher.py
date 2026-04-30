@@ -28,6 +28,7 @@ import json
 import os
 import re
 import select
+import shlex
 import shutil
 import signal
 import sqlite3
@@ -123,6 +124,99 @@ def _parse_ssh_workspace(ws_key: str) -> tuple[str, str] | None:
     host = urllib.parse.unquote(parts[0])
     remote_path = "/" + urllib.parse.unquote(parts[1]) if len(parts) > 1 else "/"
     return host, remote_path
+
+
+def _ssh_config_hosts() -> list[str]:
+    """Return concrete Host aliases from ~/.ssh/config for helpful diagnostics."""
+    config_path = Path.home() / ".ssh" / "config"
+    try:
+        lines = config_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+
+    hosts: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parts = stripped.split()
+        if not parts or parts[0].lower() != "host":
+            continue
+        for pattern in parts[1:]:
+            if any(ch in pattern for ch in "*?[]!"):
+                continue
+            if pattern not in seen:
+                seen.add(pattern)
+                hosts.append(pattern)
+    return hosts
+
+
+def _verify_ssh_remote_path(host: str, remote_path: str) -> tuple[bool, str | None]:
+    """Check that a path-specific SSH launch points at an existing directory."""
+    if remote_path == "/":
+        return True, None
+
+    ssh_exe = shutil.which("ssh") or "ssh"
+    remote_test = f"test -d {shlex.quote(remote_path)}"
+    command = [
+        ssh_exe,
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        host,
+        remote_test,
+    ]
+
+    try:
+        result = subprocess.run(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=15,
+        )
+    except FileNotFoundError:
+        return False, "Could not find the ssh executable on PATH."
+    except subprocess.TimeoutExpired:
+        return (
+            False,
+            f"Timed out while checking {host}:{remote_path} via ssh.",
+        )
+
+    if result.returncode == 0:
+        return True, None
+
+    detail = "\n".join(
+        line for line in (result.stderr.strip(), result.stdout.strip()) if line
+    )
+    if not detail:
+        detail = "ssh exited non-zero; the directory may be missing or inaccessible."
+
+    known_hosts = _ssh_config_hosts()
+    host_tip = ""
+    if known_hosts and host not in known_hosts:
+        preview = ", ".join(known_hosts[:20])
+        if len(known_hosts) > 20:
+            preview += ", ..."
+        host_tip = (
+            "\n\nKnown concrete hosts in ~/.ssh/config: "
+            f"{preview}\n"
+            "launch-ssh expects the SSH config host name, not a Cursor session alias."
+        )
+
+    return (
+        False,
+        "SSH preflight failed while checking the remote workspace directory.\n"
+        f"  host: {host}\n"
+        f"  path: {remote_path}\n"
+        f"  check: {ssh_exe} -o BatchMode=yes -o ConnectTimeout=10 "
+        f"{host} {remote_test}\n\n"
+        f"{detail}"
+        f"{host_tip}",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1802,6 +1896,17 @@ def cmd_launch_ssh(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
+    if remote_path != "/" and not getattr(args, "no_preflight", False):
+        preflight_ok, preflight_error = _verify_ssh_remote_path(host, remote_path)
+        if not preflight_ok:
+            print(preflight_error, file=sys.stderr)
+            print(
+                "\nNo Cursor window was launched, so no dedicated profile or alias "
+                "was created. Use --no-preflight only if you want Cursor Remote SSH "
+                "to handle this check itself.",
+                file=sys.stderr,
+            )
+            return 1
     folder_uri = _ssh_folder_uri(host, remote_path)
     ws_key = folder_uri
     slug = _ssh_slug(host, remote_path)
@@ -2627,6 +2732,11 @@ def build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argument
         nargs="?",
         default="/",
         help="Absolute remote path on the host (default: /)",
+    )
+    p_launch_ssh.add_argument(
+        "--no-preflight",
+        action="store_true",
+        help="Skip the ssh test -d check before launching a path-specific remote workspace",
     )
     p_launch_ssh.set_defaults(func=cmd_launch_ssh)
     command_parsers["launch-ssh"] = p_launch_ssh

@@ -70,7 +70,7 @@ built-in usage summary, `caa help` for examples and doc paths, or
 | Command | Behavior |
 |---|---|
 | `launch [--workspace PATH] [PATH]` | Start dedicated Cursor process for a local workspace, inject script, gate ON. Blocks only if the same workspace is already running; other workspaces can run in parallel. |
-| `launch-ssh <host> [/absolute/remote/path]` | Start dedicated Cursor connected to an SSH remote host from `~/.ssh/config`, inject script, gate ON. Optionally specify an absolute remote directory path. |
+| `launch-ssh <host> [/absolute/remote/path] [--no-preflight]` | Start dedicated Cursor connected to an SSH remote host from `~/.ssh/config`, inject script, gate ON. Path-specific launches verify the remote directory with `ssh <host> test -d <path>` before creating a profile or alias. |
 | `on` | Turn gate ON. Reloads injector code when in-window hash differs from the current injector file. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
 | `off` | Turn gate OFF without closing the dedicated window. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
 | `status` | Show PID, CDP port, workspace, gate state, click count, injector hash, current title, recent clicks, and last approved command preview. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
@@ -85,8 +85,8 @@ built-in usage summary, `caa help` for examples and doc paths, or
 ## Important Behavior
 
 - Uses a dedicated profile at `~/.cursor/launch-autoapprove/dedicated-profile-<slug>/`.
-- Copies only `settings.json` and `keybindings.json` from your default profile.
-- Does **not** copy `state.vscdb` (chat history/account/model state remain profile-specific).
+- Copies `settings.json`, `keybindings.json`, and `cursorAuth/*` auth tokens from your default profile.
+- Does **not** copy non-auth `state.vscdb` rows (chat history/model state remain profile-specific).
 - There is no `inject --restart` command in this supported launcher.
 - `stop` ends the session and closes the dedicated process; the dedicated profile
   folder persists for reuse on the next `launch`.
