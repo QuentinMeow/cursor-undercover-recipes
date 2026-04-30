@@ -2,10 +2,10 @@
 
 ## Symptoms
 
-1. **Ghost sessions from bare names**: Running `caa launch gocmp` from `~`
-   created a session keyed to `/Users/qmiao/gocmp` (non-existent), while the
-   real project at `/Users/qmiao/code/gocmp` already had a session. This
-   doubled the session count (6 entries instead of 3).
+1. **Ghost sessions from bare names**: Running `caa launch example-lib` from
+   `~` created a session keyed to `/Users/you/example-lib` (non-existent),
+   while the real project at `/Users/you/code/example-lib` already had a
+   session. This doubled the session count (6 entries instead of 3).
 
 2. **Wrong workspace opened**: Cursor received the non-existent path and
    opened a blank/wrong window (e.g., treating the path as a file name
@@ -30,9 +30,8 @@
 ## Fixes
 
 1. **Workspace resolution**: Added `_resolve_workspace_for_launch()` which
-   validates the path exists, then falls back to slug matching against
-   existing sessions and searching well-known parent directories
-   (`~/code`, `~/src`, `~/projects`, `~/dev`, `~/repos`).
+   validates the path exists, then falls back to an explicit alias in
+   `config.json`.
 
 2. **Session GC**: Added `_gc_stale_sessions()` called from every
    `_load_state()`. Prunes entries whose PIDs are dead OR whose workspace
@@ -46,8 +45,8 @@
 
 ## Verification
 
-1. `caa launch gocmp` from any directory should resolve to `~/code/gocmp`
-   (or whichever well-known parent contains it).
+1. `caa launch example-lib` from any directory should resolve through an
+   explicit alias, not a guessed local path.
 2. `caa launch nonexistent` should error with a helpful message listing
    known slugs.
 3. `caa status` should only show running sessions (dead entries auto-pruned).

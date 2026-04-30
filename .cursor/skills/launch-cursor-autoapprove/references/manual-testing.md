@@ -352,7 +352,7 @@ Expected result:
 - `status` still reports `Gate: ON`
 - the `Injector:` hash matches the newly installed script
 
-## Optional Test 5: Panel/Alternate Surface Prompt Coverage
+## Optional: Panel/Alternate Surface Prompt Coverage
 
 If your workflow surfaces prompts outside the main chat area (for example panel
 or alternate composer surfaces), verify one such prompt while gate is ON.
@@ -400,11 +400,13 @@ Expected result:
 
 ## Test 9: Automated Harness (Short + Real Snapshot)
 
-Prefer real snapshot mode (no synthetic prompt injection):
+Prefer real snapshot mode (no synthetic prompt injection). Use the CDP port
+shown by `/usr/bin/python3 "$LAUNCHER" status` for the target session:
 
 ```bash
+CDP_PORT="<port-from-status>"
 /usr/bin/python3 "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/scripts/stress_test.py" \
-  --mode snapshot --duration 60 --interval 2.5 --port 9222
+  --mode snapshot --duration 60 --interval 2.5 --port "$CDP_PORT"
 ```
 
 Expected result:
@@ -419,14 +421,14 @@ If you want a fast synthetic smoke suite (combined, meaningful cases only):
 
 ```bash
 /usr/bin/python3 "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/scripts/stress_test.py" \
-  --mode synthetic --suite meaningful --port 9222
+  --mode synthetic --suite meaningful --port "$CDP_PORT"
 ```
 
 Optional deep synthetic matrix:
 
 ```bash
 /usr/bin/python3 "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/scripts/stress_test.py" \
-  --mode synthetic --suite full --port 9222
+  --mode synthetic --suite full --port "$CDP_PORT"
 ```
 
 ## Test 10: Real-Prompt Replay
@@ -435,7 +437,7 @@ Replay sanitized real-prompt fixtures (the end-to-end regression gate):
 
 ```bash
 /usr/bin/python3 "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/scripts/stress_test.py" \
-  --mode replay --port 9222
+  --mode replay --port "$CDP_PORT"
 ```
 
 Expected result:
@@ -466,31 +468,63 @@ Expected result:
 - Artifact files in `~/.cursor/launch-autoapprove/prompt-artifacts/` for any
   blocked or unknown events
 
-Expected result (meaningful suite):
+## Test 12: SSH Remote Launch
 
-- around a dozen high-signal cases (instead of 50)
-- `Results: <n>/<n> passed, 0 failed`
-- artifacts under `logs/<run-id>-harness-synthetic/`
+Verify the dedicated window can connect to an SSH remote host.
 
-Engineering note:
+**Prerequisite**: An SSH host configured in `~/.ssh/config` (e.g. `my-devbox`).
 
-- The evidence package is the source of truth, not just terminal PASS lines.
-- The harness now syncs wait time to `acceptStatus().interval` + margin, so cases
-  are sampled after at least one injector poll. Forcing a shorter wait can create
-  false negatives.
-- The click counter is expected to increase by the number of positive cases,
-  while false-positive guard cases should not contribute clicks.
-- If a case fails, inspect `cases/<N>.json` first (look at `visibleButtons`,
-  `candidates`, and `eligible`), then compare with the paired screenshots.
+1. Launch to the SSH host:
 
-Categories tested:
-- 10 dismiss+approval combinations (cancel, skip, close, etc.)
-- 10 companion+approval combinations (view, stop, details, etc.)
-- 6 single-action modal probes (approve* solo, approve+view, approve+cancel)
-- 4 non-approve solo buttons (should NOT click)
-- 10 false-positive guards (excluded zones, invisible, disabled, etc.)
-- 11 edge cases (keyboard hints, plain-text `Esc` hints, case, whitespace, role=button, etc.)
-- 6 real-prompt replay fixtures (dedupe-checked)
+```bash
+/usr/bin/python3 "$LAUNCHER" launch-ssh my-devbox
+```
+
+2. Confirm the gate is on:
+
+```bash
+/usr/bin/python3 "$LAUNCHER" status
+```
+
+Expected result:
+
+- `Session:` shows the SSH host name as the slug
+- `SSH Host:` shows `my-devbox`
+- `Workspace:` shows the `vscode-remote://ssh-remote+my-devbox/` URI
+- `Gate: ON` and an `Injector:` hash
+
+3. Toggle the gate:
+
+```bash
+/usr/bin/python3 "$LAUNCHER" off -w my-devbox
+/usr/bin/python3 "$LAUNCHER" on -w my-devbox
+```
+
+Expected result:
+
+- `-w` resolves the SSH session by slug
+- gate toggles correctly
+
+4. Launch with a specific remote path:
+
+```bash
+/usr/bin/python3 "$LAUNCHER" launch-ssh my-devbox /home/user/code/project
+```
+
+Expected result:
+
+- slug includes the path tail (e.g. `my-devbox-project`)
+- `Remote:` shows `/home/user/code/project`
+
+5. Stop the SSH session:
+
+```bash
+/usr/bin/python3 "$LAUNCHER" stop -w my-devbox
+```
+
+Expected result:
+
+- session is removed cleanly
 
 ## Cleanup
 
@@ -514,12 +548,11 @@ When the injector silently fails (zero clicks, no blocked/unknown events), deplo
 
 ### Quick-Start Diagnostic Script
 
-Save the following as `/tmp/cdp_fix_diagnostic.py` and run with `python3 /tmp/cdp_fix_diagnostic.py`:
+Save the following as `/tmp/cdp_fix_diagnostic.py` and run with
+`python3 /tmp/cdp_fix_diagnostic.py`:
 
 ```python
-# See .agents/worklog/20260403-0105-PDT-autoclick-auxiliarybar-debugging.md
-# for the full diagnostic script template.
-# The key technique: connect via raw WebSocket to CDP port (default 9222),
+# Key technique: connect via raw WebSocket to the session CDP port from status,
 # evaluate acceptDebugSnapshot() + custom DOM queries every 300ms,
 # and capture per-button details during live prompts.
 ```

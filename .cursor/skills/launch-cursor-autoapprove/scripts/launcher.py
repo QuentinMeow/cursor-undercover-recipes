@@ -3,13 +3,18 @@
 Launch a dedicated Cursor window with DOM auto-accept injected via CDP.
 
 Subcommands:
-    launch  Open dedicated Cursor, inject DOM script, gate ON
-    on      Resume auto-clicking (startAccept via CDP)
-    off     Pause auto-clicking (stopAccept via CDP)
-    status  Show gate state and click count
+    launch      Open dedicated Cursor for a local workspace, inject DOM script, gate ON
+    launch-ssh  Open dedicated Cursor connected to an SSH remote host, inject DOM script, gate ON
+    on          Resume auto-clicking (startAccept via CDP)
+    off         Pause auto-clicking (stopAccept via CDP)
+    status      Show gate state and click count
+    alias       Manage workspace aliases
+    history     Show persisted session/gate/click history
+    screenshot  Capture a screenshot via CDP
+    diagnose    Run a self-contained CDP diagnostic
     share-safe  Toggle discreet window title for screen sharing
-    stop    Pause gate and end session
-    help    Show usage examples and deeper docs
+    stop        Pause gate and end session
+    help        Show usage examples and deeper docs
 """
 
 from __future__ import annotations
@@ -73,6 +78,52 @@ STALE_HOOK_PATTERNS = [
     "personal-cursor-quickapprove",
 ]
 
+SSH_REMOTE_PREFIX = "vscode-remote://ssh-remote+"
+
+
+# ---------------------------------------------------------------------------
+# SSH workspace helpers
+# ---------------------------------------------------------------------------
+
+
+def _is_ssh_workspace(ws_key: str) -> bool:
+    """Return True if the workspace key is a Remote SSH folder URI."""
+    return ws_key.startswith(SSH_REMOTE_PREFIX)
+
+
+def _ssh_folder_uri(host: str, remote_path: str = "/") -> str:
+    """Build a vscode-remote folder URI for an SSH host."""
+    quoted_host = urllib.parse.quote(host, safe="")
+    clean = (remote_path or "/").lstrip("/")
+    quoted_path = urllib.parse.quote(clean, safe="/")
+    return f"{SSH_REMOTE_PREFIX}{quoted_host}/{quoted_path}"
+
+
+def _ssh_slug(host: str, remote_path: str = "/") -> str:
+    """Derive a display slug from an SSH host and optional remote path."""
+    path_part = (
+        remote_path.rstrip("/").rsplit("/", 1)[-1]
+        if remote_path and remote_path != "/"
+        else ""
+    )
+    if path_part:
+        raw = f"{host}-{path_part}"
+    else:
+        raw = host
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-")
+    return slug or "workspace"
+
+
+def _parse_ssh_workspace(ws_key: str) -> tuple[str, str] | None:
+    """Parse a vscode-remote SSH URI into (host, remote_path)."""
+    if not _is_ssh_workspace(ws_key):
+        return None
+    remainder = ws_key[len(SSH_REMOTE_PREFIX):]
+    parts = remainder.split("/", 1)
+    host = urllib.parse.unquote(parts[0])
+    remote_path = "/" + urllib.parse.unquote(parts[1]) if len(parts) > 1 else "/"
+    return host, remote_path
+
 
 # ---------------------------------------------------------------------------
 # Stale-hook detection
@@ -83,7 +134,7 @@ def _check_stale_hooks(workspace: str | Path | None = None) -> list[str]:
     """Return warning lines if any repo or global hooks.json contains retired approval hooks."""
     warnings: list[str] = []
     candidates: list[Path] = [Path.home() / ".cursor" / "hooks.json"]
-    if workspace:
+    if workspace and not _is_ssh_workspace(str(workspace)):
         candidates.append(Path(workspace) / ".cursor" / "hooks.json")
     for hooks_path in candidates:
         if not hooks_path.is_file():
@@ -173,12 +224,16 @@ def _gc_stale_sessions(state: dict) -> dict:
     for ws, s in sessions.items():
         pid = s.get("pid")
         pid_alive = pid and _pid_is_alive(pid)
-        ws_exists = Path(ws).is_dir()
 
-        if pid_alive and ws_exists:
-            keep[ws] = s
-        elif pid_alive and not ws_exists:
-            _terminate_pid(pid, timeout=3.0)
+        if _is_ssh_workspace(ws):
+            if pid_alive:
+                keep[ws] = s
+        else:
+            ws_exists = Path(ws).is_dir()
+            if pid_alive and ws_exists:
+                keep[ws] = s
+            elif pid_alive and not ws_exists:
+                _terminate_pid(pid, timeout=3.0)
         # else: pid dead — just drop the entry
 
     if len(keep) != len(sessions):
@@ -234,7 +289,7 @@ def _save_config(config: dict) -> None:
 
 
 def _get_alias(name: str) -> str | None:
-    """Look up a workspace alias. Returns the absolute path string or None."""
+    """Look up a workspace alias. Returns a local path or SSH folder URI."""
     config = _load_config()
     return config.get("aliases", {}).get(name)
 
@@ -271,8 +326,8 @@ def _list_aliases() -> dict[str, str]:
     return _load_config().get("aliases", {})
 
 
-def _auto_register_alias(workspace: Path) -> None:
-    """Auto-register the directory basename as an alias after a successful launch."""
+def _auto_register_alias(workspace: str | Path) -> None:
+    """Auto-register the directory basename (or SSH slug) as an alias after a successful launch."""
     slug = _repo_slug(workspace)
     ws_str = str(workspace)
     config = _load_config()
@@ -494,6 +549,11 @@ def _help_examples(topic: str | None = None) -> list[str]:
             "  caa launch my-project          # if alias exists",
             "  caa launch -w ~/code/another-project",
         ],
+        "launch-ssh": [
+            "Examples:",
+            "  caa launch-ssh my-devbox",
+            "  caa launch-ssh my-devbox /home/user/code/project",
+        ],
         "on": [
             "Examples:",
             "  caa on",
@@ -541,6 +601,8 @@ def _help_examples(topic: str | None = None) -> list[str]:
         "Examples:",
         "  caa launch ~/code/my-project",
         "  caa launch my-project          # uses alias if set",
+        "  caa launch-ssh my-devbox",
+        "  caa launch-ssh my-devbox /home/user/code/project",
         "  caa alias set mp ~/code/my-project",
         "  caa alias list",
         "  caa off",
@@ -553,8 +615,8 @@ def _help_examples(topic: str | None = None) -> list[str]:
         "  caa help off",
         "",
         "Aliases:",
-        "  - 'launch' auto-registers the directory name as an alias",
-        "  - use 'caa alias set <name> <path>' to add a custom alias",
+        "  - 'launch' and 'launch-ssh' auto-register the slug as an alias",
+        "  - use 'caa alias set <name> <path-or-ssh-uri>' to add a custom alias",
         "  - use 'caa alias list' to see all aliases",
         "",
         "Multi-session behavior:",
@@ -759,6 +821,10 @@ def _terminate_pid(pid: int, timeout: float = 5.0) -> bool:
 
 
 def _repo_slug(workspace: str | Path) -> str:
+    ws_str = str(workspace)
+    parsed = _parse_ssh_workspace(ws_str)
+    if parsed:
+        return _ssh_slug(parsed[0], parsed[1])
     raw = Path(workspace).name.strip() or "workspace"
     slug = re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-")
     return slug or "workspace"
@@ -1338,11 +1404,15 @@ def _resolve_session(args: argparse.Namespace, state: dict,
 
     workspace_arg = getattr(args, "workspace", None)
     if workspace_arg:
-        workspace_path = Path(workspace_arg).expanduser()
-        path_like = (
+        if workspace_arg in sessions:
+            return sessions[workspace_arg]
+
+        is_ssh = _is_ssh_workspace(workspace_arg)
+        workspace_path = Path(workspace_arg).expanduser() if not is_ssh else None
+        path_like = not is_ssh and (
             workspace_arg.startswith(("~", ".", "..")) or
             os.sep in workspace_arg or
-            workspace_path.exists()
+            (workspace_path is not None and workspace_path.exists())
         )
         matches = {
             ws: s for ws, s in sessions.items()
@@ -1362,9 +1432,10 @@ def _resolve_session(args: argparse.Namespace, state: dict,
             )
             _print_session_choices(matches)
             return None
-        resolved = str(workspace_path.resolve())
-        if resolved in sessions:
-            return sessions[resolved]
+        if workspace_path is not None:
+            resolved = str(workspace_path.resolve())
+            if resolved in sessions:
+                return sessions[resolved]
         if not path_like:
             alias_target = _get_alias(workspace_arg)
             if alias_target and alias_target in sessions:
@@ -1379,7 +1450,7 @@ def _resolve_session(args: argparse.Namespace, state: dict,
         return next(iter(sessions.values()))
 
     if not sessions:
-        print("No active sessions. Run 'launch' first.", file=diag_stream)
+        print("No active sessions. Run 'launch' or 'launch-ssh' first.", file=diag_stream)
         return None
 
     if allow_interactive:
@@ -1409,6 +1480,11 @@ def _print_session_status(session: dict) -> None:
     print(f"PID:       {pid or 'none'} ({'running' if alive else 'stopped'})")
     print(f"CDP port:  {port or 'none'}")
     print(f"Workspace: {workspace}")
+    if session.get("kind") == "ssh":
+        print(f"SSH Host:  {session.get('ssh_host', '?')}")
+        rp = session.get("remote_path", "/")
+        if rp and rp != "/":
+            print(f"Remote:    {rp}")
     print(f"Launched:  {session.get('launched_at', 'unknown')}")
     if bound_target:
         print(f"Target:    {bound_target}")
@@ -1685,6 +1761,151 @@ def cmd_launch(args: argparse.Namespace) -> int:
 
     _log_event("session", ws_key, slug, action="launch", pid=pid,
                cdp_port=cdp_port, cdp_target_id=pinned_target)
+
+    if inject_ok:
+        result = _cdp_gate(cdp_port, "on", title=enabled_title,
+                           target_id=pinned_target)
+        print("\nAuto-approve ON.")
+        print(f"Window title target: {enabled_title}")
+        if pinned_target:
+            print(f"Bound target: {pinned_target}")
+        if result and result.get("scriptHash"):
+            print(f"Injector hash: {result['scriptHash']}")
+        _log_event("gate", ws_key, slug, action="on",
+                   cdp_target_id=pinned_target)
+    else:
+        print(
+            "\nCDP injection failed. Retry by running this launcher with 'on' "
+            "(for example: caa on).",
+            file=sys.stderr,
+        )
+        print("Or paste the DOM script manually into DevTools.", file=sys.stderr)
+
+    print("  'caa off'    pause auto-clicking")
+    print("  'caa on'     resume auto-clicking")
+    print("  'caa status' check state")
+    print("  'caa stop'   end session")
+    print("  'caa help'   usage examples and docs")
+    return 0
+
+
+def cmd_launch_ssh(args: argparse.Namespace) -> int:
+    """Launch a dedicated Cursor window connected to an SSH remote host."""
+    state = _load_state()
+    sessions = state.get("sessions", {})
+
+    host = args.ssh_host
+    remote_path = getattr(args, "remote_path", None) or "/"
+    if not remote_path.startswith("/"):
+        print(
+            "Remote path must be absolute (for example: /home/user/code/project).",
+            file=sys.stderr,
+        )
+        return 1
+    folder_uri = _ssh_folder_uri(host, remote_path)
+    ws_key = folder_uri
+    slug = _ssh_slug(host, remote_path)
+    enabled_title = _window_title(ws_key, gate_on=True)
+
+    for warn in _check_stale_hooks():
+        print(warn, file=sys.stderr)
+
+    existing = sessions.get(ws_key)
+    if existing and existing.get("pid") and _pid_is_alive(existing["pid"]):
+        print(f"A dedicated Cursor is already running for {slug} (PID {existing['pid']}).")
+        print("Use 'on'/'off' to toggle, or 'stop -w' first to relaunch.")
+        return 1
+
+    for ws, s in sessions.items():
+        if ws != ws_key and s.get("slug") == slug and s.get("pid") and _pid_is_alive(s["pid"]):
+            slug = slug + "-" + hashlib.sha256(ws_key.encode()).hexdigest()[:6]
+            break
+
+    profile = _profile_dir(slug)
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    profile.mkdir(parents=True, exist_ok=True)
+
+    print("Syncing user settings from default Cursor profile...")
+    _sync_user_settings(profile)
+
+    try:
+        cdp_port = _cdp_find_port()
+    except RuntimeError as exc:
+        print(f"Could not find an available CDP port: {exc}", file=sys.stderr)
+        return 1
+
+    existing_pids = set(_cursor_main_pids())
+    required_args = [
+        f"--remote-debugging-port={cdp_port}",
+        "--user-data-dir",
+        str(profile),
+    ]
+
+    command = [
+        "open", "-na", str(CURSOR_APP_PATH), "--args",
+        f"--remote-debugging-port={cdp_port}",
+        "--user-data-dir", str(profile),
+        "--folder-uri", folder_uri,
+    ]
+    subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+        close_fds=True,
+    )
+    display_path = remote_path if remote_path != "/" else ""
+    print(f"Launching dedicated Cursor for ssh://{host}{display_path} (CDP port {cdp_port})...")
+
+    try:
+        pid = _wait_for_new_pid(existing_pids, LAUNCH_TIMEOUT, required_args=required_args)
+    except RuntimeError:
+        print("Falling back to direct executable launch...")
+        subprocess.Popen(
+            [str(CURSOR_EXECUTABLE),
+             f"--remote-debugging-port={cdp_port}",
+             "--user-data-dir", str(profile),
+             "--folder-uri", folder_uri],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )
+        try:
+            pid = _wait_for_new_pid(existing_pids, LAUNCH_TIMEOUT, required_args=required_args)
+        except RuntimeError:
+            print("Failed to detect new Cursor process.", file=sys.stderr)
+            return 1
+
+    sessions[ws_key] = {
+        "pid": pid,
+        "cdp_port": cdp_port,
+        "workspace": ws_key,
+        "slug": slug,
+        "kind": "ssh",
+        "ssh_host": host,
+        "remote_path": remote_path,
+        "launched_at": datetime.now(timezone.utc).isoformat(),
+    }
+    state["sessions"] = sessions
+    _save_state(state)
+    _auto_register_alias(ws_key)
+
+    print(f"Cursor started (PID {pid}). Waiting for CDP to become ready...")
+    time.sleep(CDP_INJECT_DELAY)
+
+    inject_ok, pinned_target = _cdp_inject(
+        cdp_port, auto_start=False, force_reload=True, repo_slug=slug,
+    )
+    if inject_ok and pinned_target:
+        sessions[ws_key]["cdp_target_id"] = pinned_target
+        _save_state(state)
+
+    _log_event("session", ws_key, slug, action="launch", pid=pid,
+               cdp_port=cdp_port, cdp_target_id=pinned_target, kind="ssh",
+               ssh_host=host, remote_path=remote_path)
 
     if inject_ok:
         result = _cdp_gate(cdp_port, "on", title=enabled_title,
@@ -2003,11 +2224,14 @@ def cmd_alias(args: argparse.Namespace) -> int:
         aliases = _list_aliases()
         if not aliases:
             print("No aliases configured.")
-            print("  caa alias set <name> <path>")
+            print("  caa alias set <name> <path-or-ssh-uri>")
             return 0
         for name, path in sorted(aliases.items()):
-            exists = Path(path).is_dir()
-            marker = "" if exists else "  (path missing!)"
+            if _is_ssh_workspace(path):
+                marker = "  (ssh)"
+            else:
+                exists = Path(path).is_dir()
+                marker = "" if exists else "  (path missing!)"
             print(f"  {name:30s} {path}{marker}")
         return 0
 
@@ -2015,8 +2239,15 @@ def cmd_alias(args: argparse.Namespace) -> int:
         name = args.alias_name
         raw_path = args.alias_path
         if not name or not raw_path:
-            print("Usage: caa alias set <name> <path>", file=sys.stderr)
+            print("Usage: caa alias set <name> <path-or-ssh-uri>", file=sys.stderr)
             return 1
+        if _is_ssh_workspace(raw_path):
+            err = _set_alias(name, raw_path)
+            if err:
+                print(err, file=sys.stderr)
+                return 1
+            print(f"Alias '{name}' -> {raw_path}")
+            return 0
         ws = Path(raw_path).expanduser().resolve()
         if not ws.is_dir():
             print(f"Path '{raw_path}' (resolved: {ws}) is not an existing directory.",
@@ -2386,6 +2617,20 @@ def build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argument
     p_launch.set_defaults(func=cmd_launch)
     command_parsers["launch"] = p_launch
 
+    p_launch_ssh = sub.add_parser(
+        "launch-ssh",
+        help="Open dedicated Cursor to SSH remote with auto-approve",
+    )
+    p_launch_ssh.add_argument("ssh_host", help="SSH host (from ~/.ssh/config)")
+    p_launch_ssh.add_argument(
+        "remote_path",
+        nargs="?",
+        default="/",
+        help="Absolute remote path on the host (default: /)",
+    )
+    p_launch_ssh.set_defaults(func=cmd_launch_ssh)
+    command_parsers["launch-ssh"] = p_launch_ssh
+
     p_on = sub.add_parser("on", help="Resume auto-clicking")
     p_on.add_argument("--workspace", "-w", help=ws_help)
     p_on.add_argument("workspace_pos", nargs="?", help=ws_help)
@@ -2443,7 +2688,10 @@ def build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argument
     alias_sub.add_parser("list", help="List all aliases")
     p_alias_set = alias_sub.add_parser("set", help="Create or update an alias")
     p_alias_set.add_argument("alias_name", help="Short alias name")
-    p_alias_set.add_argument("alias_path", help="Workspace directory path")
+    p_alias_set.add_argument(
+        "alias_path",
+        help="Workspace directory path or SSH folder URI",
+    )
     p_alias_rm = alias_sub.add_parser("remove", help="Remove an alias")
     p_alias_rm.add_argument("alias_name", help="Alias to remove")
     p_alias.set_defaults(func=cmd_alias)
