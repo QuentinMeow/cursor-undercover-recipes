@@ -516,7 +516,20 @@ Expected result:
 - slug includes the path tail (e.g. `my-devbox-project`)
 - `Remote:` shows `/home/user/code/project`
 
-5. Stop the SSH session:
+5. Verify a bad path fails before launch:
+
+```bash
+/usr/bin/python3 "$LAUNCHER" launch-ssh my-devbox /definitely/not/a/real/path
+```
+
+Expected result:
+
+- command exits non-zero with an SSH preflight error
+- no Cursor window, session, profile, or alias is created for the bad path
+- `--no-preflight` is available for environments where Cursor Remote SSH should
+  handle the connection check itself
+
+6. Stop the SSH session:
 
 ```bash
 /usr/bin/python3 "$LAUNCHER" stop -w my-devbox

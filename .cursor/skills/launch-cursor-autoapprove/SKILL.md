@@ -96,7 +96,7 @@ lifecycle with `on`/`off`/`stop`.
 | Command | What it does |
 |---------|-------------|
 | `launch [-w PATH] [PATH\|ALIAS]` | Open dedicated Cursor, inject DOM script, gate ON. Accepts a concrete path (relative or absolute) or a registered alias. Auto-registers the directory name as an alias. Blocks only if the same workspace is already running. Multiple workspaces can run simultaneously. |
-| `launch-ssh <host> [/absolute/remote/path]` | Open dedicated Cursor connected to an SSH remote host (from `~/.ssh/config`), inject DOM script, gate ON. Auto-registers the host slug as an alias. Optionally specify an absolute remote directory path. |
+| `launch-ssh <host> [/absolute/remote/path] [--no-preflight]` | Open dedicated Cursor connected to an SSH remote host (from `~/.ssh/config`), inject DOM script, gate ON. Path-specific launches first verify the remote directory with `ssh <host> test -d <path>` so bad host/path pairs fail before creating a profile or alias. |
 | `on [-w PATH\|SLUG]` | Resume auto-clicking (`startAccept()` via CDP). Reloads stale in-window injector code when hash differs. Auto-detected if only one session, otherwise opens an interactive picker in a TTY. |
 | `off [-w PATH\|SLUG]` | Pause auto-clicking (`stopAccept()` via CDP) while keeping the dedicated window open. Auto-detected if only one session, otherwise opens an interactive picker in a TTY. |
 | `status [-w PATH\|SLUG]` | Show session details including last approved command preview. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |

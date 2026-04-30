@@ -43,7 +43,7 @@ default and intended for future hardening as internal APIs stabilize.
 | Command | Flags | Behavior |
 |---|---|---|
 | `launch` | `--workspace`/`-w`, positional `PATH` | Start dedicated Cursor for a local workspace, inject script, turn gate ON. |
-| `launch-ssh` | positional `HOST`, optional absolute `PATH` | Start dedicated Cursor connected to an SSH remote host via `--folder-uri`, inject script, turn gate ON. |
+| `launch-ssh` | positional `HOST`, optional absolute `PATH`, `--no-preflight` | Start dedicated Cursor connected to an SSH remote host via `--folder-uri`, inject script, turn gate ON. Path-specific launches preflight the remote directory with `ssh <host> test -d <path>` before profile/session creation. |
 | `on` | `-w PATH\|SLUG` (optional) | Turn gate ON; reload script if hash drift is detected. |
 | `off` | `-w PATH\|SLUG` (optional) | Turn gate OFF; keep dedicated window open. |
 | `status` | `-w PATH\|SLUG` (optional) | Print session details. Shows all sessions if `-w` omitted; ambiguous slugs use the picker. |
@@ -249,6 +249,12 @@ When you run `caa launch --workspace <path>`:
 
 If `open -na` path detection fails, the launcher falls back to direct executable
 launch and repeats PID detection.
+
+For `caa launch-ssh <host> <remote-path>`, absolute path validation happens
+first. If `<remote-path>` is not `/`, the launcher also runs a bounded
+`ssh <host> test -d <remote-path>` preflight before creating the profile,
+session, or alias. `--no-preflight` skips this check and lets Cursor Remote SSH
+handle the connection.
 
 ## CDP Target Selection and Stable Binding
 

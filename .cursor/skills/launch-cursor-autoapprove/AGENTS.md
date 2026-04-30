@@ -23,7 +23,8 @@ rules in this file.
 - `references/implementation.md` -- user-facing architecture and code-path deep dive.
 - `references/manual-testing.md` -- user-facing smoke-test plan and evidence guide.
 - `references/retired-approaches.md` -- why older auto-approval skills were removed.
-- `scripts/launcher.py` -- main launcher script (launch, on, off, status, stop).
+- `scripts/launcher.py` -- main CLI for launching, SSH remotes, toggles, status,
+  aliases, history, diagnostics, screenshots, share-safe mode, and stopping sessions.
 - `scripts/devtools_auto_accept.js` -- canonical DOM injector for this skill.
 - `scripts/install.sh` -- installs globally to `~/.cursor/launch-autoapprove/` or copies the skill into another repo.
 
