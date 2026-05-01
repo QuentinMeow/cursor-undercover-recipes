@@ -1,0 +1,19 @@
+{
+  "name": "allow-scripts-command-card",
+  "description": "Script permission command card: Skip + Allow scripts + Accept",
+  "source": "real Cursor UI report 2026-04-30, sanitized from screenshot",
+  "spec": {
+    "role": "dialog",
+    "modal": true,
+    "content": "ensure_kubectl_auth.py",
+    "buttons": [
+      { "var": "a", "text": "Skip" },
+      { "var": "b", "text": "Allow scripts (⌃⏎)" },
+      { "var": "c", "text": "Accept" }
+    ]
+  },
+  "expect_click": true,
+  "expect_id": "allow_scripts",
+  "expect_single_click": true,
+  "expect_command_preview": "ensure_kubectl_auth.py"
+}
