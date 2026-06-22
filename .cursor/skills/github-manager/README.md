@@ -6,7 +6,7 @@
 switching** (without touching `git` config) plus an evidence-first **PR
 lifecycle** guide merged from an internal company `github-pr-manager` workflow.
 Use it for summaries, reviews, stacked PRs (Aviator), merge strategy, and safe
-cleanup.
+local branch cleanup.
 
 ## Quick Start
 
@@ -24,6 +24,14 @@ Open [SKILL.md](SKILL.md), then follow links into
 [references/pr-workflows-comprehensive.md](references/pr-workflows-comprehensive.md)
 for Section 1 (always get the real PR base) and scenarios A–E.
 
+### Local branch cleanup
+
+```bash
+python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/branch_cleanup.py" --clean --fetch
+```
+
+Use `--dry-run --fetch` to preview the table without deleting local branches.
+
 ### Global copy on another machine
 
 ```bash
@@ -36,6 +44,8 @@ Then use Cursor slash command **`/global-github-manager`**.
 
 - **`scripts/gh_identity.py`** — saves the active `gh` user before `enter`,
   restores it on `leave`, using state under the repo’s `.git/` directory.
+- **`scripts/branch_cleanup.py`** — safely deletes branches already merged into
+  `main`/`master` and reports PR/remote/local-only status in a Markdown table.
 - **Comprehensive reference** — stacked PRs, AIO-merge vs stacked-merge,
   `av` CLI, merge queues, and troubleshooting live in
   `references/pr-workflows-comprehensive.md`.
