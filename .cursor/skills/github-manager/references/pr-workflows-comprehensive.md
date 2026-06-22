@@ -1148,10 +1148,11 @@ Use after any merge (AIO-merge or stacked-merge) to ensure a clean state.
 Prefer the helper so cleanup and branch status are captured in one table:
 
 ```bash
-python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/branch_cleanup.py" --clean --fetch
+python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/branch_cleanup.py" --clean
 ```
 
-The helper resolves the repo's `main`/`master` base, deletes only local branches
+The helper refreshes `origin`, tries to fast-forward local `main`/`master`, then
+resolves the repo's latest `main`/`master` base. It deletes only local branches
 that Git considers merged via `git branch -d`, and prints each inspected branch
 as one of:
 
@@ -1165,8 +1166,11 @@ as one of:
 Preview without deletion:
 
 ```bash
-python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/branch_cleanup.py" --dry-run --fetch
+python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/branch_cleanup.py" --dry-run
 ```
+
+Use `--no-fetch` only when the user explicitly wants to avoid refreshing the
+base branch.
 
 If the helper is unavailable, list and review branch names before deleting, then
 use `git branch -d <branch>` for each confirmed merged branch. Do not use force
