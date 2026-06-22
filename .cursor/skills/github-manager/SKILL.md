@@ -72,10 +72,12 @@ Scenario A → [pr-summary-format.md](references/pr-summary-format.md).
 For local merged-branch cleanup with a status table:
 
 ```bash
-python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/branch_cleanup.py" --clean --fetch
+python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/branch_cleanup.py" --clean
 ```
 
-Use `--dry-run --fetch` to preview without deleting local branches.
+The helper refreshes `origin`, tries to fast-forward local `main`/`master`, and
+compares against the latest resolved base before classifying branches. Use
+`--dry-run` to preview without deleting local branches.
 
 ---
 
@@ -88,7 +90,8 @@ Use `--dry-run --fetch` to preview without deleting local branches.
 | `av` (Aviator) | Stacked PR operations in Scenarios B–E only — `brew install aviator-co/tap/av`, then `av init` in repo root |
 
 Scenario E branch cleanup requires only `git`; `gh` is optional but needed to
-show PR status and links in the branch table.
+show PR status and links in the branch table. Use `--no-fetch` only when the
+user explicitly wants to avoid network refresh.
 
 SSH **certificate**-based org remotes: use your organization's documented cert
 tooling; `gh auth login` alone does not replace SSH for `git push`. See the

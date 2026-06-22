@@ -63,6 +63,17 @@ def remote_exists(cwd: str, remote: str) -> bool:
     return remote in {line.strip() for line in proc.stdout.splitlines()}
 
 
+def base_branch_name(base_ref: str, remote: str) -> str:
+    if base_ref.startswith("refs/heads/"):
+        return base_ref.removeprefix("refs/heads/")
+    remote_prefix = f"{remote}/"
+    if base_ref.startswith(remote_prefix):
+        return base_ref.removeprefix(remote_prefix)
+    if "/" not in base_ref:
+        return base_ref
+    return base_ref.rsplit("/", 1)[1]
+
+
 def resolve_base(cwd: str, remote: str, explicit_base: str | None) -> tuple[str, str]:
     if explicit_base:
         if not ref_exists(cwd, explicit_base):
@@ -80,6 +91,40 @@ def resolve_base(cwd: str, remote: str, explicit_base: str | None) -> tuple[str,
             return candidate, candidate
 
     raise RuntimeError(f"could not resolve a base branch from {remote}/HEAD, main, or master")
+
+
+def refresh_default_base(cwd: str, remote: str, explicit_base: str | None, notes: list[str]) -> None:
+    if explicit_base:
+        return
+    if not remote_exists(cwd, remote):
+        notes.append(f"remote not found, skipped fetch: {remote}")
+        return
+
+    fetch_proc = git(cwd, ["fetch", "--prune", remote])
+    if fetch_proc.returncode != 0:
+        notes.append(f"fetch failed: {first_line(fetch_proc.stderr) or first_line(fetch_proc.stdout)}")
+        return
+
+    try:
+        base_ref, _ = resolve_base(cwd, remote, None)
+    except RuntimeError as exc:
+        notes.append(str(exc))
+        return
+
+    local_base = base_branch_name(base_ref, remote)
+    if local_base not in {"main", "master"} or not ref_exists(cwd, local_base):
+        return
+
+    if current_branch(cwd) == local_base:
+        update_proc = git(cwd, ["pull", "--ff-only", remote, local_base])
+        action = f"pull {remote} {local_base}"
+    else:
+        update_proc = git(cwd, ["fetch", remote, f"{local_base}:refs/heads/{local_base}"])
+        action = f"fast-forward local {local_base}"
+
+    if update_proc.returncode != 0:
+        reason = first_line(update_proc.stderr) or first_line(update_proc.stdout)
+        notes.append(f"could not {action}; comparing refreshed {remote}/{local_base}: {reason}")
 
 
 def local_base_names(base_ref: str) -> set[str]:
@@ -244,9 +289,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     mode.add_argument("--dry-run", action="store_true", help="Preview cleanup without deleting branches.")
 
     fetch = parser.add_mutually_exclusive_group()
-    fetch.add_argument("--fetch", dest="fetch", action="store_true", help="Run git fetch --prune before inspecting branches.")
-    fetch.add_argument("--no-fetch", dest="fetch", action="store_false", help="Skip fetch before inspecting branches.")
-    parser.set_defaults(fetch=False)
+    fetch.add_argument(
+        "--fetch",
+        dest="fetch",
+        action="store_true",
+        help="Refresh the default base before inspecting branches. This is the default.",
+    )
+    fetch.add_argument("--no-fetch", dest="fetch", action="store_false", help="Skip refreshing the default base.")
+    parser.set_defaults(fetch=True)
     return parser.parse_args(argv)
 
 
@@ -257,12 +307,7 @@ def main(argv: list[str]) -> int:
     try:
         cwd = repo_root()
         if args.fetch:
-            if remote_exists(cwd, args.remote):
-                fetch_proc = git(cwd, ["fetch", "--prune", args.remote])
-                if fetch_proc.returncode != 0:
-                    notes.append(f"fetch failed: {first_line(fetch_proc.stderr) or first_line(fetch_proc.stdout)}")
-            else:
-                notes.append(f"remote not found, skipped fetch: {args.remote}")
+            refresh_default_base(cwd, args.remote, args.base, notes)
 
         base_ref, base_label = resolve_base(cwd, args.remote, args.base)
         branches = list_local_branches(cwd)

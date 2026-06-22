@@ -27,10 +27,12 @@ for Section 1 (always get the real PR base) and scenarios A–E.
 ### Local branch cleanup
 
 ```bash
-python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/branch_cleanup.py" --clean --fetch
+python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/branch_cleanup.py" --clean
 ```
 
-Use `--dry-run --fetch` to preview the table without deleting local branches.
+The helper refreshes `origin`, tries to fast-forward local `main`/`master`, then
+compares against the latest base. Use `--dry-run` to preview the table without
+deleting local branches.
 
 ### Global copy on another machine
 

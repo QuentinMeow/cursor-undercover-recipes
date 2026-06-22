@@ -64,6 +64,9 @@ bash "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/ins
 - Identity helpers must fail closed on ambiguous state.
 - Branch cleanup must use safe local deletion (`git branch -d`), never force
   deletion, unless the user explicitly asks for unsafe cleanup.
+- Branch cleanup must refresh `origin` and try to fast-forward local
+  `main`/`master` before comparing, unless the user explicitly requests
+  `--no-fetch`.
 - Generalize employer-specific tool names in the comprehensive reference; keep
   optional `.agent-files/pr` paths as **org convention**, with personal default
   under `logs/` per `SKILL.md`.
