@@ -67,6 +67,8 @@ bash "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/ins
 - Branch cleanup must refresh `origin` and try to fast-forward local
   `main`/`master` before comparing, unless the user explicitly requests
   `--no-fetch`.
+- Branch cleanup responses must include the helper's full Markdown table for all
+  inspected local branches; do not replace it with a prose-only summary.
 - Generalize employer-specific tool names in the comprehensive reference; keep
   optional `.agent-files/pr` paths as **org convention**, with personal default
   under `logs/` per `SKILL.md`.

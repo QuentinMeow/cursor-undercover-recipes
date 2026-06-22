@@ -1172,6 +1172,11 @@ python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/
 Use `--no-fetch` only when the user explicitly wants to avoid refreshing the
 base branch.
 
+When reporting results to the user, include the helper's full `Base`, `Mode`,
+and Markdown table output. Do not summarize branch cleanup as prose only; the
+table is the contract because it shows every inspected branch and its status in
+one view.
+
 If the helper is unavailable, list and review branch names before deleting, then
 use `git branch -d <branch>` for each confirmed merged branch. Do not use force
 deletion unless the user explicitly asks for unsafe cleanup.

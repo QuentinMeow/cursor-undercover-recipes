@@ -79,6 +79,28 @@ The helper refreshes `origin`, tries to fast-forward local `main`/`master`, and
 compares against the latest resolved base before classifying branches. Use
 `--dry-run` to preview without deleting local branches.
 
+### Branch cleanup response format
+
+After running branch cleanup, the final user response must include the helper's
+full Markdown table for all inspected local branches. Preserve every row and the
+PR links/statuses exactly enough for the user to see which branches were
+cleaned, have PRs, are pushed to remote, or are local only.
+
+Use this shape:
+
+```markdown
+Base: `<base-ref>`
+Mode: `<clean|dry-run>`
+
+| Branch | Status | PR | Remote | Notes |
+|--------|--------|----|--------|-------|
+| ... |
+
+<one short sentence for anything important not already obvious from the table>
+```
+
+Do not replace the table with a prose-only summary.
+
 ---
 
 ## Prerequisites (short)
