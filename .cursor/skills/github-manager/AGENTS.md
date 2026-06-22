@@ -29,6 +29,7 @@ here, and overflow in `references/`.
 - `references/splitting-strategy.md` — how to split large PRs.
 - `references/analysis-commands.md` — numstat / classification helpers.
 - `references/reviewer-best-practices.md` — research-backed review tips.
+- `scripts/branch_cleanup.py` — safe local branch cleanup table for Scenario E.
 - `scripts/gh_identity.py` — `gh` identity helper.
 - `scripts/install.sh` — install to `~/.cursor/skills/global-github-manager/` or another repo.
 - `tests/test_gh_identity.py` — unit tests for identity state.
@@ -39,6 +40,7 @@ here, and overflow in `references/`.
 ```bash
 python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/gh_identity.py" status --target-user QuentinMeow
 python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/gh_identity.py" enter --target-user QuentinMeow --dry-run
+python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/branch_cleanup.py" --dry-run --no-fetch
 python3 -m unittest discover -s "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/tests"
 bash "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/install.sh" --target global --dry-run
 ```
@@ -60,6 +62,8 @@ bash "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/ins
   sensitive account details.
 - Never change `git config` from this skill.
 - Identity helpers must fail closed on ambiguous state.
+- Branch cleanup must use safe local deletion (`git branch -d`), never force
+  deletion, unless the user explicitly asks for unsafe cleanup.
 - Generalize employer-specific tool names in the comprehensive reference; keep
   optional `.agent-files/pr` paths as **org convention**, with personal default
   under `logs/` per `SKILL.md`.
@@ -73,6 +77,8 @@ bash "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/ins
 ### Verification
 
 - After `gh_identity.py` changes: `unittest` + `status` / `enter --dry-run`.
+- After `branch_cleanup.py` changes: `py_compile`, `--help`, and
+  `--dry-run --no-fetch`.
 - After `install.sh` changes: `--dry-run` for global and repo targets.
 - After doc edits: keep `README.md` and `SKILL.md` short; push detail into
   `references/`.

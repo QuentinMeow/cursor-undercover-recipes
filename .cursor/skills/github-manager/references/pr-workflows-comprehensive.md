@@ -1143,20 +1143,34 @@ Aviator should have already deleted the stacked PR branches on merge.
 
 Use after any merge (AIO-merge or stacked-merge) to ensure a clean state.
 
-### E.1 — Delete local branches
+### E.1 — Clean local merged branches
+
+Prefer the helper so cleanup and branch status are captured in one table:
 
 ```bash
-# List all branches related to the stack (REVIEW before deleting)
-git branch | grep -E '<pattern>'
-
-# Verify these are the correct branches before deleting
-# Delete them
-git branch -D <branch1> <branch2> ...
+python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/branch_cleanup.py" --clean --fetch
 ```
 
-> **Safety**: Always list and review branch names before deleting. Derive
-> branch names from `gh pr view <PR> --json headRefName` rather than typing
-> manually.
+The helper resolves the repo's `main`/`master` base, deletes only local branches
+that Git considers merged via `git branch -d`, and prints each inspected branch
+as one of:
+
+| Status | Meaning |
+|--------|---------|
+| `merged and cleaned locally` | The branch was merged into the base and deleted locally. |
+| `PR created (...)` | The branch was not cleaned and has a GitHub PR, including state and link. |
+| `pushed to remote` | No PR was found, but the branch has an upstream or matching remote branch. |
+| `local only` | No PR or remote branch was found. |
+
+Preview without deletion:
+
+```bash
+python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/branch_cleanup.py" --dry-run --fetch
+```
+
+If the helper is unavailable, list and review branch names before deleting, then
+use `git branch -d <branch>` for each confirmed merged branch. Do not use force
+deletion unless the user explicitly asks for unsafe cleanup.
 
 ### E.2 — Clean up worktrees
 

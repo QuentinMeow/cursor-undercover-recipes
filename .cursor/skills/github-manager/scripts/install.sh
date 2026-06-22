@@ -10,7 +10,7 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") [OPTIONS]
 
-Install the github-manager skill (identity helper + PR workflow references).
+Install the github-manager skill (identity helper + PR workflows + cleanup helper).
 
 Options:
   --target global          Install into ~/.cursor/skills/$GLOBAL_SKILL_NAME/

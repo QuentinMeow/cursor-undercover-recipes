@@ -23,7 +23,7 @@ material or setup scripts it needs.
 
 | Skill | Description |
 |-------|-------------|
-| `github-manager` | Manage `gh` identity switching plus evidence-first PR workflows: summaries, structured review, stacked PRs (Aviator), merge strategies — superset of an internal `github-pr-manager` pattern. Install globally via `scripts/install.sh`. |
+| `github-manager` | Manage `gh` identity switching plus evidence-first PR workflows: summaries, structured review, stacked PRs (Aviator), merge strategies, and safe local branch cleanup. Install globally via `scripts/install.sh`. |
 | `launch-cursor-autoapprove` | Launch a dedicated Cursor window with DOM auto-accept injected via CDP. Simple `on`/`off` gate toggle for a dedicated agent window. |
 
 Each skill keeps its public `README.md` short. When a user wants deeper

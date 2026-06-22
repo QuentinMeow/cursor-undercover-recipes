@@ -4,8 +4,9 @@ description: >-
   Personal superset of GitHub workflows: switch `gh` identity without touching
   git config; evidence-first PR diffs; PR summaries (format + upload); systematic
   code review; stacked PRs with Aviator (`av`); AIO-merge vs stacked-merge; merge
-  queues and post-merge cleanup. Use for `gh` auth mismatches, PR descriptions,
-  reviews, splitting stacks, addressing feedback, or merging stacked work.
+  queues and branch cleanup. Use for `gh` auth mismatches, PR descriptions,
+  reviews, splitting stacks, addressing feedback, merging stacked work, or
+  cleaning local branches after merge.
 ---
 
 # GitHub Manager
@@ -63,10 +64,18 @@ from GitHub — never assume `main`).
 | **B** | Split a large PR into stacked PRs (`av`) |
 | **C** | Address review feedback across a stack |
 | **D** | Merge (AIO-merge default vs stacked-merge) |
-| **E** | Post-merge branch/worktree cleanup |
+| **E** | Post-merge branch/worktree cleanup, including local merged branch status |
 
 **Most common path:** Prerequisites in the comprehensive doc → Section 1 →
 Scenario A → [pr-summary-format.md](references/pr-summary-format.md).
+
+For local merged-branch cleanup with a status table:
+
+```bash
+python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/branch_cleanup.py" --clean --fetch
+```
+
+Use `--dry-run --fetch` to preview without deleting local branches.
 
 ---
 
@@ -76,7 +85,10 @@ Scenario A → [pr-summary-format.md](references/pr-summary-format.md).
 |------|------|
 | `gh` | Always — install and `gh auth login` **inside Cursor's terminal** if agents lack auth |
 | `git` | Always |
-| `av` (Aviator) | Scenarios B–E only — `brew install aviator-co/tap/av`, then `av init` in repo root |
+| `av` (Aviator) | Stacked PR operations in Scenarios B–E only — `brew install aviator-co/tap/av`, then `av init` in repo root |
+
+Scenario E branch cleanup requires only `git`; `gh` is optional but needed to
+show PR status and links in the branch table.
 
 SSH **certificate**-based org remotes: use your organization's documented cert
 tooling; `gh auth login` alone does not replace SSH for `git push`. See the
