@@ -52,8 +52,9 @@ If you set the alias:
 
 ```bash
 caa launch ~/code/my-project
+caa launch ~/code/my-project --interval 5
 caa launch-ssh my-devbox /home/user/code/project
-caa on
+caa on --interval 2
 caa off
 caa status
 caa stop
@@ -69,9 +70,9 @@ built-in usage summary, `caa help` for examples and doc paths, or
 
 | Command | Behavior |
 |---|---|
-| `launch [--workspace PATH] [PATH]` | Start dedicated Cursor process for a local workspace, inject script, gate ON. Blocks only if the same workspace is already running; other workspaces can run in parallel. |
-| `launch-ssh <host> [/absolute/remote/path] [--no-preflight]` | Start dedicated Cursor connected to an SSH remote host from `~/.ssh/config`, inject script, gate ON. Path-specific launches verify the remote directory with `ssh <host> test -d <path>` before creating a profile or alias. |
-| `on` | Turn gate ON. Reloads injector code when in-window hash differs from the current injector file. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
+| `launch [--workspace PATH] [PATH] [--interval SECONDS]` | Start dedicated Cursor process for a local workspace, inject script, gate ON. The fallback scan defaults to 2 seconds; supported range is 0.25–60 seconds. Blocks only if the same workspace is already running; other workspaces can run in parallel. |
+| `launch-ssh <host> [/absolute/remote/path] [--no-preflight] [--interval SECONDS]` | Start dedicated Cursor connected to an SSH remote host from `~/.ssh/config`, inject script, gate ON. Path-specific launches verify the remote directory with `ssh <host> test -d <path>` before creating a profile or alias. |
+| `on [--interval SECONDS]` | Turn gate ON and optionally change/persist the session's fallback scan interval. Reloads injector code when in-window hash differs from the current injector file. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
 | `off` | Turn gate OFF without closing the dedicated window. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
 | `status` | Show PID, CDP port, workspace, gate state, click count, injector hash, current title, recent clicks, and last approved command preview. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
 | `stop` | Turn gate OFF, close the dedicated Cursor process, and clear local session state when shutdown succeeds. Without `-w`, it prefers running sessions when any are alive; if none are running, it falls back to stale entries for cleanup. Use `--all` to stop every session, and do not combine `--all` with `-w` or a positional workspace. |
@@ -88,6 +89,9 @@ built-in usage summary, `caa help` for examples and doc paths, or
 - Copies `settings.json`, `keybindings.json`, and `cursorAuth/*` auth tokens from your default profile.
 - Does **not** copy non-auth `state.vscdb` rows (chat history/model state remain profile-specific).
 - There is no `inject --restart` command in this supported launcher.
+- The observer reacts to DOM changes after a 300ms debounce. `--interval`
+  controls the fallback scan, defaults to 2 seconds, and can be changed while
+  the gate is already ON.
 - `stop` ends the session and closes the dedicated process; the dedicated profile
   folder persists for reuse on the next `launch`.
 - If two sessions share the same folder name, use `-w <full-path>` instead of a
@@ -102,11 +106,13 @@ built-in usage summary, `caa help` for examples and doc paths, or
   matching or require pattern updates.
 - Keep the gate OFF (`caa off`) when doing sensitive UI actions in the dedicated
   window that are unrelated to approvals.
-- **The dedicated window must stay in the foreground.** The DOM injector
-  depends on an active Chromium renderer. When the window is behind other
-  windows or minimized, timers are throttled and prompts are not clicked until
-  you switch back. Parallel agent chats across multiple auto-approve windows
-  are not currently supported.
+- A non-focused but still visible dedicated window continued auto-clicking in
+  Cursor 3.12.17 (`document.hasFocus() === false`). Minimized/hidden renderers
+  may still be throttled, so verify with `status` for unattended workflows.
+  Each dedicated window handles its one mounted, selected conversation.
+- Inactive sidebar conversations are not mounted in the workbench DOM. The
+  injector can approve the selected conversation, but cannot directly click
+  prompts in every pinned/sidebar agent at the same time.
 
 ## Migration Note (Retired Approach Cleanup)
 

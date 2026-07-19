@@ -64,6 +64,9 @@ CDP_DEFAULT_PORT = 9222
 LAUNCH_TIMEOUT = 30.0
 CDP_INJECT_DELAY = 5.0
 CDP_INJECT_RETRIES = 6
+DEFAULT_POLL_INTERVAL_SECONDS = 2.0
+MIN_POLL_INTERVAL_SECONDS = 0.25
+MAX_POLL_INTERVAL_SECONDS = 60.0
 
 HISTORY_PATH = RUNTIME_DIR / "history.jsonl"
 HISTORY_MAX_BYTES = 5 * 1024 * 1024  # rotate at 5 MB
@@ -80,6 +83,42 @@ STALE_HOOK_PATTERNS = [
 ]
 
 SSH_REMOTE_PREFIX = "vscode-remote://ssh-remote+"
+
+
+def _poll_interval_arg(value: str) -> float:
+    """Parse a CLI polling interval in seconds."""
+    try:
+        interval = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("interval must be a number of seconds") from exc
+    if not MIN_POLL_INTERVAL_SECONDS <= interval <= MAX_POLL_INTERVAL_SECONDS:
+        raise argparse.ArgumentTypeError(
+            f"interval must be between {MIN_POLL_INTERVAL_SECONDS:g} "
+            f"and {MAX_POLL_INTERVAL_SECONDS:g} seconds"
+        )
+    return interval
+
+
+def _session_poll_interval(session: dict, requested: float | None = None) -> float:
+    """Resolve a validated requested or persisted per-session poll interval."""
+    raw = requested if requested is not None else session.get(
+        "poll_interval_seconds", DEFAULT_POLL_INTERVAL_SECONDS
+    )
+    try:
+        interval = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_POLL_INTERVAL_SECONDS
+    if not MIN_POLL_INTERVAL_SECONDS <= interval <= MAX_POLL_INTERVAL_SECONDS:
+        return DEFAULT_POLL_INTERVAL_SECONDS
+    return interval
+
+
+def _start_accept_expr(interval_seconds: float | None = None) -> str:
+    """Build a startAccept call with an optional validated millisecond interval."""
+    if interval_seconds is None:
+        return "startAccept()"
+    milliseconds = round(interval_seconds * 1000)
+    return f"startAccept({milliseconds})"
 
 
 # ---------------------------------------------------------------------------
@@ -640,6 +679,7 @@ def _help_examples(topic: str | None = None) -> list[str]:
         "launch": [
             "Examples:",
             "  caa launch ~/code/my-project",
+            "  caa launch ~/code/my-project --interval 5",
             "  caa launch my-project          # if alias exists",
             "  caa launch -w ~/code/another-project",
         ],
@@ -647,11 +687,13 @@ def _help_examples(topic: str | None = None) -> list[str]:
             "Examples:",
             "  caa launch-ssh my-devbox",
             "  caa launch-ssh my-devbox /home/user/code/project",
+            "  caa launch-ssh my-devbox /home/user/code/project --interval 5",
         ],
         "on": [
             "Examples:",
             "  caa on",
             "  caa on -w my-project",
+            "  caa on -w my-project --interval 0.5",
         ],
         "off": [
             "Examples:",
@@ -694,13 +736,14 @@ def _help_examples(topic: str | None = None) -> list[str]:
     return [
         "Examples:",
         "  caa launch ~/code/my-project",
+        "  caa launch ~/code/my-project --interval 5",
         "  caa launch my-project          # uses alias if set",
         "  caa launch-ssh my-devbox",
         "  caa launch-ssh my-devbox /home/user/code/project",
         "  caa alias set mp ~/code/my-project",
         "  caa alias list",
         "  caa off",
-        "  caa on -w my-project",
+        "  caa on -w my-project --interval 2",
         "  caa status",
         "  caa stop --all",
         "  caa history -w my-project",
@@ -1186,7 +1229,8 @@ def _format_injector_hash(script_hash: str | None) -> str:
 
 def _cdp_inject(port: int, auto_start: bool = True, force_reload: bool = False,
                  repo_slug: str = "workspace",
-                 target_id: str | None = None) -> tuple[bool, str | None]:
+                 target_id: str | None = None,
+                 interval_seconds: float | None = None) -> tuple[bool, str | None]:
     """Inject the DOM auto-accept script via CDP.
 
     Returns (success, target_id_used). On first inject target_id may be None;
@@ -1203,7 +1247,7 @@ def _cdp_inject(port: int, auto_start: bool = True, force_reload: bool = False,
     if force_reload:
         script = _clear_injector_expression() + "\n" + script
     if auto_start:
-        script += "\n; startAccept();"
+        script += f"\n; {_start_accept_expr(interval_seconds)};"
 
     pinned_id = target_id
     for attempt in range(CDP_INJECT_RETRIES):
@@ -1263,14 +1307,16 @@ document.title = {title_json};
 
 def _cdp_gate(port: int, action: str, title: str | None = None,
               target_id: str | None = None, *,
-              share_safe: bool = False) -> dict | None:
+              share_safe: bool = False,
+              interval_seconds: float | None = None) -> dict | None:
     """Call startAccept/stopAccept/acceptStatus via CDP. Returns parsed status or None."""
     if action == "on":
+        start_expr = _start_accept_expr(interval_seconds)
         if share_safe:
-            expr = "setShareSafeTitle(true); startAccept(); JSON.stringify(acceptStatus())"
+            expr = f"setShareSafeTitle(true); {start_expr}; JSON.stringify(acceptStatus())"
         else:
             title_expr = _title_sync_expr(title) if title else ""
-            expr = f"{title_expr} startAccept(); JSON.stringify(acceptStatus())"
+            expr = f"{title_expr} {start_expr}; JSON.stringify(acceptStatus())"
     elif action == "off":
         if share_safe:
             expr = "setShareSafeTitle(true); stopAccept(); JSON.stringify(acceptStatus())"
@@ -1617,6 +1663,9 @@ def _print_session_status(session: dict) -> None:
             label = "ON" if running else "OFF"
             title = _cdp_title(port, target_id=bound_target)
             print(f"Gate:      {label}")
+            interval_ms = gate.get("interval")
+            if isinstance(interval_ms, (int, float)):
+                print(f"Poll:      {interval_ms / 1000:g}s fallback interval")
             print(f"Clicks:    {clicks}")
             if "shareSafeTitle" in gate:
                 tmode = "discreet" if gate.get("shareSafeTitle") else "branded"
@@ -1704,18 +1753,23 @@ def _stop_session(session: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_workspace_for_launch(raw: str | None) -> Path | None:
-    """Resolve a user-supplied workspace argument to an existing directory.
+def _resolve_workspace_for_launch(raw: str | None) -> Path | str | None:
+    """Resolve a user-supplied launch argument to a local directory or SSH URI.
 
     Resolution order:
     1. If *raw* is None, use CWD.
-    2. Expand ~ and resolve to an absolute path. If it is an existing
+    2. If *raw* is a Remote SSH folder URI, use it.
+    3. Expand ~ and resolve to an absolute path. If it is an existing
        directory, use it.
-    3. Treat *raw* as an alias name from config.json.
-    4. Return None if nothing matches (caller should error).
+    4. Treat *raw* as an alias name from config.json. Aliases may point to
+       local directories or Remote SSH folder URIs.
+    5. Return None if nothing matches (caller should error).
     """
     if raw is None:
         return Path.cwd()
+
+    if _is_ssh_workspace(raw):
+        return raw
 
     candidate = Path(raw).expanduser().resolve()
     if candidate.is_dir():
@@ -1728,6 +1782,8 @@ def _resolve_workspace_for_launch(raw: str | None) -> Path | None:
     if not looks_like_path:
         alias_target = _get_alias(raw)
         if alias_target:
+            if _is_ssh_workspace(alias_target):
+                return alias_target
             p = Path(alias_target)
             if p.is_dir():
                 return p
@@ -1743,6 +1799,9 @@ def _resolve_workspace_for_launch(raw: str | None) -> Path | None:
 def cmd_launch(args: argparse.Namespace) -> int:
     state = _load_state()
     sessions = state.get("sessions", {})
+    interval_seconds = _session_poll_interval(
+        {}, getattr(args, "interval", None)
+    )
 
     workspace = _resolve_workspace_for_launch(args.workspace)
     if workspace is None:
@@ -1752,9 +1811,22 @@ def cmd_launch(args: argparse.Namespace) -> int:
             print("Known aliases:", file=sys.stderr)
             for name, path in sorted(aliases.items()):
                 print(f"  {name:20s} {path}", file=sys.stderr)
-        print("Pass a concrete path, or set an alias with: caa alias set <name> <path>",
+        print("Pass a concrete path, SSH folder URI, or set an alias with: caa alias set <name> <path-or-ssh-uri>",
               file=sys.stderr)
         return 1
+
+    if isinstance(workspace, str) and _is_ssh_workspace(workspace):
+        parsed = _parse_ssh_workspace(workspace)
+        if parsed is None:
+            print(f"SSH workspace URI is malformed: {workspace}", file=sys.stderr)
+            return 1
+        host, remote_path = parsed
+        return cmd_launch_ssh(argparse.Namespace(
+            ssh_host=host,
+            remote_path=remote_path,
+            no_preflight=False,
+            interval=interval_seconds,
+        ))
 
     ws_key = str(workspace)
     slug = _repo_slug(workspace)
@@ -1838,6 +1910,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
         "workspace": ws_key,
         "slug": slug,
         "launched_at": datetime.now(timezone.utc).isoformat(),
+        "poll_interval_seconds": interval_seconds,
     }
     state["sessions"] = sessions
     _save_state(state)
@@ -1854,19 +1927,23 @@ def cmd_launch(args: argparse.Namespace) -> int:
         _save_state(state)
 
     _log_event("session", ws_key, slug, action="launch", pid=pid,
-               cdp_port=cdp_port, cdp_target_id=pinned_target)
+               cdp_port=cdp_port, cdp_target_id=pinned_target,
+               poll_interval_seconds=interval_seconds)
 
     if inject_ok:
         result = _cdp_gate(cdp_port, "on", title=enabled_title,
-                           target_id=pinned_target)
+                           target_id=pinned_target,
+                           interval_seconds=interval_seconds)
         print("\nAuto-approve ON.")
+        print(f"Fallback poll interval: {interval_seconds:g}s")
         print(f"Window title target: {enabled_title}")
         if pinned_target:
             print(f"Bound target: {pinned_target}")
         if result and result.get("scriptHash"):
             print(f"Injector hash: {result['scriptHash']}")
         _log_event("gate", ws_key, slug, action="on",
-                   cdp_target_id=pinned_target)
+                   cdp_target_id=pinned_target,
+                   poll_interval_seconds=interval_seconds)
     else:
         print(
             "\nCDP injection failed. Retry by running this launcher with 'on' "
@@ -1887,6 +1964,9 @@ def cmd_launch_ssh(args: argparse.Namespace) -> int:
     """Launch a dedicated Cursor window connected to an SSH remote host."""
     state = _load_state()
     sessions = state.get("sessions", {})
+    interval_seconds = _session_poll_interval(
+        {}, getattr(args, "interval", None)
+    )
 
     host = args.ssh_host
     remote_path = getattr(args, "remote_path", None) or "/"
@@ -1993,6 +2073,7 @@ def cmd_launch_ssh(args: argparse.Namespace) -> int:
         "ssh_host": host,
         "remote_path": remote_path,
         "launched_at": datetime.now(timezone.utc).isoformat(),
+        "poll_interval_seconds": interval_seconds,
     }
     state["sessions"] = sessions
     _save_state(state)
@@ -2010,19 +2091,23 @@ def cmd_launch_ssh(args: argparse.Namespace) -> int:
 
     _log_event("session", ws_key, slug, action="launch", pid=pid,
                cdp_port=cdp_port, cdp_target_id=pinned_target, kind="ssh",
-               ssh_host=host, remote_path=remote_path)
+               ssh_host=host, remote_path=remote_path,
+               poll_interval_seconds=interval_seconds)
 
     if inject_ok:
         result = _cdp_gate(cdp_port, "on", title=enabled_title,
-                           target_id=pinned_target)
+                           target_id=pinned_target,
+                           interval_seconds=interval_seconds)
         print("\nAuto-approve ON.")
+        print(f"Fallback poll interval: {interval_seconds:g}s")
         print(f"Window title target: {enabled_title}")
         if pinned_target:
             print(f"Bound target: {pinned_target}")
         if result and result.get("scriptHash"):
             print(f"Injector hash: {result['scriptHash']}")
         _log_event("gate", ws_key, slug, action="on",
-                   cdp_target_id=pinned_target)
+                   cdp_target_id=pinned_target,
+                   poll_interval_seconds=interval_seconds)
     else:
         print(
             "\nCDP injection failed. Retry by running this launcher with 'on' "
@@ -2051,6 +2136,9 @@ def cmd_on(args: argparse.Namespace) -> int:
     slug = session.get("slug", _repo_slug(workspace))
     bound_target = session.get("cdp_target_id")
     enabled_title = _window_title(workspace, gate_on=True)
+    interval_seconds = _session_poll_interval(
+        session, getattr(args, "interval", None)
+    )
 
     if not _pid_is_alive(pid):
         print(f"Dedicated Cursor (PID {pid}) is no longer running.", file=sys.stderr)
@@ -2101,9 +2189,11 @@ def cmd_on(args: argparse.Namespace) -> int:
         title=enabled_title,
         target_id=bound_target,
         share_safe=share_safe,
+        interval_seconds=interval_seconds,
     )
     if result:
         print(f"Auto-approve ON (total clicks so far: {result.get('totalClicks', 0)})")
+        print(f"Fallback poll interval: {interval_seconds:g}s")
         if share_safe:
             print("Window title: discreet (screen-share safe; captured at inject time)")
         else:
@@ -2112,8 +2202,13 @@ def cmd_on(args: argparse.Namespace) -> int:
             print(f"Bound target: {bound_target}")
         if result.get("scriptHash"):
             print(f"Injector hash: {result['scriptHash']}")
+        current_state = _load_state()
+        if workspace in current_state.get("sessions", {}):
+            current_state["sessions"][workspace]["poll_interval_seconds"] = interval_seconds
+            _save_state(current_state)
         _log_event("gate", workspace, slug, action="on",
-                   cdp_target_id=bound_target)
+                   cdp_target_id=bound_target,
+                   poll_interval_seconds=interval_seconds)
     else:
         print("Failed to start auto-approve.", file=sys.stderr)
         return 1
@@ -2719,6 +2814,13 @@ def build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argument
     p_launch = sub.add_parser("launch", help="Open dedicated Cursor with auto-approve")
     p_launch.add_argument("--workspace", "-w", help="Workspace path (default: cwd)")
     p_launch.add_argument("workspace_pos", nargs="?", help="Workspace path (positional)")
+    p_launch.add_argument(
+        "--interval",
+        type=_poll_interval_arg,
+        default=DEFAULT_POLL_INTERVAL_SECONDS,
+        metavar="SECONDS",
+        help="Fallback scan interval in seconds (default: 2; range: 0.25-60)",
+    )
     p_launch.set_defaults(func=cmd_launch)
     command_parsers["launch"] = p_launch
 
@@ -2738,12 +2840,26 @@ def build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argument
         action="store_true",
         help="Skip the ssh test -d check before launching a path-specific remote workspace",
     )
+    p_launch_ssh.add_argument(
+        "--interval",
+        type=_poll_interval_arg,
+        default=DEFAULT_POLL_INTERVAL_SECONDS,
+        metavar="SECONDS",
+        help="Fallback scan interval in seconds (default: 2; range: 0.25-60)",
+    )
     p_launch_ssh.set_defaults(func=cmd_launch_ssh)
     command_parsers["launch-ssh"] = p_launch_ssh
 
     p_on = sub.add_parser("on", help="Resume auto-clicking")
     p_on.add_argument("--workspace", "-w", help=ws_help)
     p_on.add_argument("workspace_pos", nargs="?", help=ws_help)
+    p_on.add_argument(
+        "--interval",
+        type=_poll_interval_arg,
+        default=None,
+        metavar="SECONDS",
+        help="Set and persist this session's fallback scan interval (range: 0.25-60)",
+    )
     p_on.set_defaults(func=cmd_on)
     command_parsers["on"] = p_on
 

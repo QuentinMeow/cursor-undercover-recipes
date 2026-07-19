@@ -21,8 +21,9 @@ were retired.
 
 The injector uses a three-layer architecture:
 
-1. **Surface Observer**: A `MutationObserver` detects DOM changes immediately.
-   A fallback poll (`setInterval` at 2s) catches anything the observer misses.
+1. **Surface Observer**: A `MutationObserver` detects DOM changes after a 300ms
+   debounce. A configurable fallback poll (`setInterval`, 2 seconds by default)
+   catches anything the observer misses.
 2. **Policy Engine**: Separates candidate discovery (finding buttons) from
    click decisions (eligibility guards, fingerprint cooldown).
 3. **Event Sink**: All decisions (click, blocked, unknown) are queued in
@@ -42,9 +43,9 @@ default and intended for future hardening as internal APIs stabilize.
 
 | Command | Flags | Behavior |
 |---|---|---|
-| `launch` | `--workspace`/`-w`, positional `PATH` | Start dedicated Cursor for a local workspace, inject script, turn gate ON. |
-| `launch-ssh` | positional `HOST`, optional absolute `PATH`, `--no-preflight` | Start dedicated Cursor connected to an SSH remote host via `--folder-uri`, inject script, turn gate ON. Path-specific launches preflight the remote directory with `ssh <host> test -d <path>` before profile/session creation. |
-| `on` | `-w PATH\|SLUG` (optional) | Turn gate ON; reload script if hash drift is detected. |
+| `launch` | `--workspace`/`-w`, positional `PATH\|ALIAS`, `--interval SECONDS` | Start dedicated Cursor for a local workspace or registered alias, inject script, turn gate ON. SSH folder URI aliases dispatch through the SSH launch flow. The fallback scan defaults to 2 seconds. |
+| `launch-ssh` | positional `HOST`, optional absolute `PATH`, `--no-preflight`, `--interval SECONDS` | Start dedicated Cursor connected to an SSH remote host via `--folder-uri`, inject script, turn gate ON. Path-specific launches preflight the remote directory with `ssh <host> test -d <path>` before profile/session creation. |
+| `on` | `-w PATH\|SLUG`, `--interval SECONDS` (both optional) | Turn gate ON; optionally update and persist the running session's fallback scan interval; reload script if hash drift is detected. |
 | `off` | `-w PATH\|SLUG` (optional) | Turn gate OFF; keep dedicated window open. |
 | `status` | `-w PATH\|SLUG` (optional) | Print session details. Shows all sessions if `-w` omitted; ambiguous slugs use the picker. |
 | `stop` | `-w PATH\|SLUG` (optional), `--all` | Turn gate OFF, terminate dedicated process, and remove session entry when shutdown succeeds. `--all` must not be combined with `-w` or a positional workspace. |
@@ -59,6 +60,8 @@ Behavior notes:
 
 - Multiple workspaces can run simultaneously, each with its own PID, CDP port,
   and profile directory.
+- Poll intervals are per-session, accept values from 0.25 through 60 seconds,
+  default to 2 seconds, and can be changed while the gate is already ON.
 - `launch` only blocks if the same workspace is already running.
 - `on` / `off` auto-detect the target when one running session matches.
 - `stop` prefers running sessions when any are alive, but `stop -w ...` can
@@ -113,6 +116,7 @@ After global install:
       "slug": "<directory-name-or-ssh-slug>",
       "launched_at": "<UTC ISO timestamp>",
       "cdp_target_id": "<CDP page target ID>",
+      "poll_interval_seconds": 2.0,
       "kind": "ssh",
       "ssh_host": "<ssh-config-host>",
       "remote_path": "/path/on/remote"
@@ -192,10 +196,13 @@ They are only pruned when their PID is dead.
 `caa launch <arg>` resolves the workspace argument in this order:
 
 1. If `<arg>` is omitted, use the current working directory.
-2. Expand `~` and resolve to an absolute path. If the result is an existing
+2. If `<arg>` is a `vscode-remote://ssh-remote+...` folder URI, use the SSH
+   launch flow.
+3. Expand `~` and resolve to an absolute path. If the result is an existing
    directory, use it.
-3. Treat `<arg>` as an alias name — look it up in `config.json`.
-4. If no match is found, error out with a list of known aliases.
+4. Treat `<arg>` as an alias name — look it up in `config.json`. Alias targets
+   may be local directories or `vscode-remote://ssh-remote+...` folder URIs.
+5. If no match is found, error out with a list of known aliases.
 
 This prevents ghost sessions from bare-name arguments (e.g.
 `caa launch example-lib` from the home directory resolving to the
@@ -210,7 +217,8 @@ aliases:
 {
   "aliases": {
     "example-lib": "/Users/you/code/example-lib",
-    "demo-repo": "/Users/you/code/demo-repo"
+    "demo-repo": "/Users/you/code/demo-repo",
+    "devbox-demo": "vscode-remote://ssh-remote+devbox/home/you/code/demo"
   }
 }
 ```
@@ -245,7 +253,8 @@ When you run `caa launch --workspace <path>`:
 9. Wait for a new Cursor main PID that includes the expected launch args.
 10. Save session to `state.json` under the workspace path (local) or folder URI (SSH) key.
 11. Inject `devtools_auto_accept.js` via CDP `Runtime.evaluate`.
-12. Call `startAccept()` and sync title to `autoapprove ✅ <repo>`.
+12. Call `startAccept(<interval-ms>)` and sync title to
+    `autoapprove ✅ <repo>`.
 
 If `open -na` path detection fails, the launcher falls back to direct executable
 launch and repeats PID detection.
@@ -255,6 +264,10 @@ first. If `<remote-path>` is not `/`, the launcher also runs a bounded
 `ssh <host> test -d <remote-path>` preflight before creating the profile,
 session, or alias. `--no-preflight` skips this check and lets Cursor Remote SSH
 handle the connection.
+
+For `caa launch <alias>` where the alias target is an SSH folder URI, the
+launcher parses the URI into `<host>` and `<remote-path>` and reuses the same
+SSH launch flow, including the bounded remote directory preflight.
 
 ## CDP Target Selection and Stable Binding
 
@@ -305,7 +318,10 @@ run simultaneously.
 
 - `MutationObserver` on `document.body` (childList, subtree, attributes)
   with 300ms debounce fires `checkAndClick` on DOM changes
-- Fallback poll interval: `2000ms` (`state.interval`)
+- Fallback poll interval: `2000ms` by default (`state.interval`), configurable
+  per session from 250–60000ms
+- Calling `startAccept(<milliseconds>)` while already running replaces the
+  existing fallback timer immediately instead of returning early
 - Title sync interval: `3000ms` (`state.titleTimer`)
 - Tracks click history in memory (`state.clicks`, max 100 entries)
 - Event queue (`state.eventQueue`, max 200 entries) for launcher to drain
@@ -392,6 +408,8 @@ Returned fields include:
 - `strategyVersion` and `scriptHash`
 - `visibleButtons` (normalized labels + surface classification + guard signals)
 - `candidates` and `eligible` lists (with per-button eligibility reason)
+- `mountedComposerCount` and `mountedConversationCount` for detecting whether
+  multiple agent chats exist in the current renderer DOM
 
 This allows stress harnesses to capture machine-readable "why" evidence for
 both clicked and non-clicked cases.
@@ -491,6 +509,7 @@ settings remain there until manually removed.
 - click count
 - injector hash (with drift warning if mismatched)
 - current window title
+- fallback poll interval
 - recent click entries (last 3 printed)
 - last approved command preview (first line + line count) when available
 - WARNING if multiple workbench targets exist on the port
@@ -584,14 +603,18 @@ prevent regression.
   hosts (rare).
 - The state probe is experimental and off by default. Internal Cursor APIs
   may change without notice.
-- **Window must be in foreground**: The DOM injector uses `el.click()` and
-  MutationObserver, both of which require the Chromium renderer to be active.
-  When the dedicated Cursor window is not the frontmost window (e.g., hidden
-  behind other windows or minimized), Chromium throttles timers and may
-  suspend DOM updates, so approval prompts will not be detected or clicked
-  until the window is brought back to the foreground. This means running
-  parallel agent chats across multiple windows is not currently supported --
-  only the foreground auto-approve window will reliably click prompts.
+- **Background visibility matters more than OS focus**: On Cursor 3.12.17, a
+  non-focused dedicated window reported `document.visibilityState ===
+  "visible"` and continued clicking real `Run` prompts. Parallel visible
+  dedicated windows can work. Minimized/hidden renderers may still be
+  throttled and require separate validation.
+- **Inactive sidebar agents are not mounted chat surfaces**: Direct inspection
+  on Cursor 3.12.17 found one `div.full-input-box` and one `div.conversations`
+  before and after selecting a pinned row. Selection replaced the mounted chat
+  instead of revealing multiple hidden chats. Therefore a DOM injector can
+  approve the selected agent only. Cycling sidebar rows could approve agents
+  sequentially, but would visibly change the selected conversation and is not
+  equivalent to simultaneous background approval.
 
 ## Related Docs
 

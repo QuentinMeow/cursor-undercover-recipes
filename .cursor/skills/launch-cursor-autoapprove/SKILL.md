@@ -95,9 +95,9 @@ lifecycle with `on`/`off`/`stop`.
 
 | Command | What it does |
 |---------|-------------|
-| `launch [-w PATH] [PATH\|ALIAS]` | Open dedicated Cursor, inject DOM script, gate ON. Accepts a concrete path (relative or absolute) or a registered alias. Auto-registers the directory name as an alias. Blocks only if the same workspace is already running. Multiple workspaces can run simultaneously. |
-| `launch-ssh <host> [/absolute/remote/path] [--no-preflight]` | Open dedicated Cursor connected to an SSH remote host (from `~/.ssh/config`), inject DOM script, gate ON. Path-specific launches first verify the remote directory with `ssh <host> test -d <path>` so bad host/path pairs fail before creating a profile or alias. |
-| `on [-w PATH\|SLUG]` | Resume auto-clicking (`startAccept()` via CDP). Reloads stale in-window injector code when hash differs. Auto-detected if only one session, otherwise opens an interactive picker in a TTY. |
+| `launch [-w PATH] [PATH\|ALIAS] [--interval SECONDS]` | Open dedicated Cursor, inject DOM script, gate ON. Accepts a concrete path, a registered local alias, or a registered SSH folder URI alias. The fallback scan defaults to 2 seconds (range: 0.25–60). Auto-registers the workspace slug as an alias. Blocks only if the same workspace is already running. Multiple workspaces can run simultaneously. |
+| `launch-ssh <host> [/absolute/remote/path] [--no-preflight] [--interval SECONDS]` | Open dedicated Cursor connected to an SSH remote host (from `~/.ssh/config`), inject script, and use the same configurable fallback interval. Path-specific launches first verify the remote directory with `ssh <host> test -d <path>` so bad host/path pairs fail before creating a profile or alias. |
+| `on [-w PATH\|SLUG] [--interval SECONDS]` | Resume auto-clicking (`startAccept()` via CDP). An interval supplied while already ON takes effect immediately and persists for the session. Reloads stale in-window injector code when hash differs. Auto-detected if only one session, otherwise opens an interactive picker in a TTY. |
 | `off [-w PATH\|SLUG]` | Pause auto-clicking (`stopAccept()` via CDP) while keeping the dedicated window open. Auto-detected if only one session, otherwise opens an interactive picker in a TTY. |
 | `status [-w PATH\|SLUG]` | Show session details including last approved command preview. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
 | `stop [-w PATH\|SLUG] [--all]` | Pause gate, close dedicated Cursor process, and remove session when shutdown succeeds. Without `-w`, it prefers running sessions when any are alive; if none are running, it falls back to stale entries for cleanup. Use `--all` to stop every session, but do not combine `--all` with `-w` or a positional workspace. |
@@ -120,32 +120,40 @@ use `caa --help` (or the full launcher path with `--help`).
 
 ## How It Works
 
-1. `launch` syncs `settings.json`, `keybindings.json`, and auth tokens from
+1. `launch` resolves the argument as a local path or alias. If the alias target
+   is a `vscode-remote://ssh-remote+...` folder URI, it uses the SSH launch flow.
+2. `launch` syncs `settings.json`, `keybindings.json`, and auth tokens from
    your default Cursor profile so editor preferences and login carry over to
-   the dedicated window. It also auto-registers the directory name as an alias
+   the dedicated window. It also auto-registers the workspace slug as an alias
    in `config.json` for quick future launches.
-2. `launch` starts a new Cursor process with `--remote-debugging-port` and
+3. `launch` starts a new Cursor process with `--remote-debugging-port` and
    `--user-data-dir` (a per-workspace profile directory). Each workspace gets
    its own persistent profile at `~/.cursor/launch-autoapprove/dedicated-profile-<slug>/`.
-3. The launcher injects `devtools_auto_accept.js` via CDP `Runtime.evaluate`,
+4. The launcher injects `devtools_auto_accept.js` via CDP `Runtime.evaluate`,
    passing the repo slug so the script knows the project name. The chosen
    CDP target is pinned by ID in `state.json` so all subsequent commands
    (`on`/`off`/`status`/`stop`) address exactly that page.
-4. The injector uses a MutationObserver (300ms debounce) for instant detection,
-   with a 2s fallback poll, and clicks matches.
-5. The injector continuously maintains the window title
+5. The injector uses a MutationObserver (300ms debounce) for fast detection,
+   with a configurable fallback poll (2 seconds by default), and clicks matches.
+6. The injector continuously maintains the window title
    (`autoapprove ✅ <repo>` or `autoapprove ⏸ <repo>`) via a 3-second
    interval, so the title self-heals if Cursor resets it — unless
    **share-safe** mode is on (`caa share-safe --on`), in which case the
    title bar reuses the text captured when the script was first injected
    (normal Cursor-style title for that moment).
-6. `on`/`off` call `startAccept()`/`stopAccept()` via CDP -- no manual
+7. `on`/`off` call `startAccept()`/`stopAccept()` via CDP -- no manual
    DevTools interaction needed.
-7. Process-level isolation: the dedicated window is a separate OS process,
+8. Process-level isolation: the dedicated window is a separate OS process,
    so auto-clicking cannot leak to your normal Cursor windows.
-8. If the installed injector changed after the window was launched, `on`
+9. If the installed injector changed after the window was launched, `on`
    reloads the in-window script so the running window picks up the latest
    pattern fixes.
+
+Only the selected agent conversation is mounted as a chat surface in Cursor
+3.12.17. Pinned and other sidebar rows are navigation entries, not hidden chat
+DOMs, so this DOM injector cannot approve all sidebar agents simultaneously.
+Separate visible dedicated windows can work in parallel even when one is not
+OS-focused; minimized/hidden windows still need direct validation.
 
 **Note on Cursor-specific preferences**: Model selection, agent mode, and
 similar UI state live in `state.vscdb` (a per-profile SQLite database) and
@@ -171,7 +179,9 @@ bash "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/
 ```
 
 If a dedicated window is already running, also verify `on` can refresh stale
-injector code and that `status` reports a hash plus click count. If multiple
+injector code and that `status` reports a hash, fallback poll interval, and
+click count. Verify `on --interval 0.5` updates a running timer, then restore
+the desired interval (normally `on --interval 2`). If multiple
 sessions are active, also verify the interactive picker works for
 `on`/`off`/`stop`, plus `status -w <slug>` when a slug is ambiguous.
 

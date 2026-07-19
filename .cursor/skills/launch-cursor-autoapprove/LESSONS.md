@@ -98,6 +98,12 @@
   alias config file (`config.json`) and auto-register directory names on
   successful launch so short names work on subsequent invocations.
 
+- **Alias resolution must preserve workspace kind**: `config.json` can contain
+  both local paths and `vscode-remote://ssh-remote+...` folder URIs. A command
+  that advertises alias support must not re-validate every alias as a local
+  directory. Resolve SSH URI aliases as SSH workspaces and dispatch them through
+  the same path as `launch-ssh`, including remote path preflight.
+
 - **Auth tokens must be bootstrapped into dedicated profiles**: Electron
   `--user-data-dir` profiles are fully isolated — including login state.
   Copy `cursorAuth/*` rows from the default profile's `state.vscdb` at
@@ -171,17 +177,33 @@
   attributes (`role`, `aria-modal`) in some Electron/Chromium contexts.
   `createElement` + `setAttribute` always works.
 
-## Foreground Window Requirement
+## Background Window Behavior
 
-- **The dedicated window must be the frontmost window for auto-clicking to work**:
-  Chromium throttles timers and may suspend DOM updates for background windows.
-  The MutationObserver and fallback poll both depend on the renderer being active.
-  When the auto-approve window is behind other windows or minimized, approval
-  prompts will not be detected or clicked until the user switches back to the
-  window. This makes parallel multi-window auto-approve workflows impractical
-  with the current DOM-based approach. A future improvement might use CDP
-  `Runtime.evaluate` polling from the launcher side (outside the renderer) or
-  Chromium's background-timer override flags to work around this limitation.
+- **Do not equate OS focus with renderer suspension**: On Cursor 3.12.17, a
+  dedicated window with `document.hasFocus() === false` and
+  `document.visibilityState === "visible"` continued to auto-click real `Run`
+  prompts. Separate visible dedicated windows can therefore operate in
+  parallel. Verify with click-count deltas instead of assuming only the key
+  window works.
+
+- **Minimized or hidden is still a separate risk**: Chromium may throttle a
+  renderer whose visibility state becomes `hidden`. The successful non-focused
+  case does not prove minimized-window reliability. For unattended workflows,
+  inspect `status` and direct click evidence after changing window visibility.
+
+## Sidebar Agent Mounting
+
+- **Sidebar rows are navigation, not parallel chat DOMs**: On Cursor 3.12.17,
+  direct CDP inspection found exactly one `div.full-input-box` and one
+  `div.conversations`. Selecting a pinned row replaced that mounted chat while
+  the counts remained one. Inactive pinned agents therefore have no approval
+  buttons available for a DOM injector to click.
+
+- **Do not call row cycling simultaneous approval**: Clicking each sidebar row
+  could expose and approve chats sequentially, but it changes the user's active
+  conversation, depends on unstable sidebar selectors, and can race with user
+  input. Treat that as a separate opt-in design, not an extension of the
+  current selected-chat injector.
 
 ## Harness Engineering
 
@@ -217,6 +239,12 @@
   poll has a worst-case latency equal to the interval. A MutationObserver fires
   within milliseconds of DOM changes. The poll remains as a safety net for edge
   cases the observer might miss (e.g., attribute-only changes on existing nodes).
+
+- **Runtime interval changes must replace the existing timer**: A
+  `startAccept(interval)` API that returns early when already running makes a
+  CLI interval flag appear successful without changing behavior. Update
+  `state.interval`, clear the current timer, and install a new timer before
+  reporting the requested interval.
 
 - **Prompt fingerprinting prevents double-clicks**: When a prompt doesn't immediately
   disappear after being clicked (e.g., network delay), the next poll cycle would
