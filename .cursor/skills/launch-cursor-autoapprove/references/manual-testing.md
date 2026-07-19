@@ -38,6 +38,7 @@ LAUNCHER="$HOME/.cursor/launch-autoapprove/launcher.py"
 You should see:
 
 - `Gate: ON`
+- `Poll: 2s fallback interval` (unless you selected another interval)
 - an `Injector:` hash
 - a window title like `autoapprove ✅ <repo>`
 
@@ -352,6 +353,59 @@ Expected result:
 - `status` still reports `Gate: ON`
 - the `Injector:` hash matches the newly installed script
 
+## Configurable Poll Interval Test
+
+The observer still handles normal DOM changes after its 300ms debounce.
+`--interval` controls the fallback scan and can be changed without toggling the
+gate off first.
+
+```bash
+/usr/bin/python3 "$LAUNCHER" on --interval 0.5
+/usr/bin/python3 "$LAUNCHER" status
+/usr/bin/python3 "$LAUNCHER" on --interval 2
+/usr/bin/python3 "$LAUNCHER" status
+```
+
+Expected result:
+
+- the first status shows `Poll: 0.5s fallback interval`
+- the second status shows `Poll: 2s fallback interval`
+- both status checks show `Gate: ON`
+- an invalid value such as `--interval 0` is rejected before contacting Cursor
+
+## Pinned/Sidebar Agent DOM Evaluation
+
+On Cursor 3.12.17, inspect the live workbench before and after selecting a
+pinned agent row.
+
+Expected result:
+
+- the current renderer contains one `div.full-input-box` and one
+  `div.conversations`
+- selecting another row replaces those mounted nodes; it does not add a hidden
+  chat DOM for that row
+- approval controls for inactive rows do not exist in the live DOM
+
+This means the injector can approve the selected chat but cannot click all
+pinned agents simultaneously. A row-cycling experiment is only a sequential,
+visibly disruptive workaround and must restore the originally selected row.
+
+## Non-Focused Dedicated Window Test
+
+With two dedicated sessions visible, leave one window non-focused while its
+selected agent produces a real approval prompt. Compare `status` click counts
+and inspect `document.visibilityState` / `document.hasFocus()` over CDP.
+
+Validated on Cursor 3.12.17:
+
+- the non-focused session reported `visibilityState: visible` and
+  `hasFocus: false`
+- its injector clicked the real `Run` prompt
+
+This supports parallel selected chats in separate visible dedicated windows.
+It does not prove reliability after a window is minimized or becomes hidden,
+and it does not expose inactive sidebar chats that Cursor has not mounted.
+
 ## Optional: Panel/Alternate Surface Prompt Coverage
 
 If your workflow surfaces prompts outside the main chat area (for example panel
@@ -598,6 +652,7 @@ The injector's DOM selectors are coupled to specific Cursor versions. Always rec
 | Cursor Version | Chrome Version | Injector Hash | Shell Run | Subagent Allow | Date Validated |
 |---------------|----------------|---------------|-----------|----------------|----------------|
 | 3.0.8 | Chrome/142.0.7444.265 | 7e641c1041dd | OK | OK | 2026-04-03 |
+| 3.12.17 | Chrome/144.0.7559.236 | 6f4963b0b16b | OK (real Run) | No real prompt surfaced; synthetic companion OK | 2026-07-18 |
 
 ### Version Upgrade Checklist
 

@@ -32,11 +32,14 @@
   const LOG_PREFIX = "[autoAccept]";
   const SCRIPT_HASH = globalThis.__cursorAutoAcceptScriptHash || "unknown";
   const REPO_SLUG = globalThis.__cursorAutoAcceptRepoSlug || "workspace";
-  const STRATEGY_VERSION = "2026-04-observer-policy";
+  const STRATEGY_VERSION = "2026-07-configurable-poll";
   const TITLE_SYNC_INTERVAL = 3000;
   /** Faster ping while discreet so Cursor cannot show a fresh native title for long. */
   const TITLE_SYNC_INTERVAL_SHARE_SAFE = 500;
   const OBSERVER_DEBOUNCE_MS = 300;
+  const DEFAULT_POLL_INTERVAL_MS = 2000;
+  const MIN_POLL_INTERVAL_MS = 250;
+  const MAX_POLL_INTERVAL_MS = 60000;
   const FINGERPRINT_COOLDOWN_MS = 8000;
   const EVENT_QUEUE_MAX = 200;
 
@@ -119,7 +122,7 @@
   const state = {
     scriptHash: SCRIPT_HASH,
     repoSlug: REPO_SLUG,
-    interval: 2000,
+    interval: DEFAULT_POLL_INTERVAL_MS,
     running: false,
     timer: null,
     titleTimer: null,
@@ -956,6 +959,8 @@
       totalClicks: state.totalClicks,
       shareSafeTitle: state.shareSafeTitle,
       observerActive: !!state.observer,
+      mountedComposerCount: document.querySelectorAll("div.full-input-box").length,
+      mountedConversationCount: document.querySelectorAll("div.conversations").length,
       eventQueueLength: state.eventQueue.length,
       cooldownEntries: state.fingerprintCooldowns.size,
       visibleButtons: _debugButtons(),
@@ -969,12 +974,31 @@
   // Start / stop / status
   // -----------------------------------------------------------------------
 
+  function _normalizedPollInterval(interval) {
+    if (typeof interval !== "number" || !Number.isFinite(interval)) {
+      return state.interval;
+    }
+    return Math.min(
+      MAX_POLL_INTERVAL_MS,
+      Math.max(MIN_POLL_INTERVAL_MS, Math.round(interval))
+    );
+  }
+
   function start(interval) {
+    const nextInterval = _normalizedPollInterval(interval);
     if (state.running) {
-      console.log(`${LOG_PREFIX} already running`);
+      if (nextInterval !== state.interval) {
+        state.interval = nextInterval;
+        clearInterval(state.timer);
+        state.timer = setInterval(checkAndClick, state.interval);
+        console.log(`${LOG_PREFIX} poll interval updated to ${state.interval}ms`);
+        setTimeout(checkAndClick, 50);
+      } else {
+        console.log(`${LOG_PREFIX} already running (interval ${state.interval}ms)`);
+      }
       return;
     }
-    if (typeof interval === "number" && interval > 0) state.interval = interval;
+    state.interval = nextInterval;
     state.running = true;
     _setupObserver();
     state.timer = setInterval(checkAndClick, state.interval);
