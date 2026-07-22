@@ -4,9 +4,10 @@
 
 `launch-cursor-autoapprove` is the supported auto-approval workflow in this
 repo. It launches a dedicated Cursor process, injects a DOM auto-accept script
-via CDP, and starts with both the approval gate and two-path bounded subagent
-recovery ON: direct mounted-composer scanning plus running-subagent tray
-navigation. Simple commands can pause either behavior later.
+via CDP, and starts with both the approval gate and bounded agent recovery ON:
+direct mounted-composer scanning, nested-subagent recovery, and sequential
+cycling across active pinned Agent Window conversations. Simple commands can
+pause either behavior later.
 
 The dedicated window is isolated at process level, so auto-clicking does not
 spill into your normal Cursor windows.
@@ -73,11 +74,11 @@ built-in usage summary, `caa help` for examples and doc paths, or
 
 | Command | Behavior |
 |---|---|
-| `launch [--workspace PATH] [PATH] [--interval SECONDS]` | Start dedicated Cursor process for a local workspace, inject script, and turn the gate and nested-subagent cycling ON. The fallback scan defaults to 0.5 seconds; supported range is 0.25–60 seconds. Blocks only if the same workspace is already running; other workspaces can run in parallel. |
-| `launch-ssh <host> [/absolute/remote/path] [--no-preflight] [--interval SECONDS]` | Start dedicated Cursor connected to an SSH remote host from `~/.ssh/config`, inject script, and turn the gate and nested-subagent cycling ON. Path-specific launches verify the remote directory with `ssh <host> test -d <path>` before creating a profile or alias. |
+| `launch [--workspace PATH] [PATH] [--interval SECONDS]` | Start dedicated Cursor process for a local workspace, inject script, and turn the gate plus nested/pinned-agent cycling ON. The fallback scan defaults to 0.5 seconds; supported range is 0.25–60 seconds. Blocks only if the same workspace is already running; other workspaces can run in parallel. |
+| `launch-ssh <host> [/absolute/remote/path] [--no-preflight] [--interval SECONDS]` | Start dedicated Cursor connected to an SSH remote host from `~/.ssh/config`, inject script, and turn the gate plus nested/pinned-agent cycling ON. Path-specific launches verify the remote directory with `ssh <host> test -d <path>` before creating a profile or alias. |
 | `on [--interval SECONDS]` | Turn gate ON and optionally change/persist the session's fallback scan interval. Reloads injector code when in-window hash differs from the current injector file. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
 | `off` | Turn gate OFF without closing the dedicated window. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
-| `cycle --on\|--off\|--once` | Control both recovery paths: registered parent-transcript rows and exact entries in the `N subagents running` tray. It starts ON; use `--off` to opt out, `--on` to re-enable, or `--once` for one explicit bounded pass. |
+| `cycle --on\|--off\|--once` | Control registered parent-transcript rows, exact entries in the `N subagents running` tray, and pinned top-level agents. It starts ON; automatic pinned navigation visits active unselected rows in round-robin passes of up to two while the window is unfocused. `--once` explicitly visits one bounded pass, including completed rows, then restores the original agent. |
 | `subagents [--json]` | Show the sanitized task registry, row hints, attempts, and confirmations. |
 | `status` | Show PID, CDP port, workspace, gate state, click count, injector hash, current title, recent clicks, and last approved command preview. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
 | `stop` | Turn gate OFF, close the dedicated Cursor process, and clear local session state when shutdown succeeds. Without `-w`, it prefers running sessions when any are alive; if none are running, it falls back to stale entries for cleanup. Use `--all` to stop every session, and do not combine `--all` with `-w` or a positional workspace. |
@@ -99,12 +100,14 @@ built-in usage summary, `caa help` for examples and doc paths, or
   the gate is already ON. Each scan clicks at most one candidate: distinct
   eligible prompts can be clicked on consecutive scans, while the same
   unresolved prompt remains deduped for eight seconds.
-- Subagent cycling is ON by default for new `launch` and `launch-ssh` sessions.
-  It targets exact registered task rows inside the selected parent and visits
-  exact running-subagent tray entries as a backup. Cycles are bounded,
-  approvals are confirmed with capped retries, and original tabs, scroll, and
-  focus are restored. Automatic cycling pauses while the focused window has its
-  terminal or another non-chat editor active. Use `caa cycle --off` to opt out.
+- Agent cycling is ON by default for new `launch` and `launch-ssh` sessions. It
+  targets exact registered task rows, running-subagent tray entries, and active
+  pinned top-level agents. Pinned agents are necessarily visited sequentially
+  because Cursor mounts only the selected conversation. Automatic top-level
+  navigation runs only while the window is unfocused; `cycle --once` is the
+  explicit focused-window test path. Cycles are bounded, approvals are
+  confirmed with capped retries, and the original agent, tabs, scroll, and
+  focus are restored. Use `caa cycle --off` to opt out.
 - `stop` ends the session and closes the dedicated process; the dedicated profile
   folder persists for reuse on the next `launch`.
 - If two sessions share the same folder name, use `-w <full-path>` instead of a
@@ -127,13 +130,13 @@ built-in usage summary, `caa help` for examples and doc paths, or
 - A non-focused but still visible dedicated window continued auto-clicking in
   Cursor 3.12.17 (`document.hasFocus() === false`). Minimized/hidden renderers
   may still be throttled, so verify with `status` for unattended workflows.
-- Inactive sidebar conversations are not mounted in the workbench DOM. The
-  injector can approve the selected conversation, but cannot directly click
-  prompts in every pinned/sidebar agent at the same time. The implemented
-  running-subagent tray fallback is sequential recovery for nested children,
-  not simultaneous top-level sidebar approval.
-- Agent Window and unrelated top-level sidebar-conversation cycling remain
-  deferred.
+- Inactive sidebar conversations are not mounted in the workbench DOM, so
+  pinned-agent support is sequential rather than truly simultaneous. Duplicate
+  pinned titles fail closed because title identity would be ambiguous.
+- Automatic pinned cycling considers only rows with Cursor's active spinner and
+  never changes the selected top-level agent while the window is focused.
+  `cycle --once` intentionally visits completed pinned rows too, making it
+  useful for a bounded two-row restoration test.
 
 ## Migration Note (Retired Approach Cleanup)
 

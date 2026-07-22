@@ -33,6 +33,9 @@ screenshot.
 - Require at least one second, finish after 250 ms of DOM quiet, and cap the wait at
   1.5 seconds.
 - Abort if the selected child tab changes.
+- Abort on a newer user interaction or focus transition while mounting; if
+  virtual-row materialization already moved the transcript, subtract only its
+  recorded programmatic scroll delta.
 - Emit `tray_no_candidate` with the wait reason, duration, and approval-control
   count so a successful visit is no longer mistaken for successful scanning.
 

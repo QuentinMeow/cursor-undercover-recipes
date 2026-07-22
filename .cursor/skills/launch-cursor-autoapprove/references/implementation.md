@@ -36,7 +36,14 @@ The injector uses a three-layer architecture:
    the `N subagents running` composer tray, mounts each read-only child agent
    editor, scans that selected editor, and restores the prior tabs/focus.
    Tray visits run before row confirmation so the backup cannot be starved by
-   the shared cycle budget. `cycle --off` disables both recovery paths.
+   the shared cycle budget. `cycle --off` disables both nested paths plus
+   pinned-agent recovery below.
+5. **Pinned Agent Recovery**: Active pinned top-level Agent Window rows are
+   visited sequentially because Cursor mounts only the selected conversation.
+   Automatic navigation runs only while the window is unfocused. Explicit
+   `cycle --once` visits up to two uniquely titled pinned rows, including
+   completed rows, per round-robin pass. Both modes restore the original agent, editor
+   selections, transcript scroll, and focus.
 
 Prompt fingerprinting (sorted button labels within the prompt root) prevents
 the same unresolved prompt from being clicked repeatedly every poll cycle.
@@ -50,11 +57,11 @@ default and intended for future hardening as internal APIs stabilize.
 
 | Command | Flags | Behavior |
 |---|---|---|
-| `launch` | `--workspace`/`-w`, positional `PATH\|ALIAS`, `--interval SECONDS` | Start dedicated Cursor for a local workspace or registered alias, inject script, and turn the gate and registered nested-subagent cycling ON. SSH folder URI aliases dispatch through the SSH launch flow. The fallback scan defaults to 0.5 seconds. |
-| `launch-ssh` | positional `HOST`, optional absolute `PATH`, `--no-preflight`, `--interval SECONDS` | Start dedicated Cursor connected to an SSH remote host via `--folder-uri`, inject script, and turn the gate and registered nested-subagent cycling ON. Path-specific launches preflight the remote directory with `ssh <host> test -d <path>` before profile/session creation. |
+| `launch` | `--workspace`/`-w`, positional `PATH\|ALIAS`, `--interval SECONDS` | Start dedicated Cursor for a local workspace or registered alias, inject script, and turn the gate plus nested/pinned-agent cycling ON. SSH folder URI aliases dispatch through the SSH launch flow. The fallback scan defaults to 0.5 seconds. |
+| `launch-ssh` | positional `HOST`, optional absolute `PATH`, `--no-preflight`, `--interval SECONDS` | Start dedicated Cursor connected to an SSH remote host via `--folder-uri`, inject script, and turn the gate plus nested/pinned-agent cycling ON. Path-specific launches preflight the remote directory with `ssh <host> test -d <path>` before profile/session creation. |
 | `on` | `-w PATH\|SLUG`, `--interval SECONDS` (both optional) | Turn gate ON; optionally update and persist the running session's fallback scan interval; reload script if hash drift is detected. |
 | `off` | `-w PATH\|SLUG` (optional) | Turn gate OFF; keep dedicated window open. |
-| `cycle` | exactly one of `--on`, `--off`, `--once`; optional `-w PATH\|SLUG` | Opt out of default-on automatic subagent recovery, re-enable it, or run one explicit bounded cycle. |
+| `cycle` | exactly one of `--on`, `--off`, `--once`; optional `-w PATH\|SLUG` | Opt out of default-on nested and pinned-agent recovery, re-enable it, or run one explicit bounded cycle. |
 | `subagents` | `-w PATH\|SLUG`, `--json` (both optional) | Show the sanitized renderer registry and persisted row/status hints. |
 | `status` | `-w PATH\|SLUG` (optional) | Print session details. Shows all sessions if `-w` omitted; ambiguous slugs use the picker. |
 | `stop` | `-w PATH\|SLUG` (optional), `--all` | Turn gate OFF, terminate dedicated process, and remove session entry when shutdown succeeds. `--all` must not be combined with `-w` or a positional workspace. |
@@ -270,8 +277,8 @@ When you run `caa launch --workspace <path>`:
 10. Save session to `state.json` under the workspace path (local) or folder URI (SSH) key.
 11. Inject `devtools_auto_accept.js` via CDP `Runtime.evaluate`.
 12. Call `startAccept(<interval-ms>)`, which starts the gate and the default-on
-    bounded scheduler for registered nested-subagent rows, then sync title to
-    `autoapprove ✅ <repo>`.
+    bounded scheduler for registered nested-subagent rows, running children,
+    and active pinned agents, then sync title to `autoapprove ✅ <repo>`.
 
 If `open -na` path detection fails, the launcher falls back to direct executable
 launch and repeats PID detection.
@@ -350,7 +357,11 @@ run simultaneously.
 - Nested-subagent recovery starts with `state.cycleEnabled: true`; `cycle --off`
   disables it explicitly and `cycle --on` re-enables it
 - Running-subagent tray visits are round-robin bounded to eight entries and the
-  shared cycle remains capped at 10 seconds
+  nested recovery phase remains capped at 10 seconds
+- Pinned-agent visits have a separate 3.5-second budget and are round-robin
+  bounded to two active, unselected rows per automatic cycle, so top-level
+  navigation cannot consume the nested recovery budget; focused windows never
+  receive automatic top-level navigation
 - Tray approvals use exact selected-tab resource identity, confirmation, and a
   two-attempt limit; aggregate visits/attempts/confirmations appear in status
 - Real user interactions increment a monotonic generation and retain the latest
@@ -394,8 +405,12 @@ handles those surfaces:
 7. Scan only that editor group. The editor workbench exclusion is relaxed only
    in this exact scope; exact labels, dismissal/companion evidence, unrelated
    modal blocking, and hit coverage remain required.
-8. Confirm the candidate disappeared and allow at most two attempts for the
-   same resource/prompt fingerprint.
+8. Confirm the raw control is absent across the final consecutive checks and
+   allow at most two attempts for the same resource/prompt fingerprint.
+   Disabled, hidden, covered, or temporarily context-less controls remain
+   present and therefore do not produce false confirmations. Connected nodes
+   are checked for their current label/prompt identity so a node reused for a
+   completed state does not remain falsely pending.
 9. Restore the original selected tabs. Cursor's tab widget requires
    `mousedown`/`mouseup` before `click`; plain `HTMLElement.click()` did not
    restore selection in live testing.
@@ -406,7 +421,67 @@ Tray attempts emit `tray_visit`, `tray_visit_miss`,
 `tray_approval_unconfirmed`. A visit that mounts the child but finds no eligible
 candidate emits `tray_no_candidate` with its bounded wait reason, duration, and
 raw approval-control count. The normal mounted-composer scanner remains active
-as the fast path.
+as the fast path. Navigation acquires editor-group ownership before dispatching
+the row/tab click and retains it until selected sidebar/resource and tab state
+are observed restored. Acquiring only after mount or releasing when the attempt
+promise returns would let mutation-driven direct scanning race the mount or
+retry an unconfirmed control during restoration. Because portaled modals can
+live under `document.body` without an editor-group ancestor, all ordinary
+scanner candidates are withheld while navigation ownership is active; an
+unattributable portal fails closed instead of racing the scoped path.
+
+### Pinned Top-Level Agent Cycling
+
+Cursor 3.12.17 exposes pinned conversations as `.agent-sidebar-cell` rows
+inside the exact `Pinned` `.agent-sidebar-section`, but mounts only one
+`div.conversations` and one composer. The injector therefore uses bounded
+navigation rather than pretending inactive chats are simultaneously clickable:
+
+1. Discover exact `.agent-sidebar-cell-text` titles under the `Pinned` section.
+2. Reject normalized titles duplicated anywhere in the currently rendered
+   Agent sidebar, not only inside `Pinned`, because selected-tab identity would
+   be ambiguous.
+3. For automatic cycles, keep only unselected rows with Cursor's
+   `.spinning-loader` active marker and require `document.hasFocus() === false`;
+   recheck focus before selection and while waiting for the mounted candidate.
+4. Save the selected sidebar row, selected editor tabs, transcript scroll, and
+   focus context.
+5. Select each row with the same mouse event sequence used for editor tabs.
+   Re-resolve its globally unique title, exact Pinned-section membership,
+   active state, and row node immediately before every click; never reuse a
+   later entry captured before an earlier conversation switch.
+6. Require one selected agent tab with an exact matching title and one mounted
+   conversations surface; wait up to 1.5 seconds for the editor and another
+   bounded interval for a candidate at the transcript tail.
+7. Scope approval discovery to that exact editor group, require the exact
+   pinned row to remain selected, confirm raw-control disappearance, and cap
+   retries at two.
+8. Re-resolve the original globally unique title, require its selected-tab
+   resource to match the captured resource, then restore transcript scroll,
+   editor tabs, and focus before nested recovery continues.
+9. If a real user interaction or window-focus transition occurs during an
+   automatic visit, abort the entire cycle. A newer user sidebar/tab/scroll
+   selection is preserved and all remaining pinned, tray, and virtual-row
+   navigation is skipped; restoration runs only while the selection remains
+   automation-owned.
+
+`cycle --once` deliberately includes completed pinned rows so a two-row
+navigation/restoration test does not require two live approvals. Automatic
+cycles do not visit completed rows and do not switch top-level agents while the
+window is focused. Events use `pinned_visit`, `pinned_no_candidate`,
+`pinned_approval_attempted`, `pinned_approval_confirmed`,
+`pinned_approval_unconfirmed`, and `pinned_restore`.
+
+Live validation on Cursor 3.12.17 with injector `538f6927c92e` visited two
+pinned rows, clicked and confirmed one scoped synthetic `View` + `Allow`
+approval in the completed history conversation, and restored the exact
+original sidebar row and selected agent tab. An automatic-mode probe with
+`document.hasFocus() === false` and a temporary active marker visited only the
+unselected row once and restored the original; after the marker was removed,
+later automatic passes reported zero pinned visits. Follow-up race probes
+confirmed that a temporarily disabled/hidden control was clicked once but not
+confirmed or retried, and that a newer simulated user selection was preserved
+with `abortedReason: new_user_interaction`.
 
 ### Focus-Safe Recovery
 
@@ -416,9 +491,21 @@ focused. This focus guard is independent of the two-second recent-interaction
 timeout, so pausing while typing does not allow navigation to resume underneath
 an idle terminal.
 
-Every real pointer/keyboard/scroll interaction increments
+The interaction generation and an unfocused-to-focused transition are also
+checked during pinned mounts, tray mounts, virtual-row materialization,
+confirmation waits, and restoration. A takeover aborts the whole cycle rather
+than only the current path. Tab restoration is asynchronous and ownership is
+released only after the captured selections are observed selected again.
+Virtual-row materialization records its actual programmatic scroll delta; if a
+takeover occurs while mounting or confirming, that delta is subtracted from the
+current position so automation is rolled back without discarding relative user
+scroll movement.
+
+Every real pointer, keyboard, or wheel interaction increments
 `state.interactionGeneration`. Cycle contexts save that generation and their
-starting focus. Scroll and tab restoration never call `focus()` directly.
+starting focus. Native `scroll` events are excluded because Cursor auto-follow
+can emit trusted scrolls without user input. Scroll and tab restoration never
+call `focus()` directly.
 After restoration, one focus owner chooses:
 
 - the starting target if no newer user interaction occurred
@@ -438,7 +525,8 @@ The injector fails closed when its own renderer work becomes pathological:
 
 - delete-file fallback scans mounted virtual rows plus at most 100 deduplicated
   `.composer-tool-former-message` roots, never `document.body`
-- cycles visit at most 20 tasks and stop after 10 seconds
+- pinned visits stop after 3.5 seconds; nested recovery then receives its own
+  10-second budget and visits at most 20 registered tasks
 - an unconfirmed subagent click is retried once, then remains `failed` while
   the same approval card is visible; mutation discovery cannot reactivate it,
   and normal status derivation resumes after the approval clears so changed
@@ -664,6 +752,8 @@ settings remain there until manually removed.
 - cycle toggle/activity, task counts, and last-cycle outcome
 - running-subagent tray count plus tray visits, attempts, confirmations, and
   failed retry states
+- pinned-agent total/active/ambiguous count, visits, attempts, confirmations,
+  failures, last restoration result, and any cycle-abort reason
 - active focus kind, any focus reason pausing automatic cycles, and the last
   focus-settle outcome
 - last/max scan duration, JavaScript heap, and safety-trip reason
@@ -763,14 +853,13 @@ prevent regression.
   "visible"` and continued clicking real `Run` prompts. Parallel visible
   dedicated windows can work. Minimized/hidden renderers may still be
   throttled and require separate validation.
-- **Inactive top-level sidebar agents are not mounted chat surfaces**: Direct inspection
-  on Cursor 3.12.17 found one `div.full-input-box` and one `div.conversations`
-  before and after selecting a pinned row. Selection replaced the mounted chat
-  instead of revealing multiple hidden chats. Therefore a DOM injector can
-  approve those top-level agents only when selected. This is distinct from the
-  implemented `N subagents running` tray, which indexes nested child agents and
-  is visited sequentially with tab/focus restoration. Agent Window and
-  unrelated top-level sidebar cycling remain deferred.
+- **Inactive top-level sidebar agents are not mounted chat surfaces**: Direct
+  inspection on Cursor 3.12.17 found one `div.full-input-box` and one
+  `div.conversations` before and after selecting a pinned row. Selection
+  replaces the mounted chat instead of revealing hidden chats. Pinned-agent
+  support is therefore sequential, automatic only for active background rows,
+  and title-identity dependent; duplicate titles fail closed. This remains
+  distinct from the `N subagents running` tray, which indexes nested children.
 
 ## Related Docs
 

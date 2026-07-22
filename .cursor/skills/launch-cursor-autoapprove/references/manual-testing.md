@@ -374,22 +374,50 @@ Expected result:
 - both status checks show `Gate: ON`
 - an invalid value such as `--interval 0` is rejected before contacting Cursor
 
-## Pinned/Sidebar Agent DOM Evaluation
+## Pinned Agent Window Cycling
 
-On Cursor 3.12.17, inspect the live workbench before and after selecting a
-pinned agent row.
+Pin at least two top-level conversations. One may be a completed history item;
+explicit cycling intentionally includes completed pinned rows:
+
+```bash
+/usr/bin/python3 "$LAUNCHER" cycle --once
+/usr/bin/python3 "$LAUNCHER" status
+/usr/bin/python3 "$LAUNCHER" history -n 30 --json
+```
 
 Expected result:
 
-- the current renderer contains one `div.full-input-box` and one
-  `div.conversations`
-- selecting another row replaces those mounted nodes; it does not add a hidden
-  chat DOM for that row
-- approval controls for inactive rows do not exist in the live DOM
+- the current renderer still contains one `div.full-input-box` and one
+  `div.conversations`; support is sequential, not truly simultaneous
+- `cycle --once` reports two pinned visits when two globally unique rows are
+  pinned; larger sets rotate through bounded two-row passes
+- `pinned_visit` and `pinned_no_candidate` or
+  `pinned_approval_confirmed` events identify each bounded visit
+- the exact originally selected `.agent-sidebar-cell[data-selected="true"]`,
+  selected agent tab, transcript scroll, and focus are restored
+- `status` reports `Pinned: <active>/<total> active` plus ambiguous-title and
+  cumulative visit/attempt/confirmation/failure totals
+- duplicate normalized titles anywhere in the rendered Agent sidebar fail
+  closed instead of selecting by position
 
-This means the injector can approve the selected chat but cannot click all
-pinned agents simultaneously. A row-cycling experiment is only a sequential,
-visibly disruptive workaround and must restore the originally selected row.
+For automatic behavior, start work in two pinned agents and move the dedicated
+window to the background without minimizing it. Only unselected rows with
+Cursor's active spinner should be visited. Refocus the Agent Window and confirm
+automatic top-level navigation stops and no nested navigation follows that
+aborted pass; direct selected-chat scanning continues. During another automatic
+pass, manually select a different agent. The cycle must preserve that newer
+selection and report `PinnedLast: preserved_new_user_selection`.
+
+For confirmation safety, inject a scoped synthetic approval whose click handler
+temporarily disables or hides the same control and then restores it. The attempt
+must remain unconfirmed; loss of click eligibility alone is not approval
+completion. In a second probe, keep the node connected but change its label from
+`Allow` to a non-approval completed state; that attempt should confirm once.
+
+Repeat the takeover test during tray or virtual-row recovery by selecting
+another editor tab while a child is mounting. The whole cycle must abort,
+preserve the newer tab/scroll state, skip later paths, and release navigation
+ownership only after any automation-owned restoration is observed complete.
 
 ## Non-Focused Dedicated Window Test
 
@@ -659,6 +687,8 @@ Expected result:
 - tray recovery records `tray_visit`, then
   `tray_approval_attempted`/`tray_approval_confirmed` for a real child approval
 - the tray line reports running rows plus visit/attempt/confirmation totals
+- the pinned line reports active/total rows plus visit/attempt/confirmation
+  totals
 - the editor tab selected before tray recovery is selected again afterward;
   the child tab may remain open
 - the original scroll position and focus are restored
@@ -744,10 +774,11 @@ The injector's DOM selectors are coupled to specific Cursor versions. Always rec
 
 ### Known Working Versions
 
-| Cursor Version | Chrome Version | Injector Hash | Shell Run | Subagent Allow | Date Validated |
-|---------------|----------------|---------------|-----------|----------------|----------------|
-| 3.0.8 | Chrome/142.0.7444.265 | 7e641c1041dd | OK | OK | 2026-04-03 |
-| 3.12.17 | Chrome/144.0.7559.236 | 460391c03c13 | OK (real Run) | OK (4 concurrent real Allow prompts; 60s tasks) | 2026-07-21 |
+| Cursor Version | Chrome Version | Injector Hash | Shell Run | Subagent Allow | Pinned Agent Cycle | Date Validated |
+|---------------|----------------|---------------|-----------|----------------|--------------------|----------------|
+| 3.0.8 | Chrome/142.0.7444.265 | 7e641c1041dd | OK | OK | Not tested | 2026-04-03 |
+| 3.12.17 | Chrome/144.0.7559.236 | 460391c03c13 | OK (real Run) | OK (4 concurrent real Allow prompts; 60s tasks) | Not tested | 2026-07-21 |
+| 3.12.17 | Chrome/144.0.7559.236 | 538f6927c92e | OK (real Run) | Not rerun | OK (2 rows; confirm, transient-control, user-selection, and restoration probes) | 2026-07-22 |
 
 ### Version Upgrade Checklist
 
@@ -757,13 +788,17 @@ When upgrading Cursor:
 2. **After upgrading**: Run `caa status` to check if the injector is still loaded
 3. **Test shell commands**: Trigger a non-allowlisted command, verify auto-click
 4. **Test subagent approval**: Launch a subagent with shell commands, verify View+Allow click
-5. **If broken**: Run the CDP diagnostic harness to capture what changed
-6. **Record results**: Update the version table above
+5. **Test pinned cycling**: Pin two agents, run `cycle --once`, and verify the
+   original row/tab plus pinned confirmation telemetry
+6. **If broken**: Run the CDP diagnostic harness to capture what changed
+7. **Record results**: Update the version table above
 
 ### Key DOM Elements To Verify After Upgrade
 
 - `div.full-input-box` — anchor for composer surface detection
 - `div.conversations` — container for chat messages and prompts
 - `div.view-allow-btn-container-v1` — subagent tool-call button container
+- `.agent-sidebar-section`, `.agent-sidebar-cell`, and
+  `.agent-sidebar-cell-text` — pinned top-level navigation identity
 - `workbench.parts.auxiliarybar` — current home of the agent chat panel
 - Button rendering: `<button>` vs `<div>` with `cursor: pointer`
