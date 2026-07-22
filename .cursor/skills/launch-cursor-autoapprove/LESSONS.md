@@ -296,3 +296,60 @@
 - **Approved commands may contain secrets**: Tokens, passwords, and sensitive
   paths can appear in terminal commands. The command ledger is a local
   diagnostic record; treat it with the same caution as shell history.
+
+## Renderer Performance and Fail-Safe Bounds
+
+- **Faster polling and duplicate-click prevention are separate controls**: A
+  500ms fallback lets different task cards be approved on consecutive scans.
+  The per-fingerprint eight-second cooldown still prevents one unresolved card
+  from being clicked every 500ms. Do not slow global polling to solve a
+  per-prompt deduplication problem.
+
+- **Concurrent approval tests need delayed work plus parent transcript growth**:
+  Launch several read-only tasks that do useful inspection before a 60-second
+  sleep, then keep the parent producing relevant output. This exercises
+  simultaneous permission cards, virtual-row unmounting, lifecycle updates,
+  and renderer load in one bounded test.
+
+- **Task status can be temporarily non-monotonic**: Cursor may mark the outer
+  tool row `completed` before a nested subagent permission card appears. A
+  visible eligible approval must outrank the outer `data-tool-status`; later
+  mutation discovery can move the registry from `completed` to
+  `approval_pending` and back to `completed`.
+
+- **Task-scoped fingerprints enable safe throughput**: Four concurrent
+  `Allow|Stop` prompts had identical labels but distinct task/row identities.
+  The injector safely clicked all four, including two clicks 500ms apart,
+  without weakening the cooldown for any individual prompt.
+
+- **Scope reductions must pass the preserved real-prompt corpus**: Limiting the
+  delete-file fallback to virtual rows fixed renderer load but initially broke
+  the real editor-surface `Reject|Accept` fixture. Preserve exceptional coverage
+  with an exact `.composer-tool-former-message` selector, deduplicate overlaps,
+  and cap inspected roots instead of restoring a `document.body` scan.
+
+- **Never run nested broad selectors from `document.body` after every
+  mutation**: The old delete-file fallback gathered overlapping
+  composer/message/tool containers, then scanned all descendant controls in
+  each. Long streaming transcripts turned that into repeated superlinear DOM
+  work. Scope fallbacks to mounted virtual rows or an exact prompt root.
+
+- **Mutation observers need semantic filtering and a minimum scan gap**:
+  Character-data and class mutations are continuous while an agent streams.
+  Only task-row and approval-control mutations should trigger immediate work;
+  the fallback poll handles uncertain changes. Rate-limit observer scans even
+  after filtering.
+
+- **Private debug APIs must not be toggled per mutation**: Enabling and disabling
+  Cursor's virtualizer snapshot can itself cause renderer work. Cache one
+  validated snapshot for a short interval and force at most one refresh at the
+  start of a bounded cycle.
+
+- **Automation running in the renderer needs a circuit breaker**: Track scan
+  duration and JavaScript heap. Repeated pathological scans or a heap threshold
+  should turn the gate off and record a durable safety event rather than
+  contributing to an unresponsive window.
+
+- **Renderer reloads invalidate pinned target IDs without necessarily changing
+  the main PID or CDP port**: Rebind only when exactly one workbench target
+  exists. Ambiguous target sets must still fail closed.

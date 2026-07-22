@@ -54,7 +54,9 @@ If you set the alias:
 caa launch ~/code/my-project
 caa launch ~/code/my-project --interval 5
 caa launch-ssh my-devbox /home/user/code/project
-caa on --interval 2
+caa on --interval 0.5
+caa cycle --on
+caa subagents
 caa off
 caa status
 caa stop
@@ -70,10 +72,12 @@ built-in usage summary, `caa help` for examples and doc paths, or
 
 | Command | Behavior |
 |---|---|
-| `launch [--workspace PATH] [PATH] [--interval SECONDS]` | Start dedicated Cursor process for a local workspace, inject script, gate ON. The fallback scan defaults to 2 seconds; supported range is 0.25–60 seconds. Blocks only if the same workspace is already running; other workspaces can run in parallel. |
+| `launch [--workspace PATH] [PATH] [--interval SECONDS]` | Start dedicated Cursor process for a local workspace, inject script, gate ON. The fallback scan defaults to 0.5 seconds; supported range is 0.25–60 seconds. Blocks only if the same workspace is already running; other workspaces can run in parallel. |
 | `launch-ssh <host> [/absolute/remote/path] [--no-preflight] [--interval SECONDS]` | Start dedicated Cursor connected to an SSH remote host from `~/.ssh/config`, inject script, gate ON. Path-specific launches verify the remote directory with `ssh <host> test -d <path>` before creating a profile or alias. |
 | `on [--interval SECONDS]` | Turn gate ON and optionally change/persist the session's fallback scan interval. Reloads injector code when in-window hash differs from the current injector file. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
 | `off` | Turn gate OFF without closing the dedicated window. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
+| `cycle --on\|--off\|--once` | Opt-in recovery for registered nested-subagent approval rows that were virtualized out of the DOM. |
+| `subagents [--json]` | Show the sanitized task registry, row hints, attempts, and confirmations. |
 | `status` | Show PID, CDP port, workspace, gate state, click count, injector hash, current title, recent clicks, and last approved command preview. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
 | `stop` | Turn gate OFF, close the dedicated Cursor process, and clear local session state when shutdown succeeds. Without `-w`, it prefers running sessions when any are alive; if none are running, it falls back to stale entries for cleanup. Use `--all` to stop every session, and do not combine `--all` with `-w` or a positional workspace. |
 | `history [-w SLUG] [-n N] [--json] [--commands]` | Show durable event log (session/gate/click events). Use `--commands` to show only approved commands with readable multiline formatting from the dedicated command ledger. |
@@ -90,8 +94,11 @@ built-in usage summary, `caa help` for examples and doc paths, or
 - Does **not** copy non-auth `state.vscdb` rows (chat history/model state remain profile-specific).
 - There is no `inject --restart` command in this supported launcher.
 - The observer reacts to DOM changes after a 300ms debounce. `--interval`
-  controls the fallback scan, defaults to 2 seconds, and can be changed while
-  the gate is already ON.
+  controls the fallback scan, defaults to 0.5 seconds, and can be changed while
+  the gate is already ON. A scan clicks at most one eligible candidate, and the
+  fingerprint cooldown still prevents repeated clicks on one unresolved card.
+- Subagent cycling is OFF by default. It targets only exact task rows inside the
+  selected parent conversation and restores the original scroll/focus state.
 - `stop` ends the session and closes the dedicated process; the dedicated profile
   folder persists for reuse on the next `launch`.
 - If two sessions share the same folder name, use `-w <full-path>` instead of a
@@ -104,6 +111,8 @@ built-in usage summary, `caa help` for examples and doc paths, or
   false clicks.
 - The script still relies on Cursor's DOM structure; major UI changes can break
   matching or require pattern updates.
+- Broad mutation work is rate-limited. Repeated scans over 250ms or JavaScript
+  heap above 768 MiB trips the gate OFF and appears under `status`.
 - Keep the gate OFF (`caa off`) when doing sensitive UI actions in the dedicated
   window that are unrelated to approvals.
 - A non-focused but still visible dedicated window continued auto-clicking in
@@ -128,4 +137,5 @@ artifacts to avoid conflicts:
 
 - [Implementation details](references/implementation.md)
 - [Manual testing guide](references/manual-testing.md)
+- [Subagent approval cycling design](references/subagent-approval-cycling.md)
 - [Why older approaches were retired](references/retired-approaches.md)

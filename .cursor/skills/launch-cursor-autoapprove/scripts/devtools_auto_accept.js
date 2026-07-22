@@ -10,7 +10,8 @@
 // persist durably.
 //
 // API:  startAccept()  stopAccept()  acceptStatus()  acceptDebugSnapshot()
-//       setShareSafeTitle(bool)
+//       setShareSafeTitle(bool)  setSubagentCycle(bool)
+//       runSubagentCycle()  exportSubagentRegistry()
 (function () {
   "use strict";
 
@@ -32,16 +33,39 @@
   const LOG_PREFIX = "[autoAccept]";
   const SCRIPT_HASH = globalThis.__cursorAutoAcceptScriptHash || "unknown";
   const REPO_SLUG = globalThis.__cursorAutoAcceptRepoSlug || "workspace";
-  const STRATEGY_VERSION = "2026-07-configurable-poll";
+  const STRATEGY_VERSION = "2026-07-subagent-cycle-v1";
   const TITLE_SYNC_INTERVAL = 3000;
   /** Faster ping while discreet so Cursor cannot show a fresh native title for long. */
   const TITLE_SYNC_INTERVAL_SHARE_SAFE = 500;
   const OBSERVER_DEBOUNCE_MS = 300;
-  const DEFAULT_POLL_INTERVAL_MS = 2000;
+  const OBSERVER_MIN_SCAN_GAP_MS = 500;
+  const DEFAULT_POLL_INTERVAL_MS = 500;
   const MIN_POLL_INTERVAL_MS = 250;
   const MAX_POLL_INTERVAL_MS = 60000;
   const FINGERPRINT_COOLDOWN_MS = 8000;
   const EVENT_QUEUE_MAX = 200;
+  const SUBAGENT_STORAGE_VERSION = 1;
+  const SUBAGENT_REGISTRY_MAX = 500;
+  const SUBAGENT_ROW_SELECTOR = ".virtualized-composer-messages-row";
+  const SUBAGENT_SURFACE_SELECTOR = '.subagent-task-card, [class*="task-subagent"]';
+  const SCROLL_CONTAINER_SELECTOR = ".virtualized-composer-messages-scroll-container";
+  const CYCLE_INTERACTION_GUARD_MS = 2000;
+  const CYCLE_MOUNT_TIMEOUT_MS = 250;
+  const CYCLE_CONFIRM_DELAYS_MS = [150, 350, 700, 1200];
+  const CYCLE_AUTOMATIC_INTERVAL_MS = 5000;
+  const CYCLE_MAX_TASKS = 20;
+  const CYCLE_MAX_DURATION_MS = 10000;
+  const VIRTUALIZER_SNAPSHOT_CACHE_MS = 5000;
+  const MAX_SAFE_SCAN_DURATION_MS = 250;
+  const MAX_CONSECUTIVE_SLOW_SCANS = 3;
+  const MAX_JS_HEAP_BYTES = 768 * 1024 * 1024;
+  const ACTIVE_SUBAGENT_STATUSES = new Set([
+    "discovered",
+    "running",
+    "approval_pending",
+    "approval_attempted",
+    "approved",
+  ]);
 
   // -----------------------------------------------------------------------
   // Pattern tables (discovery layer)
@@ -97,16 +121,8 @@
     '[aria-modal="true"]',
   ];
   const DELETE_FILE_PROMPT_PATTERN = /\bdelete(?:\s+file)?\b/i;
-  const DELETE_FILE_SEARCH_ROOT_SELECTORS = [
-    ".composer-tool-former-message",
-    ".composer-human-message-container",
-    ".human-message-with-todos-wrapper",
-    ".composer-message",
-    ".conversations",
-    '[class*="composer"]',
-    '[class*="message"]',
-    '[class*="tool"]',
-  ];
+  const DELETE_FILE_SURFACE_SELECTOR = ".composer-tool-former-message";
+  const MAX_DELETE_FILE_FALLBACK_ROOTS = 100;
   const DISMISS_PATTERNS = new Set([
     "skip", "cancel", "dismiss", "deny", "not now", "close", "reject",
     "don't allow", "decline",
@@ -122,6 +138,8 @@
   const state = {
     scriptHash: SCRIPT_HASH,
     repoSlug: REPO_SLUG,
+    workspace: globalThis.__cursorAutoAcceptWorkspace || REPO_SLUG,
+    targetId: globalThis.__cursorAutoAcceptTargetId || "unbound-target",
     interval: DEFAULT_POLL_INTERVAL_MS,
     running: false,
     timer: null,
@@ -132,12 +150,948 @@
     clicks: [],
     eventQueue: [],
     fingerprintCooldowns: new Map(),
+    totalClickAttempts: 0,
+    totalConfirmedApprovals: 0,
+    totalScans: 0,
+    lastScanDurationMs: 0,
+    maxScanDurationMs: 0,
+    lastScanAt: 0,
+    consecutiveSlowScans: 0,
+    safetyTrip: null,
+    virtualizerCache: null,
+    virtualizerCacheAt: 0,
+    subagents: new Map(),
+    cycleEnabled: false,
+    cycleActive: false,
+    cycleTimer: null,
+    cycleGeneration: 0,
+    cycleCursor: 0,
+    lastCycle: null,
+    lastUserInteractionAt: 0,
+    lastUserInteractionType: null,
+    interactionGuardInstalled: false,
+    programmaticScrollDepth: 0,
     enableResume: true,
     enableConnectionRetry: true,
     enableStateProbe: false,
     /** When true, stop overriding the window title with autoapprove branding. */
     shareSafeTitle: false,
   };
+
+  // -----------------------------------------------------------------------
+  // Subagent registry, virtualizer adapter, and cycle scheduler
+  // -----------------------------------------------------------------------
+
+  function _subagentStorageKey() {
+    return [
+      "cursor-autoaccept-subagents",
+      SUBAGENT_STORAGE_VERSION,
+      state.workspace,
+      state.targetId,
+    ].join(":");
+  }
+
+  function _sanitizeSubagentRecord(record) {
+    return {
+      taskKey: String(record.taskKey || "").slice(0, 1000),
+      workspace: String(record.workspace || state.workspace).slice(0, 1000),
+      targetId: String(record.targetId || state.targetId).slice(0, 200),
+      parentComposerId: String(record.parentComposerId || "").slice(0, 200),
+      parentConversationId: record.parentConversationId
+        ? String(record.parentConversationId).slice(0, 200)
+        : null,
+      toolUseId: record.toolUseId ? String(record.toolUseId).slice(0, 300) : null,
+      rowKey: String(record.rowKey || "").slice(0, 1000),
+      bubbleIds: Array.isArray(record.bubbleIds)
+        ? record.bubbleIds.slice(0, 20).map((v) => String(v).slice(0, 200))
+        : [],
+      rowIndexHint: Number.isFinite(record.rowIndexHint) ? record.rowIndexHint : null,
+      rowStartHint: Number.isFinite(record.rowStartHint) ? record.rowStartHint : null,
+      title: String(record.title || "Subagent task").slice(0, 120),
+      status: String(record.status || "discovered").slice(0, 40),
+      firstSeenAt: record.firstSeenAt || null,
+      lastSeenAt: record.lastSeenAt || null,
+      lastProgressAt: record.lastProgressAt || null,
+      lastAttemptAt: record.lastAttemptAt || null,
+      confirmedAt: record.confirmedAt || null,
+      attempts: Number.isFinite(record.attempts) ? record.attempts : 0,
+      failure: record.failure ? String(record.failure).slice(0, 120) : null,
+    };
+  }
+
+  function _persistSubagentRegistry() {
+    try {
+      const tasks = Array.from(state.subagents.values())
+        .slice(-SUBAGENT_REGISTRY_MAX)
+        .map(_sanitizeSubagentRecord);
+      localStorage.setItem(
+        _subagentStorageKey(),
+        JSON.stringify({
+          version: SUBAGENT_STORAGE_VERSION,
+          workspace: state.workspace,
+          targetId: state.targetId,
+          cycleEnabled: state.cycleEnabled,
+          tasks,
+          savedAt: new Date().toISOString(),
+        })
+      );
+    } catch (e) {
+      console.log(`${LOG_PREFIX} could not persist subagent registry:`, e.message);
+    }
+  }
+
+  function _loadSubagentRegistry() {
+    try {
+      const raw = localStorage.getItem(_subagentStorageKey());
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (
+        parsed?.version !== SUBAGENT_STORAGE_VERSION ||
+        parsed.workspace !== state.workspace ||
+        parsed.targetId !== state.targetId ||
+        !Array.isArray(parsed.tasks)
+      ) {
+        return;
+      }
+      state.cycleEnabled = parsed.cycleEnabled === true;
+      for (const input of parsed.tasks.slice(-SUBAGENT_REGISTRY_MAX)) {
+        if (!input || !input.taskKey || !input.rowKey || !input.parentComposerId) continue;
+        const record = _sanitizeSubagentRecord(input);
+        if (ACTIVE_SUBAGENT_STATUSES.has(record.status)) {
+          record.status = "stale";
+          record.failure = "injector_reload";
+        }
+        state.subagents.set(record.taskKey, record);
+      }
+    } catch (e) {
+      console.log(`${LOG_PREFIX} could not restore subagent registry:`, e.message);
+    }
+  }
+
+  function _getVirtualizerSnapshot(force = false) {
+    if (
+      !force &&
+      state.virtualizerCache &&
+      Date.now() - state.virtualizerCacheAt < VIRTUALIZER_SNAPSHOT_CACHE_MS
+    ) {
+      return state.virtualizerCache;
+    }
+    const api = globalThis.__cursorComposerVirtualizationDebug;
+    if (
+      !api ||
+      typeof api.getSnapshot !== "function" ||
+      typeof api.getEngineKind !== "function"
+    ) {
+      return { ok: false, reason: "virtualizer_api_missing" };
+    }
+
+    let wasEnabled = null;
+    try {
+      if (
+        typeof api.isSnapshotEnabled === "function" &&
+        typeof api.setSnapshotEnabled === "function"
+      ) {
+        wasEnabled = api.isSnapshotEnabled();
+        if (!wasEnabled) api.setSnapshotEnabled(true);
+      }
+      const snapshot = api.getSnapshot();
+      if (wasEnabled === false) api.setSnapshotEnabled(false);
+      if (
+        !snapshot ||
+        typeof snapshot.composerId !== "string" ||
+        !Array.isArray(snapshot.rows) ||
+        !Number.isFinite(snapshot.totalSize)
+      ) {
+        const failed = { ok: false, reason: "virtualizer_shape_changed" };
+        state.virtualizerCache = failed;
+        state.virtualizerCacheAt = Date.now();
+        return failed;
+      }
+      const rowsValid = snapshot.rows.every(
+        (row) =>
+          row &&
+          Number.isFinite(row.index) &&
+          typeof row.key === "string" &&
+          Number.isFinite(row.start)
+      );
+      if (!rowsValid) {
+        const failed = { ok: false, reason: "virtualizer_rows_invalid" };
+        state.virtualizerCache = failed;
+        state.virtualizerCacheAt = Date.now();
+        return failed;
+      }
+      const result = {
+        ok: true,
+        engine: String(api.getEngineKind() || "unknown"),
+        snapshot,
+      };
+      state.virtualizerCache = result;
+      state.virtualizerCacheAt = Date.now();
+      return result;
+    } catch (e) {
+      if (wasEnabled === false) {
+        try {
+          api.setSnapshotEnabled(false);
+        } catch (_) {}
+      }
+      const failed = { ok: false, reason: `virtualizer_error:${e.message}` };
+      state.virtualizerCache = failed;
+      state.virtualizerCacheAt = Date.now();
+      return failed;
+    }
+  }
+
+  function _findSnapshotRow(snapshot, rowKey) {
+    const matches = snapshot.rows.filter((row) => row.key === rowKey);
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  function _findExactRow(rowKey) {
+    const rows = document.querySelectorAll(`${SUBAGENT_ROW_SELECTOR}[data-find-row-key]`);
+    for (const row of rows) {
+      if (
+        row.getAttribute("data-find-row-key") === rowKey &&
+        row.querySelector(SUBAGENT_SURFACE_SELECTOR)
+      ) {
+        return row;
+      }
+    }
+    return null;
+  }
+
+  function _toolUseIdFromRowKey(rowKey) {
+    const match = String(rowKey || "").match(/:tool:([^\s]+)/);
+    return match ? match[1] : null;
+  }
+
+  function _bubbleIdsFromRow(row) {
+    const raw = row.getAttribute("data-find-bubble-ids") || "";
+    return raw
+      .split(/[\s,]+/)
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .slice(0, 20);
+  }
+
+  function _shortTaskTitle(surface) {
+    const preferred = surface.querySelector(
+      '.task-tool-call-header .truncate, [class*="title"], [class*="name"], [class*="summary"], header'
+    );
+    const source = preferred || surface;
+    const lines = String(source.innerText || source.textContent || "")
+      .split(/\n+/)
+      .map((line) => line.trim().replace(/\s+/g, " "))
+      .filter(Boolean)
+      .filter((line) => !APPROVAL_PATTERNS.some(({ pattern }) => normalizeLabel(line) === pattern))
+      .filter((line) => !DISMISS_PATTERNS.has(normalizeLabel(line)))
+      .filter((line) => !COMPANION_PATTERNS.has(normalizeLabel(line)));
+    return (lines[0] || "Subagent task").slice(0, 120);
+  }
+
+  function _visibleRowApproval(row) {
+    const seen = new Set();
+    for (const selector of BUTTON_SELECTORS) {
+      for (const el of row.querySelectorAll(selector)) {
+        if (seen.has(el)) continue;
+        seen.add(el);
+        if (matchesApproval(el)) return true;
+      }
+    }
+    return false;
+  }
+
+  function _rowHasLabel(row, labels) {
+    const seen = new Set();
+    for (const selector of BUTTON_SELECTORS) {
+      for (const el of row.querySelectorAll(selector)) {
+        if (seen.has(el)) continue;
+        seen.add(el);
+        if (!isVisible(el) || !isClickable(el)) continue;
+        const text = normalizeLabel(String(el.textContent || ""));
+        if (labels.has(text)) return true;
+      }
+    }
+    return false;
+  }
+
+  function _deriveTaskStatus(row, existingStatus = "discovered") {
+    if (_visibleRowApproval(row)) return "approval_pending";
+    if (_rowHasLabel(row, new Set(["stop"]))) return "running";
+    const toolStatus = String(
+      row.querySelector("[data-tool-status]")?.getAttribute("data-tool-status") || ""
+    ).toLowerCase();
+    if (/\b(completed|finished|done|succeeded|success)\b/.test(toolStatus)) {
+      return "completed";
+    }
+    if (/\b(failed|errored|cancelled|canceled)\b/.test(toolStatus)) return "failed";
+    const surface = row.querySelector(SUBAGENT_SURFACE_SELECTOR);
+    const explicit = String(
+      surface?.getAttribute("data-status") ||
+      surface?.getAttribute("aria-label") ||
+      ""
+    ).toLowerCase();
+    const shortText = String(surface?.innerText || surface?.textContent || "")
+      .slice(0, 1000)
+      .toLowerCase();
+    const statusText = `${explicit} ${shortText}`;
+    if (/\b(failed|errored|cancelled|canceled)\b/.test(statusText)) return "failed";
+    if (/\b(completed|finished|done)\b/.test(statusText)) return "completed";
+    if (/\b(waiting for approval|approval required|needs approval)\b/.test(statusText)) {
+      return "approval_pending";
+    }
+    if (existingStatus === "approval_attempted") return existingStatus;
+    return "running";
+  }
+
+  function _rowCandidatesFromRoot(root) {
+    const candidates = [];
+    const seen = new Set();
+    collectApprovalMatches(root, candidates, seen);
+    return candidates.filter((candidate) => root.contains(candidate.el));
+  }
+
+  function _taskForRow(row) {
+    if (!row) return null;
+    const rowKey = row.getAttribute("data-find-row-key");
+    if (!rowKey) return null;
+    const matches = Array.from(state.subagents.values()).filter(
+      (record) => record.rowKey === rowKey && record.parentComposerId
+    );
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  function _discoverSubagentRows(root = document) {
+    const rows = new Set();
+    const roots = Array.isArray(root) ? root : [root];
+    for (const candidateRoot of roots) {
+      if (candidateRoot?.nodeType === Node.ELEMENT_NODE) {
+        if (candidateRoot.matches?.(SUBAGENT_ROW_SELECTOR)) rows.add(candidateRoot);
+        const parentRow = candidateRoot.closest?.(SUBAGENT_ROW_SELECTOR);
+        if (parentRow) rows.add(parentRow);
+      }
+      const scope = candidateRoot?.querySelectorAll ? candidateRoot : document;
+      for (const row of scope.querySelectorAll?.(SUBAGENT_ROW_SELECTOR) || []) {
+        rows.add(row);
+      }
+    }
+    const taskRows = Array.from(rows).filter((row) =>
+      row.querySelector(SUBAGENT_SURFACE_SELECTOR)
+    );
+    if (taskRows.length === 0) return 0;
+
+    const virtualizer = _getVirtualizerSnapshot();
+    if (!virtualizer.ok) return 0;
+    const snapshot = virtualizer.snapshot;
+
+    let changed = false;
+    let discovered = 0;
+    const now = new Date().toISOString();
+    for (const row of taskRows) {
+      const surface = row.querySelector(SUBAGENT_SURFACE_SELECTOR);
+      if (!surface) continue;
+      const rowKey = row.getAttribute("data-find-row-key");
+      if (!rowKey) continue;
+      const snapshotRow = _findSnapshotRow(snapshot, rowKey);
+      if (!snapshotRow) continue;
+      const toolUseId = _toolUseIdFromRowKey(rowKey);
+      const identity = toolUseId || rowKey;
+      const taskKey = [
+        state.workspace,
+        state.targetId,
+        snapshot.composerId,
+        identity,
+      ].join("|");
+      const existing = state.subagents.get(taskKey);
+      const nextStatus = _deriveTaskStatus(row, existing?.status);
+      const title = _shortTaskTitle(surface);
+      if (!existing) {
+        const record = {
+          taskKey,
+          workspace: state.workspace,
+          targetId: state.targetId,
+          parentComposerId: snapshot.composerId,
+          parentConversationId: null,
+          toolUseId,
+          rowKey,
+          bubbleIds: _bubbleIdsFromRow(row),
+          rowIndexHint: snapshotRow.index,
+          rowStartHint: snapshotRow.start,
+          title,
+          status: nextStatus,
+          firstSeenAt: now,
+          lastSeenAt: now,
+          lastProgressAt: now,
+          lastAttemptAt: null,
+          confirmedAt: null,
+          attempts: 0,
+          failure: null,
+        };
+        state.subagents.set(taskKey, record);
+        _queueEvent({
+          type: "subagent_discovered",
+          taskKey,
+          toolUseId,
+          rowKey,
+          rowIndexHint: snapshotRow.index,
+          rowStartHint: snapshotRow.start,
+          title,
+          status: nextStatus,
+        });
+        discovered++;
+        changed = true;
+      } else {
+        const previousStatus = existing.status;
+        const progressChanged = previousStatus !== nextStatus || existing.title !== title;
+        const lastSeenAge = Date.now() - Date.parse(existing.lastSeenAt || 0);
+        const identityChanged =
+          existing.rowKey !== rowKey ||
+          existing.rowIndexHint !== snapshotRow.index ||
+          existing.rowStartHint !== snapshotRow.start;
+        existing.rowKey = rowKey;
+        existing.bubbleIds = _bubbleIdsFromRow(row);
+        existing.rowIndexHint = snapshotRow.index;
+        existing.rowStartHint = snapshotRow.start;
+        existing.title = title;
+        existing.status = nextStatus;
+        existing.lastSeenAt = now;
+        if (progressChanged) existing.lastProgressAt = now;
+        if (nextStatus !== "failed") existing.failure = null;
+        if (previousStatus !== nextStatus) {
+          _queueEvent({
+            type: "subagent_status",
+            taskKey,
+            rowKey,
+            from: previousStatus,
+            status: nextStatus,
+          });
+        }
+        if (progressChanged || identityChanged || lastSeenAge >= 5000) {
+          changed = true;
+        }
+      }
+    }
+
+    if (changed) {
+      _persistSubagentRegistry();
+      if (state.running && state.cycleEnabled) {
+        _scheduleSubagentCycle(discovered > 0 ? 100 : 1000);
+      }
+    }
+    return discovered;
+  }
+
+  function _recordUserInteraction(event) {
+    if (state.programmaticScrollDepth > 0 || event?.isTrusted === false) return;
+    state.lastUserInteractionAt = Date.now();
+    state.lastUserInteractionType = event?.type || "unknown";
+  }
+
+  function _setupInteractionGuard() {
+    if (state.interactionGuardInstalled) return;
+    for (const type of ["pointerdown", "keydown", "wheel", "scroll"]) {
+      document.addEventListener(type, _recordUserInteraction, true);
+    }
+    state.interactionGuardInstalled = true;
+  }
+
+  function _composerHasUnsentText() {
+    const inputBox = document.querySelector("div.full-input-box");
+    if (!inputBox) return false;
+    const editable =
+      inputBox.querySelector('[contenteditable="true"]') ||
+      (inputBox.matches?.('[contenteditable="true"]') ? inputBox : null);
+    if (!editable) return false;
+    return String(editable.innerText || editable.textContent || "").trim().length > 0;
+  }
+
+  function _hasUnrelatedVisibleModal(row = null) {
+    for (const modal of document.querySelectorAll(PROMPT_ROOT_SELECTORS.join(", "))) {
+      if (!isVisible(modal)) continue;
+      if (row && (row.contains(modal) || modal.contains(row))) continue;
+      return true;
+    }
+    return false;
+  }
+
+  function _cycleBlockReason(explicit) {
+    if (!state.running) return "gate_off";
+    if (_composerHasUnsentText()) return "unsent_composer_text";
+    if (_hasUnrelatedVisibleModal()) return "unrelated_modal";
+    if (
+      !explicit &&
+      document.hasFocus() &&
+      Date.now() - state.lastUserInteractionAt < CYCLE_INTERACTION_GUARD_MS
+    ) {
+      return `recent_${state.lastUserInteractionType || "interaction"}`;
+    }
+    return null;
+  }
+
+  function _scrollContainer() {
+    const containers = Array.from(document.querySelectorAll(SCROLL_CONTAINER_SELECTOR));
+    if (containers.length !== 1) return null;
+    return containers[0];
+  }
+
+  function _captureScrollContext(container) {
+    const scrollHeight = container.scrollHeight;
+    const viewportHeight = container.clientHeight;
+    const scrollTop = container.scrollTop;
+    const distanceFromBottom = Math.max(0, scrollHeight - viewportHeight - scrollTop);
+    return {
+      container,
+      scrollTop,
+      scrollHeight,
+      viewportHeight,
+      distanceFromBottom,
+      wasNearBottom: distanceFromBottom <= 80,
+      focusedElement: document.activeElement,
+      autoFollowChanged: false,
+    };
+  }
+
+  function _setProgrammaticScroll(container, top) {
+    state.programmaticScrollDepth++;
+    try {
+      container.scrollTop = Math.max(0, top);
+      container.dispatchEvent(new Event("scroll", { bubbles: true }));
+    } finally {
+      requestAnimationFrame(() => {
+        state.programmaticScrollDepth = Math.max(0, state.programmaticScrollDepth - 1);
+      });
+    }
+  }
+
+  function _waitForExactRow(rowKey, timeoutMs = CYCLE_MOUNT_TIMEOUT_MS) {
+    return new Promise((resolve) => {
+      let finished = false;
+      let timer = null;
+      let observer = null;
+      const finish = (row) => {
+        if (finished) return;
+        finished = true;
+        if (timer) clearTimeout(timer);
+        if (observer) observer.disconnect();
+        resolve(row || null);
+      };
+      const check = () => {
+        const row = _findExactRow(rowKey);
+        if (row) finish(row);
+      };
+      observer = new MutationObserver(check);
+      observer.observe(document.body, { childList: true, subtree: true });
+      requestAnimationFrame(() => requestAnimationFrame(check));
+      timer = setTimeout(() => finish(_findExactRow(rowKey)), timeoutMs);
+      check();
+    });
+  }
+
+  async function _materializeSubagentRow(record, context) {
+    let row = _findExactRow(record.rowKey);
+    const virtualizer = _getVirtualizerSnapshot();
+    if (!virtualizer.ok) {
+      return { row: null, reason: virtualizer.reason };
+    }
+    const snapshot = virtualizer.snapshot;
+    if (snapshot.composerId !== record.parentComposerId) {
+      return { row: null, reason: "composer_identity_changed" };
+    }
+    const snapshotRow = _findSnapshotRow(snapshot, record.rowKey);
+    if (!snapshotRow) {
+      return { row: null, reason: "row_identity_missing" };
+    }
+    record.rowIndexHint = snapshotRow.index;
+    record.rowStartHint = snapshotRow.start;
+
+    const viewportHeight = context.container.clientHeight || snapshot.viewportHeight;
+    if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) {
+      return { row: null, reason: "hidden_or_zero_height_viewport" };
+    }
+    const targetTop = Math.max(0, snapshotRow.start - viewportHeight * 0.3);
+    if (!row || !_rowInsideViewport(row, context.container)) {
+      _setProgrammaticScroll(context.container, targetTop);
+      row = await _waitForExactRow(record.rowKey);
+    }
+    if (!row || row.getAttribute("data-find-row-key") !== record.rowKey) {
+      return { row: null, reason: "row_did_not_mount" };
+    }
+    _queueEvent({
+      type: "row_materialized",
+      taskKey: record.taskKey,
+      rowKey: record.rowKey,
+      rowIndexHint: record.rowIndexHint,
+      rowStartHint: record.rowStartHint,
+    });
+    return { row, reason: null };
+  }
+
+  function _rowInsideViewport(row, container) {
+    const rowRect = row.getBoundingClientRect();
+    const viewportRect = container.getBoundingClientRect();
+    return (
+      rowRect.height > 0 &&
+      viewportRect.height > 0 &&
+      rowRect.bottom > viewportRect.top &&
+      rowRect.top < viewportRect.bottom
+    );
+  }
+
+  function _notCoveredByUnrelatedElement(el) {
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    const x = Math.min(window.innerWidth - 1, Math.max(0, rect.left + rect.width / 2));
+    const y = Math.min(window.innerHeight - 1, Math.max(0, rect.top + rect.height / 2));
+    const hit = document.elementFromPoint(x, y);
+    return !hit || hit === el || el.contains(hit) || hit.contains(el);
+  }
+
+  function _scopedCycleCandidate(record, row, bypassCooldown = false) {
+    const container = row.closest(SCROLL_CONTAINER_SELECTOR);
+    if (
+      !container ||
+      !ACTIVE_SUBAGENT_STATUSES.has(record.status) ||
+      row.getAttribute("data-find-row-key") !== record.rowKey ||
+      _taskForRow(row)?.taskKey !== record.taskKey ||
+      _hasUnrelatedVisibleModal(row)
+    ) {
+      return null;
+    }
+    const candidates = _rowCandidatesFromRoot(row)
+      .map((candidate) => ({
+        ...candidate,
+        reason: _eligibilityReason(candidate),
+      }))
+      .filter((candidate) => candidate.reason !== null)
+      .filter((candidate) => _rowInsideViewport(candidate.el, container))
+      .filter((candidate) => _notCoveredByUnrelatedElement(candidate.el));
+    if (candidates.length === 0) return null;
+    const candidate = candidates[0];
+    candidate.fingerprint = [
+      record.taskKey,
+      record.rowKey,
+      candidate.id,
+      normalizeLabel(candidate.text),
+    ].join("|");
+    if (!bypassCooldown && _isCoolingDown(candidate.fingerprint)) return null;
+    return candidate;
+  }
+
+  function _sameApprovalStillPresent(record, row, candidate) {
+    if (!row || row.getAttribute("data-find-row-key") !== record.rowKey) return false;
+    return _rowCandidatesFromRoot(row).some(
+      (next) =>
+        next.id === candidate.id &&
+        normalizeLabel(next.text) === normalizeLabel(candidate.text)
+    );
+  }
+
+  async function _confirmCycleApproval(record, candidate, context) {
+    for (const delay of CYCLE_CONFIRM_DELAYS_MS) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      if (!state.running) return { confirmed: false, reason: "gate_off" };
+      let row = _findExactRow(record.rowKey);
+      if (!row) {
+        const remounted = await _materializeSubagentRow(record, context);
+        row = remounted.row;
+      }
+      if (!row) continue;
+      const nextStatus = _deriveTaskStatus(row, record.status);
+      const candidateGone = !_sameApprovalStillPresent(record, row, candidate);
+      const statusAdvanced = !["approval_pending", "approval_attempted"].includes(nextStatus);
+      if (candidateGone || statusAdvanced) {
+        return { confirmed: true, status: nextStatus, reason: candidateGone ? "candidate_gone" : "status_advanced" };
+      }
+    }
+    return { confirmed: false, reason: "unconfirmed_click" };
+  }
+
+  function _pushRecentConfirmedClick(candidate, command) {
+    const entry = {
+      ts: new Date().toISOString(),
+      kind: candidate.kind || "approval",
+      id: candidate.id,
+      text: candidate.text,
+      reason: `cycle:${candidate.reason}`,
+      fingerprint: candidate.fingerprint,
+      confirmed: true,
+      commandPreview: command ? command.preview : null,
+      commandLines: command ? command.lineCount : null,
+    };
+    state.clicks.push(entry);
+    if (state.clicks.length > 100) state.clicks = state.clicks.slice(-100);
+  }
+
+  async function _attemptSubagentApproval(record, context, retry = false) {
+    const materialized = await _materializeSubagentRow(record, context);
+    if (!materialized.row) {
+      _queueEvent({
+        type: "cycle_miss",
+        taskKey: record.taskKey,
+        rowKey: record.rowKey,
+        reason: materialized.reason,
+      });
+      return { outcome: "miss", reason: materialized.reason };
+    }
+    const row = _findExactRow(record.rowKey);
+    const candidate = row ? _scopedCycleCandidate(record, row, retry) : null;
+    if (!candidate) {
+      if (row) {
+        record.status = _deriveTaskStatus(row, record.status);
+        record.lastSeenAt = new Date().toISOString();
+      }
+      _queueEvent({
+        type: "cycle_miss",
+        taskKey: record.taskKey,
+        rowKey: record.rowKey,
+        reason: "no_eligible_candidate",
+      });
+      return { outcome: "no_candidate", reason: "no_eligible_candidate" };
+    }
+
+    const command = _extractCommandText(candidate.el);
+    const prompt = _capturePromptSubtree(candidate.el);
+    const now = new Date().toISOString();
+    record.status = "approval_attempted";
+    record.lastAttemptAt = now;
+    record.attempts += 1;
+    record.failure = null;
+    state.totalClicks++;
+    state.totalClickAttempts++;
+    clickEl(candidate.el);
+    _markClicked(candidate.fingerprint);
+    _queueEvent({
+      type: "approval_attempted",
+      taskKey: record.taskKey,
+      toolUseId: record.toolUseId,
+      rowKey: record.rowKey,
+      pattern_id: candidate.id,
+      text: candidate.text,
+      reason: candidate.reason,
+      fingerprint: candidate.fingerprint,
+      retry,
+      prompt,
+      command,
+    });
+    _persistSubagentRegistry();
+
+    const confirmation = await _confirmCycleApproval(record, candidate, context);
+    if (confirmation.confirmed) {
+      record.status = ["completed", "failed"].includes(confirmation.status)
+        ? confirmation.status
+        : "approved";
+      record.confirmedAt = new Date().toISOString();
+      record.lastProgressAt = record.confirmedAt;
+      record.failure = null;
+      state.totalConfirmedApprovals++;
+      _pushRecentConfirmedClick(candidate, command);
+      _queueEvent({
+        type: "approval_confirmed",
+        taskKey: record.taskKey,
+        toolUseId: record.toolUseId,
+        rowKey: record.rowKey,
+        pattern_id: candidate.id,
+        text: candidate.text,
+        reason: confirmation.reason,
+        eligibility_reason: candidate.reason,
+        fingerprint: candidate.fingerprint,
+        prompt,
+        command,
+      });
+      _persistSubagentRegistry();
+      return { outcome: "confirmed", reason: confirmation.reason };
+    }
+
+    _queueEvent({
+      type: "approval_unconfirmed",
+      taskKey: record.taskKey,
+      rowKey: record.rowKey,
+      pattern_id: candidate.id,
+      fingerprint: candidate.fingerprint,
+      retry,
+      reason: confirmation.reason,
+    });
+    return { outcome: "unconfirmed", reason: confirmation.reason };
+  }
+
+  function _restoreScrollContext(context) {
+    const container = context.container;
+    const beforeRestore = container.scrollTop;
+    const target = context.wasNearBottom
+      ? Math.max(0, container.scrollHeight - container.clientHeight)
+      : Math.min(context.scrollTop, Math.max(0, container.scrollHeight - container.clientHeight));
+    context.autoFollowChanged = Math.abs(beforeRestore - target) > 2;
+    _setProgrammaticScroll(container, target);
+    const focused = context.focusedElement;
+    if (
+      focused &&
+      focused !== document.body &&
+      focused.isConnected &&
+      typeof focused.focus === "function"
+    ) {
+      try {
+        focused.focus({ preventScroll: true });
+      } catch (_) {}
+    }
+  }
+
+  function _activeSubagentRecords() {
+    const records = Array.from(state.subagents.values()).filter((record) =>
+      ACTIVE_SUBAGENT_STATUSES.has(record.status)
+    );
+    records.sort((a, b) => {
+      const pendingA = a.status === "approval_pending" ? 0 : 1;
+      const pendingB = b.status === "approval_pending" ? 0 : 1;
+      if (pendingA !== pendingB) return pendingA - pendingB;
+      return String(a.lastAttemptAt || "").localeCompare(String(b.lastAttemptAt || ""));
+    });
+    if (records.length <= CYCLE_MAX_TASKS) return records;
+    const start = state.cycleCursor % records.length;
+    const rotated = records.slice(start).concat(records.slice(0, start));
+    state.cycleCursor = (start + CYCLE_MAX_TASKS) % records.length;
+    return rotated.slice(0, CYCLE_MAX_TASKS);
+  }
+
+  function _scheduleSubagentCycle(delayMs = CYCLE_AUTOMATIC_INTERVAL_MS) {
+    if (!state.running || !state.cycleEnabled || state.cycleActive) return;
+    if (state.cycleTimer) clearTimeout(state.cycleTimer);
+    state.cycleTimer = setTimeout(() => {
+      state.cycleTimer = null;
+      runSubagentCycle({ explicit: false }).catch((e) => {
+        console.log(`${LOG_PREFIX} subagent cycle error:`, e.message);
+      });
+    }, Math.max(50, delayMs));
+  }
+
+  async function runSubagentCycle(options = {}) {
+    const explicit = options.explicit === true;
+    if (state.cycleActive) {
+      return { ok: false, reason: "cycle_already_active", lastCycle: state.lastCycle };
+    }
+    if (!explicit && !state.cycleEnabled) {
+      return { ok: false, reason: "cycle_disabled" };
+    }
+    const blocked = _cycleBlockReason(explicit);
+    if (blocked) {
+      if (!explicit && state.cycleEnabled) _scheduleSubagentCycle(1000);
+      return { ok: false, reason: blocked };
+    }
+
+    _getVirtualizerSnapshot(true);
+    _discoverSubagentRows(document);
+    const records = _activeSubagentRecords();
+    if (records.length === 0) {
+      const result = { ok: true, rows: 0, confirmed: 0, failed: 0, misses: 0 };
+      state.lastCycle = { ...result, ts: new Date().toISOString() };
+      return result;
+    }
+    const container = _scrollContainer();
+    if (!container) {
+      return { ok: false, reason: "ambiguous_scroll_container" };
+    }
+
+    const context = _captureScrollContext(container);
+    const generation = ++state.cycleGeneration;
+    state.cycleActive = true;
+    const startedAt = new Date().toISOString();
+    const startedPerformance = performance.now();
+    const summary = { ok: true, rows: 0, confirmed: 0, failed: 0, misses: 0 };
+    _queueEvent({
+      type: "cycle_started",
+      explicit,
+      taskCount: records.length,
+      composerId: records[0]?.parentComposerId || null,
+    });
+
+    try {
+      for (const record of records) {
+        if (performance.now() - startedPerformance > CYCLE_MAX_DURATION_MS) {
+          summary.misses++;
+          break;
+        }
+        if (!state.running || generation !== state.cycleGeneration) break;
+        summary.rows++;
+        let result = await _attemptSubagentApproval(record, context, false);
+        if (result.outcome === "unconfirmed" && state.running) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          result = await _attemptSubagentApproval(record, context, true);
+          if (result.outcome === "unconfirmed") {
+            record.status = "failed";
+            record.failure = "unconfirmed_click";
+            summary.failed++;
+          }
+        }
+        if (result.outcome === "confirmed") summary.confirmed++;
+        if (result.outcome === "miss") summary.misses++;
+      }
+    } finally {
+      _restoreScrollContext(context);
+      state.cycleActive = false;
+      state.lastCycle = {
+        ...summary,
+        ts: new Date().toISOString(),
+        startedAt,
+        autoFollowChanged: context.autoFollowChanged,
+        restoredScrollTop: context.container.scrollTop,
+      };
+      _persistSubagentRegistry();
+      _queueEvent({
+        type: "cycle_finished",
+        ...state.lastCycle,
+      });
+      if (state.running && state.cycleEnabled) {
+        _scheduleSubagentCycle(
+          summary.failed > 0 || summary.misses > 0 ? 2000 : CYCLE_AUTOMATIC_INTERVAL_MS
+        );
+      }
+    }
+    return state.lastCycle;
+  }
+
+  function setSubagentCycle(enabled) {
+    state.cycleEnabled = Boolean(enabled);
+    if (!state.cycleEnabled && state.cycleTimer) {
+      clearTimeout(state.cycleTimer);
+      state.cycleTimer = null;
+    }
+    if (!state.cycleEnabled) state.cycleGeneration++;
+    _persistSubagentRegistry();
+    if (state.cycleEnabled && state.running) _scheduleSubagentCycle(50);
+    return exportSubagentRegistry();
+  }
+
+  function exportSubagentRegistry() {
+    const tasks = Array.from(state.subagents.values()).map(_sanitizeSubagentRecord);
+    const counts = {
+      active: tasks.filter((task) => ACTIVE_SUBAGENT_STATUSES.has(task.status)).length,
+      waiting: tasks.filter((task) => task.status === "approval_pending").length,
+      completed: tasks.filter((task) => task.status === "completed").length,
+      failed: tasks.filter((task) => task.status === "failed").length,
+      stale: tasks.filter((task) => task.status === "stale").length,
+    };
+    const virtualizer = _getVirtualizerSnapshot();
+    return {
+      version: SUBAGENT_STORAGE_VERSION,
+      scriptHash: state.scriptHash,
+      workspace: state.workspace,
+      targetId: state.targetId,
+      cycleEnabled: state.cycleEnabled,
+      cycleActive: state.cycleActive,
+      counts,
+      lastCycle: state.lastCycle,
+      virtualizer: virtualizer.ok
+        ? {
+            engine: virtualizer.engine,
+            composerId: virtualizer.snapshot.composerId,
+            rowCount: virtualizer.snapshot.rowCount,
+            totalSize: virtualizer.snapshot.totalSize,
+            viewportHeight: virtualizer.snapshot.viewportHeight,
+            isAtBottom: virtualizer.snapshot.isAtBottom,
+          }
+        : { error: virtualizer.reason },
+      tasks,
+      exportedAt: new Date().toISOString(),
+    };
+  }
 
   // -----------------------------------------------------------------------
   // DOM helpers (shared by discovery and policy)
@@ -203,7 +1157,10 @@
       }
     }
     buttons.sort();
-    return buttons.join("|") || "empty";
+    const row = el.closest(SUBAGENT_ROW_SELECTOR);
+    const task = _taskForRow(row);
+    const promptPart = buttons.join("|") || "empty";
+    return task ? `${task.taskKey}|${task.rowKey}|${promptPart}` : promptPart;
   }
 
   function _isCoolingDown(fingerprint) {
@@ -450,40 +1407,24 @@
   }
 
   function collectDeleteFileChangeMatches(root, out, seen) {
-    const containerSeen = new Set();
-    const containers = [];
-    function addContainer(el) {
-      if (el && !containerSeen.has(el)) {
-        containerSeen.add(el);
-        containers.push(el);
-      }
+    const text = (root.textContent || "").trim();
+    if (
+      !text ||
+      text.length > 2000 ||
+      !DELETE_FILE_PROMPT_PATTERN.test(text) ||
+      !isVisible(root)
+    ) {
+      return;
     }
-    addContainer(root);
-    for (const sel of DELETE_FILE_SEARCH_ROOT_SELECTORS) {
-      for (const el of root.querySelectorAll(sel)) addContainer(el);
-    }
-
-    for (const container of containers) {
-      const text = (container.textContent || "").trim();
-      if (
-        !text ||
-        text.length > 2000 ||
-        !DELETE_FILE_PROMPT_PATTERN.test(text) ||
-        !isVisible(container)
-      ) {
-        continue;
-      }
-
-      for (const sel of LOOSE_TEXT_CONTROL_SELECTORS) {
-        for (const el of container.querySelectorAll(sel)) {
-          if (seen.has(el)) continue;
-          seen.add(el);
-          const m = matchesApproval(el, {
-            allowExcluded: true,
-            allowLooseText: true,
-          });
-          if (m) out.push({ el, kind: "approval", ...m });
-        }
+    for (const sel of LOOSE_TEXT_CONTROL_SELECTORS) {
+      for (const el of root.querySelectorAll(sel)) {
+        if (seen.has(el)) continue;
+        seen.add(el);
+        const m = matchesApproval(el, {
+          allowExcluded: true,
+          allowLooseText: true,
+        });
+        if (m) out.push({ el, kind: "approval", ...m });
       }
     }
   }
@@ -531,7 +1472,17 @@
     }
 
     if (buttons.length === 0) {
-      collectDeleteFileChangeMatches(document.body, buttons, seen);
+      const deleteRoots = new Set(document.querySelectorAll(SUBAGENT_ROW_SELECTOR));
+      for (const surface of document.querySelectorAll(DELETE_FILE_SURFACE_SELECTOR)) {
+        if (deleteRoots.size >= MAX_DELETE_FILE_FALLBACK_ROOTS) break;
+        deleteRoots.add(surface.closest(SUBAGENT_ROW_SELECTOR) || surface);
+      }
+      let inspected = 0;
+      for (const root of deleteRoots) {
+        if (inspected++ >= MAX_DELETE_FILE_FALLBACK_ROOTS) break;
+        collectDeleteFileChangeMatches(root, buttons, seen);
+        if (buttons.length > 0) break;
+      }
     }
 
     if (state.enableResume) {
@@ -719,7 +1670,8 @@
   // Core check-and-click (called by observer and poll)
   // -----------------------------------------------------------------------
 
-  function checkAndClick() {
+  function _checkAndClickImpl() {
+    _discoverSubagentRows(document);
     _probeStructuredState();
 
     const buttons = findApprovalButtons();
@@ -781,6 +1733,7 @@
     clickEl(btn.el);
     _markClicked(btn.fingerprint);
     state.totalClicks++;
+    state.totalClickAttempts++;
     const entry = {
       ts: new Date().toISOString(),
       kind: btn.kind || "approval",
@@ -812,27 +1765,120 @@
     );
   }
 
+  function _tripSafetyCircuit(reason, details = {}) {
+    if (state.safetyTrip) return;
+    state.safetyTrip = {
+      reason,
+      ts: new Date().toISOString(),
+      ...details,
+    };
+    _queueEvent({
+      type: "safety_trip",
+      reason,
+      ...details,
+    });
+    setTimeout(() => {
+      if (state.running) stop();
+    }, 0);
+  }
+
+  function checkAndClick() {
+    const started = performance.now();
+    try {
+      return _checkAndClickImpl();
+    } finally {
+      const duration = performance.now() - started;
+      state.totalScans++;
+      state.lastScanAt = Date.now();
+      state.lastScanDurationMs = Math.round(duration * 10) / 10;
+      state.maxScanDurationMs = Math.max(state.maxScanDurationMs, state.lastScanDurationMs);
+      state.consecutiveSlowScans =
+        duration > MAX_SAFE_SCAN_DURATION_MS ? state.consecutiveSlowScans + 1 : 0;
+      if (state.consecutiveSlowScans >= MAX_CONSECUTIVE_SLOW_SCANS) {
+        _tripSafetyCircuit("repeated_slow_scans", {
+          durationMs: state.lastScanDurationMs,
+          consecutive: state.consecutiveSlowScans,
+        });
+      }
+      const usedHeap = performance.memory?.usedJSHeapSize;
+      if (Number.isFinite(usedHeap) && usedHeap > MAX_JS_HEAP_BYTES) {
+        _tripSafetyCircuit("js_heap_limit", {
+          usedJSHeapBytes: usedHeap,
+          limitBytes: MAX_JS_HEAP_BYTES,
+        });
+      }
+    }
+  }
+
   // -----------------------------------------------------------------------
   // MutationObserver: detect prompt surfaces immediately
   // -----------------------------------------------------------------------
 
+  function _mutationElementMayContainApproval(element) {
+    if (!element?.matches) return false;
+    const relevant = [
+      ...BUTTON_SELECTORS,
+      ...PROMPT_ROOT_SELECTORS,
+      `[data-link="${RESUME_DATA_LINK}"]`,
+    ].join(", ");
+    return element.matches(relevant) || !!element.querySelector?.(relevant);
+  }
+
   function _setupObserver() {
     if (state.observer) return;
 
-    state.observer = new MutationObserver(() => {
+    state.observer = new MutationObserver((records) => {
       if (!state.running) return;
+      const discoveryRoots = new Set();
+      let shouldScanApprovals = false;
+      for (const record of records) {
+        if (record.type === "childList") {
+          for (const node of record.addedNodes) {
+            const element =
+              node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+            if (!element) continue;
+            if (
+              element.closest?.(SUBAGENT_ROW_SELECTOR) ||
+              element.querySelector?.(SUBAGENT_SURFACE_SELECTOR)
+            ) {
+              discoveryRoots.add(element);
+            }
+            if (_mutationElementMayContainApproval(element)) shouldScanApprovals = true;
+          }
+        } else if (record.target?.nodeType === Node.ELEMENT_NODE) {
+          const target = record.target;
+          if (target.closest?.(SUBAGENT_SURFACE_SELECTOR)) discoveryRoots.add(target);
+          if (_mutationElementMayContainApproval(target)) shouldScanApprovals = true;
+        } else if (record.type === "characterData" && record.target.parentElement) {
+          const parent = record.target.parentElement;
+          if (parent.closest?.(SUBAGENT_SURFACE_SELECTOR)) {
+            discoveryRoots.add(parent);
+            shouldScanApprovals = true;
+          }
+        }
+      }
+      if (discoveryRoots.size > 0) {
+        _discoverSubagentRows(Array.from(discoveryRoots));
+      }
+      if (!shouldScanApprovals) return;
       if (state.observerDebounceTimer) clearTimeout(state.observerDebounceTimer);
+      const sinceLastScan = Date.now() - state.lastScanAt;
+      const delay = Math.max(
+        OBSERVER_DEBOUNCE_MS,
+        OBSERVER_MIN_SCAN_GAP_MS - sinceLastScan
+      );
       state.observerDebounceTimer = setTimeout(() => {
         state.observerDebounceTimer = null;
         checkAndClick();
-      }, OBSERVER_DEBOUNCE_MS);
+      }, delay);
     });
 
     state.observer.observe(document.body, {
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ["role", "aria-modal", "class", "style", "disabled"],
+      characterData: true,
+      attributeFilter: ["role", "aria-modal", "class", "disabled"],
     });
   }
 
@@ -856,37 +1902,45 @@
       const docTitle = NATURAL_DOC_TITLE_AT_INJECT;
       const barText =
         NATURAL_TITLEBAR_TEXT_AT_INJECT || NATURAL_DOC_TITLE_AT_INJECT || docTitle;
-      document.title = docTitle;
+      if (document.title !== docTitle) document.title = docTitle;
       const titleButton = document.querySelector(
         '[id="workbench.parts.titlebar"] .window-title-text'
       );
       if (titleButton) {
-        titleButton.textContent = barText;
-        titleButton.title = barText;
-        titleButton.setAttribute("aria-label", barText);
+        if (titleButton.textContent !== barText) titleButton.textContent = barText;
+        if (titleButton.title !== barText) titleButton.title = barText;
+        if (titleButton.getAttribute("aria-label") !== barText) {
+          titleButton.setAttribute("aria-label", barText);
+        }
       }
       const titleContainer = document.querySelector(
         '[id="workbench.parts.titlebar"] .window-title'
       );
-      if (titleContainer) titleContainer.title = barText;
+      if (titleContainer && titleContainer.title !== barText) {
+        titleContainer.title = barText;
+      }
       return;
     }
 
     const emoji = state.running ? "\u2705" : "\u23F8";
     const title = `autoapprove ${emoji} ${REPO_SLUG}`;
-    document.title = title;
+    if (document.title !== title) document.title = title;
     const titleButton = document.querySelector(
       '[id="workbench.parts.titlebar"] .window-title-text'
     );
     if (titleButton) {
-      titleButton.textContent = title;
-      titleButton.title = title;
-      titleButton.setAttribute("aria-label", title);
+      if (titleButton.textContent !== title) titleButton.textContent = title;
+      if (titleButton.title !== title) titleButton.title = title;
+      if (titleButton.getAttribute("aria-label") !== title) {
+        titleButton.setAttribute("aria-label", title);
+      }
     }
     const titleContainer = document.querySelector(
       '[id="workbench.parts.titlebar"] .window-title'
     );
-    if (titleContainer) titleContainer.title = title;
+    if (titleContainer && titleContainer.title !== title) {
+      titleContainer.title = title;
+    }
   }
 
   function _ensureTitleTimer() {
@@ -957,12 +2011,18 @@
       scriptHash: state.scriptHash,
       running: state.running,
       totalClicks: state.totalClicks,
+      totalScans: state.totalScans,
+      lastScanDurationMs: state.lastScanDurationMs,
+      maxScanDurationMs: state.maxScanDurationMs,
       shareSafeTitle: state.shareSafeTitle,
       observerActive: !!state.observer,
       mountedComposerCount: document.querySelectorAll("div.full-input-box").length,
       mountedConversationCount: document.querySelectorAll("div.conversations").length,
       eventQueueLength: state.eventQueue.length,
       cooldownEntries: state.fingerprintCooldowns.size,
+      totalClickAttempts: state.totalClickAttempts,
+      totalConfirmedApprovals: state.totalConfirmedApprovals,
+      subagents: exportSubagentRegistry(),
       visibleButtons: _debugButtons(),
       candidates,
       eligible: candidates.filter((c) => c.reason !== null),
@@ -1000,11 +2060,16 @@
     }
     state.interval = nextInterval;
     state.running = true;
+    state.safetyTrip = null;
+    state.consecutiveSlowScans = 0;
+    _setupInteractionGuard();
     _setupObserver();
+    _discoverSubagentRows(document);
     state.timer = setInterval(checkAndClick, state.interval);
     _syncTitle();
     console.log(`${LOG_PREFIX} started (interval ${state.interval}ms, observer active)`);
     setTimeout(checkAndClick, 50);
+    if (state.cycleEnabled) _scheduleSubagentCycle(100);
   }
 
   function stop() {
@@ -1014,6 +2079,11 @@
     }
     clearInterval(state.timer);
     state.timer = null;
+    if (state.cycleTimer) {
+      clearTimeout(state.cycleTimer);
+      state.cycleTimer = null;
+    }
+    state.cycleGeneration++;
     _teardownObserver();
     state.running = false;
     _syncTitle();
@@ -1031,8 +2101,19 @@
       observerActive: !!state.observer,
       eventQueueLength: state.eventQueue.length,
       cooldownEntries: state.fingerprintCooldowns.size,
+      totalClickAttempts: state.totalClickAttempts,
+      totalConfirmedApprovals: state.totalConfirmedApprovals,
+      totalScans: state.totalScans,
+      lastScanDurationMs: state.lastScanDurationMs,
+      maxScanDurationMs: state.maxScanDurationMs,
+      safetyTrip: state.safetyTrip,
+      usedJSHeapBytes: performance.memory?.usedJSHeapSize || null,
       recentClicks: state.clicks.slice(-10),
       shareSafeTitle: state.shareSafeTitle,
+      cycleEnabled: state.cycleEnabled,
+      cycleActive: state.cycleActive,
+      subagentCounts: exportSubagentRegistry().counts,
+      lastCycle: state.lastCycle,
     };
     console.log(`${LOG_PREFIX} status`, JSON.stringify(s, null, 2));
     return s;
@@ -1042,15 +2123,30 @@
   // Bootstrap
   // -----------------------------------------------------------------------
 
+  _loadSubagentRegistry();
+  _setupInteractionGuard();
   _ensureTitleTimer();
   _syncTitle();
 
-  globalThis.__cursorAutoAccept = { start, stop, status, state, setShareSafeTitle };
+  globalThis.__cursorAutoAccept = {
+    start,
+    stop,
+    status,
+    state,
+    setShareSafeTitle,
+    setSubagentCycle,
+    runSubagentCycle,
+    exportSubagentRegistry,
+    discoverSubagentRows: _discoverSubagentRows,
+  };
   globalThis.startAccept = start;
   globalThis.stopAccept = stop;
   globalThis.acceptStatus = status;
   globalThis.acceptDebugSnapshot = debugSnapshot;
   globalThis.setShareSafeTitle = setShareSafeTitle;
+  globalThis.setSubagentCycle = setSubagentCycle;
+  globalThis.runSubagentCycle = (options = {}) => runSubagentCycle(options);
+  globalThis.exportSubagentRegistry = exportSubagentRegistry;
 
   console.log(
     `${LOG_PREFIX} loaded (${SCRIPT_HASH}) — startAccept() / stopAccept() / acceptStatus()`

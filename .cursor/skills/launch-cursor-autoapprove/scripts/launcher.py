@@ -7,6 +7,8 @@ Subcommands:
     launch-ssh  Open dedicated Cursor connected to an SSH remote host, inject DOM script, gate ON
     on          Resume auto-clicking (startAccept via CDP)
     off         Pause auto-clicking (stopAccept via CDP)
+    cycle       Enable, disable, or run subagent approval cycling
+    subagents   Show the renderer-local subagent task registry
     status      Show gate state and click count
     alias       Manage workspace aliases
     history     Show persisted session/gate/click history
@@ -64,7 +66,7 @@ CDP_DEFAULT_PORT = 9222
 LAUNCH_TIMEOUT = 30.0
 CDP_INJECT_DELAY = 5.0
 CDP_INJECT_RETRIES = 6
-DEFAULT_POLL_INTERVAL_SECONDS = 2.0
+DEFAULT_POLL_INTERVAL_SECONDS = 0.5
 MIN_POLL_INTERVAL_SECONDS = 0.25
 MAX_POLL_INTERVAL_SECONDS = 60.0
 
@@ -73,6 +75,8 @@ HISTORY_MAX_BYTES = 5 * 1024 * 1024  # rotate at 5 MB
 
 COMMAND_LEDGER_PATH = RUNTIME_DIR / "commands.jsonl"
 COMMAND_LEDGER_MAX_BYTES = 10 * 1024 * 1024  # rotate at 10 MB
+
+SUBAGENTS_PATH = RUNTIME_DIR / "subagents.json"
 
 CONFIG_PATH = RUNTIME_DIR / "config.json"
 
@@ -375,6 +379,7 @@ def _gc_stale_sessions(state: dict) -> dict:
             _save_state(state)
         else:
             _clear_all_state()
+        _prune_subagent_snapshots(set(keep))
     return state
 
 
@@ -386,6 +391,7 @@ def _remove_session(workspace: str) -> None:
         _save_state(state)
     else:
         _clear_all_state()
+    _prune_subagent_snapshots(set(state["sessions"]))
 
 
 def _clear_all_state() -> None:
@@ -395,6 +401,8 @@ def _clear_all_state() -> None:
         pass
     except OSError:
         _save_state({"sessions": {}})
+    with contextlib.suppress(OSError):
+        SUBAGENTS_PATH.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -514,9 +522,15 @@ def _clear_injector_expression() -> str:
   delete globalThis.startAccept;
   delete globalThis.stopAccept;
   delete globalThis.acceptStatus;
+  delete globalThis.acceptDebugSnapshot;
   delete globalThis.setShareSafeTitle;
+  delete globalThis.setSubagentCycle;
+  delete globalThis.runSubagentCycle;
+  delete globalThis.exportSubagentRegistry;
   delete globalThis.__cursorAutoAcceptScriptHash;
   delete globalThis.__cursorAutoAcceptRepoSlug;
+  delete globalThis.__cursorAutoAcceptWorkspace;
+  delete globalThis.__cursorAutoAcceptTargetId;
 })()
 """.strip()
 
@@ -613,6 +627,131 @@ _DRAIN_EVENTS_EXPR = r"""
 """.strip()
 
 
+def _load_subagent_snapshots() -> dict:
+    """Load sanitized per-workspace registry snapshots."""
+    if not SUBAGENTS_PATH.exists():
+        return {"sessions": {}}
+    try:
+        raw = json.loads(SUBAGENTS_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {"sessions": {}}
+    if not isinstance(raw, dict) or not isinstance(raw.get("sessions"), dict):
+        return {"sessions": {}}
+    return raw
+
+
+def _save_subagent_snapshots(data: dict) -> None:
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = SUBAGENTS_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+    tmp.replace(SUBAGENTS_PATH)
+
+
+def _prune_subagent_snapshots(valid_workspaces: set[str]) -> None:
+    data = _load_subagent_snapshots()
+    sessions = data.get("sessions", {})
+    keep = {ws: snapshot for ws, snapshot in sessions.items() if ws in valid_workspaces}
+    if keep == sessions:
+        return
+    if keep:
+        data["sessions"] = keep
+        _save_subagent_snapshots(data)
+    else:
+        with contextlib.suppress(OSError):
+            SUBAGENTS_PATH.unlink(missing_ok=True)
+
+
+_SUBAGENT_TASK_FIELDS = {
+    "taskKey",
+    "workspace",
+    "targetId",
+    "parentComposerId",
+    "parentConversationId",
+    "toolUseId",
+    "rowKey",
+    "bubbleIds",
+    "rowIndexHint",
+    "rowStartHint",
+    "title",
+    "status",
+    "firstSeenAt",
+    "lastSeenAt",
+    "lastProgressAt",
+    "lastAttemptAt",
+    "confirmedAt",
+    "attempts",
+    "failure",
+}
+
+
+def _sanitize_subagent_snapshot(snapshot: dict, workspace: str, slug: str) -> dict:
+    """Whitelist registry fields so prompt/command content never reaches disk."""
+    raw_tasks = snapshot.get("tasks", [])
+    tasks = []
+    if isinstance(raw_tasks, list):
+        for raw_task in raw_tasks[:500]:
+            if not isinstance(raw_task, dict):
+                continue
+            tasks.append({
+                key: raw_task.get(key)
+                for key in _SUBAGENT_TASK_FIELDS
+                if key in raw_task
+            })
+    return {
+        "version": snapshot.get("version", 1),
+        "scriptHash": snapshot.get("scriptHash"),
+        "workspace": workspace,
+        "slug": slug,
+        "targetId": snapshot.get("targetId"),
+        "cycleEnabled": snapshot.get("cycleEnabled") is True,
+        "cycleActive": snapshot.get("cycleActive") is True,
+        "counts": snapshot.get("counts") if isinstance(snapshot.get("counts"), dict) else {},
+        "lastCycle": (
+            snapshot.get("lastCycle")
+            if isinstance(snapshot.get("lastCycle"), dict)
+            else None
+        ),
+        "virtualizer": (
+            snapshot.get("virtualizer")
+            if isinstance(snapshot.get("virtualizer"), dict)
+            else {}
+        ),
+        "tasks": tasks,
+        "exportedAt": snapshot.get("exportedAt"),
+    }
+
+
+def _sync_subagent_registry(port: int, target_id: str | None,
+                            workspace: str = "", slug: str = "") -> dict | None:
+    """Export the renderer registry and atomically persist its sanitized snapshot."""
+    expression = (
+        "typeof exportSubagentRegistry === 'function' "
+        "? JSON.stringify(exportSubagentRegistry()) : null"
+    )
+    try:
+        result = _cdp_evaluate(port, expression, target_id=target_id)
+        raw = result.get("result", {}).get("result", {}).get("value")
+        snapshot = json.loads(raw) if isinstance(raw, str) else None
+    except (ConnectionRefusedError, OSError, RuntimeError, json.JSONDecodeError):
+        return None
+    if not isinstance(snapshot, dict):
+        return None
+
+    snapshot = _sanitize_subagent_snapshot(
+        snapshot,
+        workspace or str(snapshot.get("workspace", "")),
+        slug,
+    )
+    data = _load_subagent_snapshots()
+    data.setdefault("sessions", {})[snapshot["workspace"]] = snapshot
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    try:
+        _save_subagent_snapshots(data)
+    except OSError:
+        return snapshot
+    return snapshot
+
+
 def _drain_injector_events(port: int, target_id: str | None,
                            workspace: str = "", slug: str = "") -> list[dict]:
     """Pull queued events from the injector and persist them durably."""
@@ -635,7 +774,7 @@ def _drain_injector_events(port: int, target_id: str | None,
         )
         if record_type in ("blocked_candidate", "unknown_prompt"):
             _save_prompt_artifact(ev, slug)
-        if record_type == "click":
+        if record_type in ("click", "approval_confirmed"):
             _log_command(ev, workspace, slug)
         persisted.append(ev)
     return persisted
@@ -664,6 +803,7 @@ def _help_doc_lines() -> list[str]:
             f"  README: {doc_dir / 'README.md'}",
             f"  Implementation: {doc_dir / 'references' / 'implementation.md'}",
             f"  Manual testing: {doc_dir / 'references' / 'manual-testing.md'}",
+            f"  Subagent cycling: {doc_dir / 'references' / 'subagent-approval-cycling.md'}",
             f"  Skill guide: {doc_dir / 'SKILL.md'}",
         ])
     else:
@@ -705,6 +845,18 @@ def _help_examples(topic: str | None = None) -> list[str]:
             "  caa status",
             "  caa status -w my-project",
         ],
+        "cycle": [
+            "Examples:",
+            "  caa cycle --on -w my-project",
+            "  caa cycle --once -w my-project",
+            "  caa cycle --off -w my-project",
+        ],
+        "subagents": [
+            "Examples:",
+            "  caa subagents",
+            "  caa subagents -w my-project",
+            "  caa subagents -w my-project --json",
+        ],
         "stop": [
             "Examples:",
             "  caa stop",
@@ -743,8 +895,10 @@ def _help_examples(topic: str | None = None) -> list[str]:
         "  caa alias set mp ~/code/my-project",
         "  caa alias list",
         "  caa off",
-        "  caa on -w my-project --interval 2",
+        "  caa on -w my-project --interval 0.5",
         "  caa status",
+        "  caa cycle --on",
+        "  caa subagents",
         "  caa stop --all",
         "  caa history -w my-project",
         "  caa history --commands",
@@ -1036,7 +1190,8 @@ def _ws_recv_text(sock: socket.socket) -> str:
     return bytes(raw).decode("utf-8")
 
 
-def _cdp_evaluate_ws(ws_url: str, expression: str, timeout: float = 10.0) -> dict:
+def _cdp_evaluate_ws(ws_url: str, expression: str, timeout: float = 10.0,
+                     await_promise: bool = False) -> dict:
     """Evaluate JS against a specific websocket debugger target."""
     parsed = urllib.parse.urlparse(ws_url)
     sock = socket.create_connection((parsed.hostname, parsed.port), timeout=timeout)
@@ -1062,7 +1217,11 @@ def _cdp_evaluate_ws(ws_url: str, expression: str, timeout: float = 10.0) -> dic
         msg = json.dumps({
             "id": 1,
             "method": "Runtime.evaluate",
-            "params": {"expression": expression, "returnByValue": True},
+            "params": {
+                "expression": expression,
+                "returnByValue": True,
+                "awaitPromise": await_promise,
+            },
         })
         _ws_send_text(sock, msg)
         deadline = time.time() + timeout
@@ -1188,7 +1347,8 @@ def _cdp_select_workbench_target(port: int, timeout: float = 10.0) -> dict:
 
 
 def _cdp_evaluate(port: int, expression: str, timeout: float = 10.0,
-                  target_id: str | None = None) -> dict:
+                  target_id: str | None = None,
+                  await_promise: bool = False) -> dict:
     """Evaluate JS in a page target via CDP websocket.
 
     When target_id is set, only that specific target is used (pinned mode).
@@ -1206,7 +1366,12 @@ def _cdp_evaluate(port: int, expression: str, timeout: float = 10.0,
                 f"Bound CDP target {target_id} not found on port {port}. "
                 f"Available targets: {available_ids}"
             )
-        return _cdp_evaluate_ws(match[0]["webSocketDebuggerUrl"], expression, timeout=timeout)
+        return _cdp_evaluate_ws(
+            match[0]["webSocketDebuggerUrl"],
+            expression,
+            timeout=timeout,
+            await_promise=await_promise,
+        )
 
     preferred = [t for t in page_targets if _is_workbench(t)]
     ordered = preferred + [t for t in page_targets if t not in preferred]
@@ -1214,7 +1379,12 @@ def _cdp_evaluate(port: int, expression: str, timeout: float = 10.0,
     last_error: RuntimeError | None = None
     for t in ordered:
         try:
-            return _cdp_evaluate_ws(t["webSocketDebuggerUrl"], expression, timeout=timeout)
+            return _cdp_evaluate_ws(
+                t["webSocketDebuggerUrl"],
+                expression,
+                timeout=timeout,
+                await_promise=await_promise,
+            )
         except RuntimeError as exc:
             last_error = exc
             continue
@@ -1229,6 +1399,7 @@ def _format_injector_hash(script_hash: str | None) -> str:
 
 def _cdp_inject(port: int, auto_start: bool = True, force_reload: bool = False,
                  repo_slug: str = "workspace",
+                 workspace: str | None = None,
                  target_id: str | None = None,
                  interval_seconds: float | None = None) -> tuple[bool, str | None]:
     """Inject the DOM auto-accept script via CDP.
@@ -1241,13 +1412,7 @@ def _cdp_inject(port: int, auto_start: bool = True, force_reload: bool = False,
         print(f"DOM injector not found at {js_path}", file=sys.stderr)
         return False, None
 
-    script, _script_hash, script_path = _load_dom_injector_script()
-    slug_preamble = f"globalThis.__cursorAutoAcceptRepoSlug = {json.dumps(repo_slug)};\n"
-    script = slug_preamble + script
-    if force_reload:
-        script = _clear_injector_expression() + "\n" + script
-    if auto_start:
-        script += f"\n; {_start_accept_expr(interval_seconds)};"
+    base_script, _script_hash, script_path = _load_dom_injector_script()
 
     pinned_id = target_id
     for attempt in range(CDP_INJECT_RETRIES):
@@ -1255,6 +1420,17 @@ def _cdp_inject(port: int, auto_start: bool = True, force_reload: bool = False,
             if not pinned_id:
                 chosen = _cdp_select_workbench_target(port, timeout=10.0)
                 pinned_id = chosen.get("id")
+            preamble = (
+                f"globalThis.__cursorAutoAcceptRepoSlug = {json.dumps(repo_slug)};\n"
+                f"globalThis.__cursorAutoAcceptWorkspace = "
+                f"{json.dumps(workspace or repo_slug)};\n"
+                f"globalThis.__cursorAutoAcceptTargetId = {json.dumps(pinned_id)};\n"
+            )
+            script = preamble + base_script
+            if force_reload:
+                script = _clear_injector_expression() + "\n" + script
+            if auto_start:
+                script += f"\n; {_start_accept_expr(interval_seconds)};"
             result = _cdp_evaluate(port, script, timeout=10.0, target_id=pinned_id)
             exc = result.get("result", {}).get("exceptionDetails")
             if exc:
@@ -1342,6 +1518,39 @@ def _cdp_gate(port: int, action: str, title: str | None = None,
 # ---------------------------------------------------------------------------
 # Session resolution helpers
 # ---------------------------------------------------------------------------
+
+
+def _rebind_session_target_if_unique(session: dict) -> tuple[str | None, bool]:
+    """Rebind a lost renderer target only when one workbench target exists."""
+    port = session.get("cdp_port")
+    bound_target = session.get("cdp_target_id")
+    if not port:
+        return bound_target, False
+    try:
+        page_targets = _cdp_list_page_targets(port, timeout=5.0)
+    except (ConnectionRefusedError, OSError, RuntimeError):
+        return bound_target, False
+    if bound_target and any(target.get("id") == bound_target for target in page_targets):
+        return bound_target, False
+    workbenches = [target for target in page_targets if _is_workbench(target)]
+    if len(workbenches) != 1:
+        return bound_target, False
+    replacement = workbenches[0].get("id")
+    if not replacement:
+        return bound_target, False
+
+    old_target = bound_target
+    workspace = session.get("workspace")
+    session["cdp_target_id"] = replacement
+    state_data = _load_state(gc=False)
+    if workspace in state_data.get("sessions", {}):
+        state_data["sessions"][workspace]["cdp_target_id"] = replacement
+        _save_state(state_data)
+    print(
+        "Renderer target changed after a reload/reopen; "
+        f"rebinding {old_target or 'unbound'} -> {replacement}."
+    )
+    return replacement, True
 
 
 def _matching_sessions(state: dict, require_alive: bool = True) -> dict[str, dict]:
@@ -1655,6 +1864,7 @@ def _print_session_status(session: dict) -> None:
             print(f"Targets:   {target_count} page target(s) on port")
 
         drained = _drain_injector_events(port, bound_target, workspace, slug)
+        registry = _sync_subagent_registry(port, bound_target, workspace, slug)
 
         gate = _cdp_gate(port, "status", target_id=bound_target)
         if gate:
@@ -1667,6 +1877,49 @@ def _print_session_status(session: dict) -> None:
             if isinstance(interval_ms, (int, float)):
                 print(f"Poll:      {interval_ms / 1000:g}s fallback interval")
             print(f"Clicks:    {clicks}")
+            if isinstance(gate.get("totalClickAttempts"), int):
+                print(f"Attempts:  {gate['totalClickAttempts']}")
+            if isinstance(gate.get("totalConfirmedApprovals"), int):
+                print(f"Confirmed: {gate['totalConfirmedApprovals']}")
+            if isinstance(gate.get("lastScanDurationMs"), (int, float)):
+                print(
+                    f"Scan:      {gate['lastScanDurationMs']:g}ms last, "
+                    f"{gate.get('maxScanDurationMs', 0):g}ms max "
+                    f"({gate.get('totalScans', 0)} total)"
+                )
+            if isinstance(gate.get("usedJSHeapBytes"), (int, float)):
+                print(f"JS Heap:   {gate['usedJSHeapBytes'] / (1024 * 1024):.1f} MiB")
+            if gate.get("safetyTrip"):
+                print(f"  SAFETY:  {json.dumps(gate['safetyTrip'])}")
+            cycle_label = "ON" if gate.get("cycleEnabled") else "OFF"
+            if gate.get("cycleActive"):
+                cycle_label += " (running)"
+            print(f"Cycle:     {cycle_label}")
+            counts = (
+                registry.get("counts", {})
+                if isinstance(registry, dict)
+                else gate.get("subagentCounts", {})
+            )
+            if isinstance(counts, dict):
+                print(
+                    "Subagents: "
+                    f"{counts.get('active', 0)} active, "
+                    f"{counts.get('waiting', 0)} waiting, "
+                    f"{counts.get('completed', 0)} completed, "
+                    f"{counts.get('failed', 0)} failed"
+                )
+            last_cycle = (
+                registry.get("lastCycle")
+                if isinstance(registry, dict)
+                else gate.get("lastCycle")
+            )
+            if isinstance(last_cycle, dict) and last_cycle.get("ts"):
+                print(
+                    f"LastCycle: {last_cycle.get('ts')} "
+                    f"({last_cycle.get('rows', 0)} rows, "
+                    f"{last_cycle.get('confirmed', 0)} confirmed, "
+                    f"{last_cycle.get('failed', 0)} failed)"
+                )
             if "shareSafeTitle" in gate:
                 tmode = "discreet" if gate.get("shareSafeTitle") else "branded"
                 print(f"Title:     {tmode}")
@@ -1921,6 +2174,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
 
     inject_ok, pinned_target = _cdp_inject(
         cdp_port, auto_start=False, force_reload=True, repo_slug=slug,
+        workspace=ws_key,
     )
     if inject_ok and pinned_target:
         sessions[ws_key]["cdp_target_id"] = pinned_target
@@ -2084,6 +2338,7 @@ def cmd_launch_ssh(args: argparse.Namespace) -> int:
 
     inject_ok, pinned_target = _cdp_inject(
         cdp_port, auto_start=False, force_reload=True, repo_slug=slug,
+        workspace=ws_key,
     )
     if inject_ok and pinned_target:
         sessions[ws_key]["cdp_target_id"] = pinned_target
@@ -2144,6 +2399,7 @@ def cmd_on(args: argparse.Namespace) -> int:
         print(f"Dedicated Cursor (PID {pid}) is no longer running.", file=sys.stderr)
         return 1
 
+    bound_target, _ = _rebind_session_target_if_unique(session)
     check = _cdp_gate(port, "status", target_id=bound_target)
     expected_hash: str | None = None
     expected_path: Path | None = None
@@ -2168,6 +2424,7 @@ def cmd_on(args: argparse.Namespace) -> int:
             )
         inject_ok, new_target = _cdp_inject(
             port, auto_start=False, force_reload=True, repo_slug=slug,
+            workspace=workspace,
             target_id=bound_target,
         )
         if not inject_ok:
@@ -2209,6 +2466,8 @@ def cmd_on(args: argparse.Namespace) -> int:
         _log_event("gate", workspace, slug, action="on",
                    cdp_target_id=bound_target,
                    poll_interval_seconds=interval_seconds)
+        _drain_injector_events(port, bound_target, workspace, slug)
+        _sync_subagent_registry(port, bound_target, workspace, slug)
     else:
         print("Failed to start auto-approve.", file=sys.stderr)
         return 1
@@ -2232,6 +2491,7 @@ def cmd_off(args: argparse.Namespace) -> int:
         print(f"Dedicated Cursor (PID {pid}) is no longer running.", file=sys.stderr)
         return 1
 
+    bound_target, _ = _rebind_session_target_if_unique(session)
     share_safe = bool(session.get("share_safe_title"))
     result = _cdp_gate(
         port,
@@ -2248,9 +2508,173 @@ def cmd_off(args: argparse.Namespace) -> int:
             print(f"Window title target: {disabled_title}")
         _log_event("gate", workspace, slug, action="off",
                    cdp_target_id=bound_target)
+        _drain_injector_events(port, bound_target, workspace, slug)
+        _sync_subagent_registry(port, bound_target, workspace, slug)
     else:
         print("Failed to stop auto-approve.", file=sys.stderr)
         return 1
+    return 0
+
+
+def _cdp_json_expression(port: int, expression: str, target_id: str | None,
+                         *, timeout: float = 30.0,
+                         await_promise: bool = False) -> dict | None:
+    try:
+        result = _cdp_evaluate(
+            port,
+            expression,
+            target_id=target_id,
+            timeout=timeout,
+            await_promise=await_promise,
+        )
+        exception = result.get("result", {}).get("exceptionDetails")
+        if exception:
+            description = exception.get("exception", {}).get("description")
+            raise RuntimeError(description or exception.get("text", "JavaScript error"))
+        raw = result.get("result", {}).get("result", {}).get("value")
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+        return parsed if isinstance(parsed, dict) else None
+    except (ConnectionRefusedError, OSError, RuntimeError, json.JSONDecodeError) as exc:
+        print(f"CDP error: {exc}", file=sys.stderr)
+        return None
+
+
+def cmd_cycle(args: argparse.Namespace) -> int:
+    """Enable, disable, or explicitly run bounded subagent approval cycling."""
+    state = _load_state()
+    session = _resolve_session(
+        args, state, allow_interactive=True, command_name="cycle",
+    )
+    if not session:
+        return 1
+
+    port = session["cdp_port"]
+    workspace = session["workspace"]
+    slug = session.get("slug", _repo_slug(workspace))
+    target, _ = _rebind_session_target_if_unique(session)
+    mode = args.cycle_mode
+
+    if mode == "once":
+        expression = (
+            "(async () => JSON.stringify("
+            "await runSubagentCycle({explicit: true})"
+            "))()"
+        )
+        result = _cdp_json_expression(
+            port,
+            expression,
+            target,
+            timeout=180.0,
+            await_promise=True,
+        )
+    else:
+        enabled = mode == "on"
+        literal = "true" if enabled else "false"
+        expression = (
+            "typeof setSubagentCycle === 'function' "
+            f"? JSON.stringify(setSubagentCycle({literal})) : null"
+        )
+        result = _cdp_json_expression(port, expression, target)
+
+    if result is None:
+        print(
+            "Subagent cycling API is unavailable. Reinstall globally and run "
+            "'caa on' to reload the injector.",
+            file=sys.stderr,
+        )
+        return 1
+
+    drained = _drain_injector_events(port, target, workspace, slug)
+    snapshot = _sync_subagent_registry(port, target, workspace, slug)
+    if mode == "once":
+        if result.get("ok"):
+            print(
+                f"[{slug}] Cycle finished: {result.get('rows', 0)} row(s), "
+                f"{result.get('confirmed', 0)} confirmed, "
+                f"{result.get('failed', 0)} failed, "
+                f"{result.get('misses', 0)} missed."
+            )
+        else:
+            print(f"[{slug}] Cycle did not run: {result.get('reason', 'unknown')}")
+            return 1
+    else:
+        print(f"[{slug}] Subagent approval cycling {'ON' if mode == 'on' else 'OFF'}.")
+        if mode == "on" and not result.get("cycleActive"):
+            print("  The scheduler will run while the main auto-approve gate is ON.")
+    if drained:
+        print(f"  Persisted {len(drained)} cycle/event record(s).")
+    if isinstance(snapshot, dict):
+        counts = snapshot.get("counts", {})
+        print(
+            f"  Registry: {counts.get('active', 0)} active, "
+            f"{counts.get('waiting', 0)} waiting, "
+            f"{counts.get('completed', 0)} completed, "
+            f"{counts.get('failed', 0)} failed."
+        )
+    return 0
+
+
+def cmd_subagents(args: argparse.Namespace) -> int:
+    """Show the sanitized renderer-local subagent registry."""
+    state = _load_state()
+    session = _resolve_session(
+        args, state, allow_interactive=True, command_name="subagents",
+    )
+    if not session:
+        return 1
+
+    port = session["cdp_port"]
+    workspace = session["workspace"]
+    slug = session.get("slug", _repo_slug(workspace))
+    target, _ = _rebind_session_target_if_unique(session)
+    _drain_injector_events(port, target, workspace, slug)
+    snapshot = _sync_subagent_registry(port, target, workspace, slug)
+    if snapshot is None:
+        print(
+            "Subagent registry API is unavailable. Reinstall globally and run "
+            "'caa on' to reload the injector.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.json_output:
+        print(json.dumps(snapshot, indent=2, default=str))
+        return 0
+
+    counts = snapshot.get("counts", {})
+    cycle_label = "ON" if snapshot.get("cycleEnabled") else "OFF"
+    if snapshot.get("cycleActive"):
+        cycle_label += " (running)"
+    print(f"Session:   {slug}")
+    print(f"Cycle:     {cycle_label}")
+    print(
+        "Subagents: "
+        f"{counts.get('active', 0)} active, "
+        f"{counts.get('waiting', 0)} waiting, "
+        f"{counts.get('completed', 0)} completed, "
+        f"{counts.get('failed', 0)} failed, "
+        f"{counts.get('stale', 0)} stale"
+    )
+    tasks = snapshot.get("tasks", [])
+    if not tasks:
+        print("No registered subagent task rows.")
+        return 0
+    for task in tasks:
+        identity = task.get("toolUseId") or task.get("rowKey") or "unknown"
+        confirmed = task.get("confirmedAt") or "-"
+        print(
+            f"- {task.get('status', 'unknown'):18s} "
+            f"idx={str(task.get('rowIndexHint')):>4s} "
+            f"attempts={task.get('attempts', 0):<2} "
+            f"id={str(identity)[:36]}"
+        )
+        print(f"  {task.get('title', 'Subagent task')}")
+        print(
+            f"  seen={task.get('lastSeenAt') or '-'} "
+            f"confirmed={confirmed}"
+        )
+        if task.get("failure"):
+            print(f"  failure={task['failure']}")
     return 0
 
 
@@ -2819,7 +3243,7 @@ def build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argument
         type=_poll_interval_arg,
         default=DEFAULT_POLL_INTERVAL_SECONDS,
         metavar="SECONDS",
-        help="Fallback scan interval in seconds (default: 2; range: 0.25-60)",
+        help="Fallback scan interval in seconds (default: 0.5; range: 0.25-60)",
     )
     p_launch.set_defaults(func=cmd_launch)
     command_parsers["launch"] = p_launch
@@ -2845,7 +3269,7 @@ def build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argument
         type=_poll_interval_arg,
         default=DEFAULT_POLL_INTERVAL_SECONDS,
         metavar="SECONDS",
-        help="Fallback scan interval in seconds (default: 2; range: 0.25-60)",
+        help="Fallback scan interval in seconds (default: 0.5; range: 0.25-60)",
     )
     p_launch_ssh.set_defaults(func=cmd_launch_ssh)
     command_parsers["launch-ssh"] = p_launch_ssh
@@ -2868,6 +3292,52 @@ def build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argument
     p_off.add_argument("workspace_pos", nargs="?", help=ws_help)
     p_off.set_defaults(func=cmd_off)
     command_parsers["off"] = p_off
+
+    p_cycle = sub.add_parser(
+        "cycle",
+        help="Enable, disable, or run subagent approval row cycling",
+    )
+    p_cycle.add_argument("--workspace", "-w", help=ws_help)
+    p_cycle.add_argument("workspace_pos", nargs="?", help=ws_help)
+    cycle_group = p_cycle.add_mutually_exclusive_group(required=True)
+    cycle_group.add_argument(
+        "--on",
+        dest="cycle_mode",
+        action="store_const",
+        const="on",
+        help="Enable automatic bounded recovery cycles",
+    )
+    cycle_group.add_argument(
+        "--off",
+        dest="cycle_mode",
+        action="store_const",
+        const="off",
+        help="Disable automatic recovery cycles",
+    )
+    cycle_group.add_argument(
+        "--once",
+        dest="cycle_mode",
+        action="store_const",
+        const="once",
+        help="Run one explicit bounded cycle without changing the saved toggle",
+    )
+    p_cycle.set_defaults(func=cmd_cycle)
+    command_parsers["cycle"] = p_cycle
+
+    p_subagents = sub.add_parser(
+        "subagents",
+        help="Show the sanitized subagent task registry",
+    )
+    p_subagents.add_argument("--workspace", "-w", help=ws_help)
+    p_subagents.add_argument("workspace_pos", nargs="?", help=ws_help)
+    p_subagents.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="Output the complete sanitized snapshot as JSON",
+    )
+    p_subagents.set_defaults(func=cmd_subagents)
+    command_parsers["subagents"] = p_subagents
 
     p_share = sub.add_parser(
         "share-safe",

@@ -95,10 +95,12 @@ lifecycle with `on`/`off`/`stop`.
 
 | Command | What it does |
 |---------|-------------|
-| `launch [-w PATH] [PATH\|ALIAS] [--interval SECONDS]` | Open dedicated Cursor, inject DOM script, gate ON. Accepts a concrete path, a registered local alias, or a registered SSH folder URI alias. The fallback scan defaults to 2 seconds (range: 0.25–60). Auto-registers the workspace slug as an alias. Blocks only if the same workspace is already running. Multiple workspaces can run simultaneously. |
+| `launch [-w PATH] [PATH\|ALIAS] [--interval SECONDS]` | Open dedicated Cursor, inject DOM script, gate ON. Accepts a concrete path, a registered local alias, or a registered SSH folder URI alias. The fallback scan defaults to 0.5 seconds (range: 0.25–60). Auto-registers the workspace slug as an alias. Blocks only if the same workspace is already running. Multiple workspaces can run simultaneously. |
 | `launch-ssh <host> [/absolute/remote/path] [--no-preflight] [--interval SECONDS]` | Open dedicated Cursor connected to an SSH remote host (from `~/.ssh/config`), inject script, and use the same configurable fallback interval. Path-specific launches first verify the remote directory with `ssh <host> test -d <path>` so bad host/path pairs fail before creating a profile or alias. |
 | `on [-w PATH\|SLUG] [--interval SECONDS]` | Resume auto-clicking (`startAccept()` via CDP). An interval supplied while already ON takes effect immediately and persists for the session. Reloads stale in-window injector code when hash differs. Auto-detected if only one session, otherwise opens an interactive picker in a TTY. |
 | `off [-w PATH\|SLUG]` | Pause auto-clicking (`stopAccept()` via CDP) while keeping the dedicated window open. Auto-detected if only one session, otherwise opens an interactive picker in a TTY. |
+| `cycle --on\|--off\|--once [-w PATH\|SLUG]` | Opt-in recovery for registered subagent approval rows that Cursor virtualized out of the DOM. Targets exact row identity, confirms the result, restores scroll/focus, and fails closed on drift. |
+| `subagents [-w PATH\|SLUG] [--json]` | Show the sanitized renderer task registry, row hints, statuses, attempts, and confirmation timestamps. |
 | `status [-w PATH\|SLUG]` | Show session details including last approved command preview. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
 | `stop [-w PATH\|SLUG] [--all]` | Pause gate, close dedicated Cursor process, and remove session when shutdown succeeds. Without `-w`, it prefers running sessions when any are alive; if none are running, it falls back to stale entries for cleanup. Use `--all` to stop every session, but do not combine `--all` with `-w` or a positional workspace. |
 | `alias [set\|remove\|list]` | Manage workspace aliases stored in `config.json`. `set <name> <path>` registers a new alias (validates the path exists and the name is not already taken). `remove <name>` deletes one. `list` shows all. |
@@ -134,7 +136,8 @@ use `caa --help` (or the full launcher path with `--help`).
    CDP target is pinned by ID in `state.json` so all subsequent commands
    (`on`/`off`/`status`/`stop`) address exactly that page.
 5. The injector uses a MutationObserver (300ms debounce) for fast detection,
-   with a configurable fallback poll (2 seconds by default), and clicks matches.
+   with a configurable fallback poll (0.5 seconds by default), and clicks at
+   most one eligible candidate per scan.
 6. The injector continuously maintains the window title
    (`autoapprove ✅ <repo>` or `autoapprove ⏸ <repo>`) via a 3-second
    interval, so the title self-heals if Cursor resets it — unless
@@ -148,12 +151,18 @@ use `caa --help` (or the full launcher path with `--help`).
 9. If the installed injector changed after the window was launched, `on`
    reloads the in-window script so the running window picks up the latest
    pattern fixes.
+10. Optional subagent cycling records exact mounted task-row identity, revisits
+    registered unmounted rows through the TanStack virtualizer snapshot, and
+    counts confirmations separately from click attempts.
+11. Renderer safety bounds rate-limit mutation scans, cache private
+    virtualizer snapshots, cap cycle duration, and turn the gate OFF after
+    repeated slow scans or excessive JavaScript heap use.
 
-Only the selected agent conversation is mounted as a chat surface in Cursor
-3.12.17. Pinned and other sidebar rows are navigation entries, not hidden chat
-DOMs, so this DOM injector cannot approve all sidebar agents simultaneously.
-Separate visible dedicated windows can work in parallel even when one is not
-OS-focused; minimized/hidden windows still need direct validation.
+Only the selected top-level agent conversation is mounted as a chat surface in
+Cursor 3.12.17. Cycling handles nested subagent rows inside that selected
+parent; pinned and other sidebar rows remain navigation entries, not hidden
+chat DOMs. Separate visible dedicated windows can work in parallel even when
+one is not OS-focused; minimized/hidden windows still need direct validation.
 
 **Note on Cursor-specific preferences**: Model selection, agent mode, and
 similar UI state live in `state.vscdb` (a per-profile SQLite database) and
@@ -167,21 +176,22 @@ global artifacts (`~/.cursor/skills/global-cursor-autoapprove/`,
 
 ## Testing
 
-No automated tests required for this skill. Verification is manual because the
-behavior depends on a live Cursor window plus approval prompts.
+Launcher behavior has unit coverage; DOM behavior still requires a live Cursor
+window plus real approval prompts.
 
 Minimum verification after executable changes:
 
 ```bash
 bash "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/scripts/install.sh" --target global --force
+/usr/bin/python3 -m unittest discover -s "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/tests" -p "test_*.py"
 /usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py" help
 /usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py" status
 ```
 
 If a dedicated window is already running, also verify `on` can refresh stale
 injector code and that `status` reports a hash, fallback poll interval, and
-click count. Verify `on --interval 0.5` updates a running timer, then restore
-the desired interval (normally `on --interval 2`). If multiple
+click count. Verify `on --interval 2` updates a running timer, then restore
+the default with `on --interval 0.5`. If multiple
 sessions are active, also verify the interactive picker works for
 `on`/`off`/`stop`, plus `status -w <slug>` when a slug is ambiguous.
 
@@ -189,4 +199,5 @@ sessions are active, also verify the interactive picker works for
 
 - [Implementation details](references/implementation.md)
 - [Manual testing guide](references/manual-testing.md)
+- [Subagent approval cycling design](references/subagent-approval-cycling.md)
 - [Why older approaches were retired](references/retired-approaches.md)
