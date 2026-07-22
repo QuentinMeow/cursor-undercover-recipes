@@ -33,7 +33,7 @@
   const LOG_PREFIX = "[autoAccept]";
   const SCRIPT_HASH = globalThis.__cursorAutoAcceptScriptHash || "unknown";
   const REPO_SLUG = globalThis.__cursorAutoAcceptRepoSlug || "workspace";
-  const STRATEGY_VERSION = "2026-07-subagent-cycle-v1";
+  const STRATEGY_VERSION = "2026-07-subagent-cycle-v3-focus-safe";
   const TITLE_SYNC_INTERVAL = 3000;
   /** Faster ping while discreet so Cursor cannot show a fresh native title for long. */
   const TITLE_SYNC_INTERVAL_SHARE_SAFE = 500;
@@ -48,13 +48,22 @@
   const SUBAGENT_REGISTRY_MAX = 500;
   const SUBAGENT_ROW_SELECTOR = ".virtualized-composer-messages-row";
   const SUBAGENT_SURFACE_SELECTOR = '.subagent-task-card, [class*="task-subagent"]';
+  const SUBAGENT_TRAY_ITEM_SELECTOR = ".composer-toolbar-background-job-item-clickable";
+  const SUBAGENT_TRAY_TITLE_SELECTOR = ".composer-toolbar-background-job-item-text";
+  const SUBAGENT_TRAY_HEADER_PATTERN = /^\d+\s+subagents?\s+running$/i;
   const SCROLL_CONTAINER_SELECTOR = ".virtualized-composer-messages-scroll-container";
   const CYCLE_INTERACTION_GUARD_MS = 2000;
   const CYCLE_MOUNT_TIMEOUT_MS = 250;
   const CYCLE_CONFIRM_DELAYS_MS = [150, 350, 700, 1200];
   const CYCLE_AUTOMATIC_INTERVAL_MS = 5000;
   const CYCLE_MAX_TASKS = 20;
+  const CYCLE_MAX_TRAY_ITEMS = 8;
   const CYCLE_MAX_DURATION_MS = 10000;
+  const CYCLE_TRAY_MOUNT_TIMEOUT_MS = 800;
+  const CYCLE_TRAY_SETTLE_MS = 150;
+  const CYCLE_TRAY_CONFIRM_DELAYS_MS = [100, 300, 600];
+  const CYCLE_TRAY_MAX_ATTEMPTS = 2;
+  const FOCUS_SETTLE_DELAY_MS = 300;
   const VIRTUALIZER_SNAPSHOT_CACHE_MS = 5000;
   const MAX_SAFE_SCAN_DURATION_MS = 250;
   const MAX_CONSECUTIVE_SLOW_SCANS = 3;
@@ -168,9 +177,19 @@
     cycleTimer: null,
     cycleGeneration: 0,
     cycleCursor: 0,
+    trayCursor: 0,
+    trayApprovalAttempts: new Map(),
+    totalTrayVisits: 0,
+    totalTrayApprovalAttempts: 0,
+    totalTrayConfirmedApprovals: 0,
     lastCycle: null,
     lastUserInteractionAt: 0,
     lastUserInteractionType: null,
+    interactionGeneration: 0,
+    lastUserFocusElement: null,
+    lastUserFocusGeneration: 0,
+    focusRestoreGeneration: 0,
+    lastFocusRestore: null,
     interactionGuardInstalled: false,
     programmaticScrollDepth: 0,
     enableResume: true,
@@ -591,6 +610,33 @@
     if (state.programmaticScrollDepth > 0 || event?.isTrusted === false) return;
     state.lastUserInteractionAt = Date.now();
     state.lastUserInteractionType = event?.type || "unknown";
+    state.interactionGeneration++;
+    const focusTarget = _focusTargetFromInteraction(event);
+    if (focusTarget) {
+      state.lastUserFocusElement = focusTarget;
+      state.lastUserFocusGeneration = state.interactionGeneration;
+    }
+  }
+
+  function _focusTargetFromInteraction(event) {
+    const target = event?.target instanceof Element ? event.target : null;
+    if (!target || !["pointerdown", "keydown"].includes(event.type)) return null;
+    if (
+      target.matches(
+        'input, textarea, select, [contenteditable="true"], [role="textbox"]'
+      )
+    ) {
+      return target;
+    }
+    const terminal = target.closest(".terminal-instance, .xterm");
+    if (terminal) {
+      return terminal.querySelector("textarea.xterm-helper-textarea");
+    }
+    const editor = target.closest(".monaco-editor");
+    if (editor) {
+      return editor.querySelector("textarea.inputarea");
+    }
+    return null;
   }
 
   function _setupInteractionGuard() {
@@ -602,8 +648,14 @@
   }
 
   function _composerHasUnsentText() {
-    const inputBox = document.querySelector("div.full-input-box");
-    if (!inputBox) return false;
+    const inputBoxes = document.querySelectorAll("div.full-input-box");
+    for (const inputBox of inputBoxes) {
+      if (_inputBoxHasUnsentText(inputBox)) return true;
+    }
+    return false;
+  }
+
+  function _inputBoxHasUnsentText(inputBox) {
     const editable =
       inputBox.querySelector('[contenteditable="true"]') ||
       (inputBox.matches?.('[contenteditable="true"]') ? inputBox : null);
@@ -620,21 +672,47 @@
     return false;
   }
 
+  function _activeEditingSurfaceBlockReason() {
+    const active = document.activeElement;
+    if (!active || active === document.body || !(active instanceof Element)) {
+      return null;
+    }
+    if (
+      active.matches("textarea.xterm-helper-textarea") ||
+      active.closest(".terminal-instance, .xterm")
+    ) {
+      return "terminal_focused";
+    }
+    const editable = active.matches(
+      'input, textarea, select, [contenteditable="true"], [role="textbox"]'
+    );
+    const composerEditable = active.closest(
+      "div.full-input-box, .composer-input-blur-wrapper"
+    );
+    return editable && !composerEditable ? "editor_focused" : null;
+  }
+
   function _cycleBlockReason(explicit) {
     if (!state.running) return "gate_off";
     if (_composerHasUnsentText()) return "unsent_composer_text";
     if (_hasUnrelatedVisibleModal()) return "unrelated_modal";
-    if (
-      !explicit &&
-      document.hasFocus() &&
-      Date.now() - state.lastUserInteractionAt < CYCLE_INTERACTION_GUARD_MS
-    ) {
-      return `recent_${state.lastUserInteractionType || "interaction"}`;
+    if (!explicit && document.hasFocus()) {
+      const focusReason = _activeEditingSurfaceBlockReason();
+      if (focusReason) return focusReason;
+      if (Date.now() - state.lastUserInteractionAt < CYCLE_INTERACTION_GUARD_MS) {
+        return `recent_${state.lastUserInteractionType || "interaction"}`;
+      }
     }
     return null;
   }
 
-  function _scrollContainer() {
+  function _scrollContainer(records = []) {
+    const taskContainers = new Set();
+    for (const record of records) {
+      const container = _findExactRow(record.rowKey)?.closest(SCROLL_CONTAINER_SELECTOR);
+      if (container) taskContainers.add(container);
+    }
+    if (taskContainers.size === 1) return Array.from(taskContainers)[0];
     const containers = Array.from(document.querySelectorAll(SCROLL_CONTAINER_SELECTOR));
     if (containers.length !== 1) return null;
     return containers[0];
@@ -653,6 +731,7 @@
       distanceFromBottom,
       wasNearBottom: distanceFromBottom <= 80,
       focusedElement: document.activeElement,
+      interactionGeneration: state.interactionGeneration,
       autoFollowChanged: false,
     };
   }
@@ -812,13 +891,13 @@
     return { confirmed: false, reason: "unconfirmed_click" };
   }
 
-  function _pushRecentConfirmedClick(candidate, command) {
+  function _pushRecentConfirmedClick(candidate, command, source = "cycle") {
     const entry = {
       ts: new Date().toISOString(),
       kind: candidate.kind || "approval",
       id: candidate.id,
       text: candidate.text,
-      reason: `cycle:${candidate.reason}`,
+      reason: `${source}:${candidate.reason}`,
       fingerprint: candidate.fingerprint,
       confirmed: true,
       commandPreview: command ? command.preview : null,
@@ -928,17 +1007,6 @@
       : Math.min(context.scrollTop, Math.max(0, container.scrollHeight - container.clientHeight));
     context.autoFollowChanged = Math.abs(beforeRestore - target) > 2;
     _setProgrammaticScroll(container, target);
-    const focused = context.focusedElement;
-    if (
-      focused &&
-      focused !== document.body &&
-      focused.isConnected &&
-      typeof focused.focus === "function"
-    ) {
-      try {
-        focused.focus({ preventScroll: true });
-      } catch (_) {}
-    }
   }
 
   function _activeSubagentRecords() {
@@ -956,6 +1024,378 @@
     const rotated = records.slice(start).concat(records.slice(0, start));
     state.cycleCursor = (start + CYCLE_MAX_TASKS) % records.length;
     return rotated.slice(0, CYCLE_MAX_TASKS);
+  }
+
+  function _runningSubagentTrayEntries(options = {}) {
+    const entries = [];
+    const seen = new Set();
+    const labels = document.querySelectorAll(".composer-toolbar-section-header-label");
+    for (const label of labels) {
+      const headerText = String(label.innerText || label.textContent || "")
+        .trim()
+        .replace(/\s+/g, " ");
+      if (!SUBAGENT_TRAY_HEADER_PATTERN.test(headerText)) continue;
+      const header = label.closest(".composer-toolbar-section-header");
+      const block = header?.parentElement?.parentElement;
+      if (!header || !block || !isVisible(header)) continue;
+      for (const item of block.querySelectorAll(SUBAGENT_TRAY_ITEM_SELECTOR)) {
+        if (seen.has(item) || !item.isConnected || !isClickable(item)) continue;
+        const titleNode = item.querySelector(SUBAGENT_TRAY_TITLE_SELECTOR);
+        const title = String(titleNode?.innerText || titleNode?.textContent || "")
+          .trim()
+          .replace(/\s+/g, " ")
+          .slice(0, 120);
+        if (!title) continue;
+        seen.add(item);
+        entries.push({ item, title, headerText });
+      }
+    }
+    if (options.bounded === false || entries.length <= CYCLE_MAX_TRAY_ITEMS) {
+      return entries;
+    }
+    const start = state.trayCursor % entries.length;
+    const rotated = entries.slice(start).concat(entries.slice(0, start));
+    state.trayCursor = (start + CYCLE_MAX_TRAY_ITEMS) % entries.length;
+    return rotated.slice(0, CYCLE_MAX_TRAY_ITEMS);
+  }
+
+  function _selectedEditorTab(group) {
+    if (!group) return null;
+    return (
+      group.querySelector('[role="tab"][aria-selected="true"]') ||
+      group.querySelector('[role="tab"].active.selected')
+    );
+  }
+
+  function _captureEditorSelectionContext() {
+    const selections = [];
+    for (const group of document.querySelectorAll(".editor-group-container")) {
+      const tab = _selectedEditorTab(group);
+      if (tab) selections.push({ group, tab });
+    }
+    const focusedElement = document.activeElement;
+    return {
+      selections,
+      focusedElement,
+      interactionGeneration: state.interactionGeneration,
+      focusedGroup: focusedElement?.closest?.(".editor-group-container") || null,
+    };
+  }
+
+  function _activateEditorTab(tab) {
+    const rect = tab.getBoundingClientRect();
+    const options = {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      button: 0,
+      buttons: 1,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
+    };
+    tab.dispatchEvent(new MouseEvent("mousedown", options));
+    tab.dispatchEvent(new MouseEvent("mouseup", { ...options, buttons: 0 }));
+    if (typeof tab.click === "function") tab.click();
+  }
+
+  function _restoreEditorSelectionContext(context) {
+    if (!context) return;
+    const ordered = context.selections
+      .filter(({ group, tab }) => group.isConnected && tab.isConnected)
+      .sort((a, b) =>
+        a.group === context.focusedGroup ? 1 : b.group === context.focusedGroup ? -1 : 0
+      );
+    for (const { group, tab } of ordered) {
+      if (_selectedEditorTab(group) !== tab) _activateEditorTab(tab);
+    }
+  }
+
+  function _focusKind(element) {
+    if (!element || !(element instanceof Element)) return "none";
+    if (
+      element.matches("textarea.xterm-helper-textarea") ||
+      element.closest(".terminal-instance, .xterm")
+    ) {
+      return "terminal";
+    }
+    if (element.closest("div.full-input-box, .composer-input-blur-wrapper")) {
+      return "composer";
+    }
+    if (
+      element.matches(
+        'input, textarea, select, [contenteditable="true"], [role="textbox"]'
+      )
+    ) {
+      return "editor";
+    }
+    return "other";
+  }
+
+  function _focusTargetForContext(context) {
+    if (!context) return null;
+    if (state.interactionGeneration === context.interactionGeneration) {
+      return context.focusedElement;
+    }
+    if (state.lastUserFocusGeneration > context.interactionGeneration) {
+      return state.lastUserFocusElement;
+    }
+    return null;
+  }
+
+  function _settleFocusAfterAutomation(context, source) {
+    if (!context) return;
+    const restoreGeneration = ++state.focusRestoreGeneration;
+    const attempt = (phase) => {
+      if (restoreGeneration !== state.focusRestoreGeneration) return;
+      const target = _focusTargetForContext(context);
+      if (
+        !target ||
+        target === document.body ||
+        !target.isConnected ||
+        typeof target.focus !== "function"
+      ) {
+        state.lastFocusRestore = {
+          ts: new Date().toISOString(),
+          source,
+          phase,
+          outcome:
+            state.interactionGeneration === context.interactionGeneration
+              ? "target_unavailable"
+              : "preserved_new_user_interaction",
+          targetKind: _focusKind(target),
+        };
+        return;
+      }
+      const neededRestore = document.activeElement !== target;
+      if (neededRestore) {
+        try {
+          target.focus({ preventScroll: true });
+        } catch (_) {}
+      }
+      const restored = document.activeElement === target;
+      state.lastFocusRestore = {
+        ts: new Date().toISOString(),
+        source,
+        phase,
+        outcome: restored
+          ? neededRestore
+            ? "restored"
+            : "already_preserved"
+          : "restore_failed",
+        targetKind: _focusKind(target),
+        interactionChanged:
+          state.interactionGeneration !== context.interactionGeneration,
+      };
+      if (phase === "delayed" && neededRestore && restored) {
+        _queueEvent({
+          type: "focus_restored",
+          source,
+          targetKind: _focusKind(target),
+          interactionChanged:
+            state.interactionGeneration !== context.interactionGeneration,
+        });
+      }
+    };
+    attempt("immediate");
+    setTimeout(() => attempt("delayed"), FOCUS_SETTLE_DELAY_MS);
+  }
+
+  async function _waitForSelectedSubagentGroup(title) {
+    const wanted = normalizeLabel(title);
+    const deadline = performance.now() + CYCLE_TRAY_MOUNT_TIMEOUT_MS;
+    while (performance.now() <= deadline) {
+      const matches = [];
+      for (const group of document.querySelectorAll(".editor-group-container")) {
+        const tab = _selectedEditorTab(group);
+        const tabText = String(tab?.innerText || tab?.textContent || "")
+          .trim()
+          .replace(/\s+/g, " ");
+        if (
+          tab &&
+          normalizeLabel(tabText) === wanted &&
+          group.querySelector("div.conversations")
+        ) {
+          matches.push({ group, tab });
+        }
+      }
+      if (matches.length === 1) {
+        const { group, tab } = matches[0];
+        return {
+          group,
+          tab,
+          targetKey:
+            tab.getAttribute("data-resource-name") ||
+            tab.getAttribute("data-resource-id") ||
+            title,
+        };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return null;
+  }
+
+  function _trayEligibilityReason(candidate, group) {
+    if (!candidate?.el || !group?.contains(candidate.el)) return null;
+    if (_hasUnrelatedVisibleModal(group)) return null;
+    if (isDeleteFileChangeApprove(candidate)) return "delete_file_change";
+    if (candidate.kind === "resume") return "resume";
+    if (hasNearbyDismissal(candidate.el, { allowExcluded: true })) return "dismiss";
+    if (hasNearbyCompanion(candidate.el, { allowExcluded: true })) return "companion";
+    if (isModalSingleActionApprove(candidate, { allowExcluded: true })) return "modal";
+    return null;
+  }
+
+  function _trayApprovalMatches(group) {
+    const candidates = [];
+    const seen = new Set();
+    for (const selector of BUTTON_SELECTORS) {
+      for (const el of group.querySelectorAll(selector)) {
+        if (seen.has(el)) continue;
+        seen.add(el);
+        const match = matchesApproval(el, { allowExcluded: true });
+        if (match) candidates.push({ el, kind: "approval", ...match });
+      }
+    }
+    return candidates;
+  }
+
+  function _trayCandidates(group, targetKey) {
+    const candidates = _trayApprovalMatches(group)
+      .map((candidate) => ({
+        ...candidate,
+        reason: _trayEligibilityReason(candidate, group),
+      }))
+      .filter((candidate) => candidate.reason !== null)
+      .filter((candidate) => _notCoveredByUnrelatedElement(candidate.el));
+    for (const candidate of candidates) {
+      candidate.fingerprint = [
+        "tray",
+        state.workspace,
+        targetKey,
+        _promptFingerprint(candidate.el),
+      ].join("|");
+    }
+    return candidates;
+  }
+
+  function _sameTrayApprovalStillPresent(group, candidate) {
+    if (!group?.isConnected) return false;
+    return _trayCandidates(group, candidate.targetKey).some(
+      (next) =>
+        next.id === candidate.id &&
+        normalizeLabel(next.text) === normalizeLabel(candidate.text)
+    );
+  }
+
+  async function _attemptTrayApproval(target) {
+    const candidates = _trayCandidates(target.group, target.targetKey);
+    if (candidates.length === 0) return { outcome: "no_candidate" };
+    const candidate = candidates[0];
+    candidate.targetKey = target.targetKey;
+    const previous = state.trayApprovalAttempts.get(candidate.fingerprint) || {
+      attempts: 0,
+      failed: false,
+      targetKey: target.targetKey,
+    };
+    if (previous.failed || previous.attempts >= CYCLE_TRAY_MAX_ATTEMPTS) {
+      previous.failed = true;
+      state.trayApprovalAttempts.set(candidate.fingerprint, previous);
+      return { outcome: "failed", reason: "tray_retry_exhausted" };
+    }
+    if (_isCoolingDown(candidate.fingerprint)) {
+      return { outcome: "cooldown" };
+    }
+
+    const command = _extractCommandText(candidate.el);
+    const prompt = _capturePromptSubtree(candidate.el);
+    previous.attempts += 1;
+    previous.lastAttemptAt = new Date().toISOString();
+    state.trayApprovalAttempts.set(candidate.fingerprint, previous);
+    if (state.trayApprovalAttempts.size > 100) {
+      state.trayApprovalAttempts.delete(state.trayApprovalAttempts.keys().next().value);
+    }
+    state.totalClicks++;
+    state.totalClickAttempts++;
+    state.totalTrayApprovalAttempts++;
+    clickEl(candidate.el);
+    _markClicked(candidate.fingerprint);
+    _queueEvent({
+      type: "tray_approval_attempted",
+      targetKey: target.targetKey,
+      title: target.title,
+      pattern_id: candidate.id,
+      text: candidate.text,
+      reason: candidate.reason,
+      fingerprint: candidate.fingerprint,
+      attempt: previous.attempts,
+      prompt,
+      command,
+    });
+
+    for (const delay of CYCLE_TRAY_CONFIRM_DELAYS_MS) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      if (!state.running) return { outcome: "unconfirmed", reason: "gate_off" };
+      if (!_sameTrayApprovalStillPresent(target.group, candidate)) {
+        state.trayApprovalAttempts.delete(candidate.fingerprint);
+        state.totalConfirmedApprovals++;
+        state.totalTrayConfirmedApprovals++;
+        _pushRecentConfirmedClick(candidate, command, "tray");
+        _queueEvent({
+          type: "tray_approval_confirmed",
+          targetKey: target.targetKey,
+          title: target.title,
+          pattern_id: candidate.id,
+          text: candidate.text,
+          reason: "candidate_gone",
+          eligibility_reason: candidate.reason,
+          fingerprint: candidate.fingerprint,
+          prompt,
+          command,
+        });
+        return { outcome: "confirmed", reason: "candidate_gone" };
+      }
+    }
+
+    previous.failed = previous.attempts >= CYCLE_TRAY_MAX_ATTEMPTS;
+    state.trayApprovalAttempts.set(candidate.fingerprint, previous);
+    _queueEvent({
+      type: "tray_approval_unconfirmed",
+      targetKey: target.targetKey,
+      title: target.title,
+      pattern_id: candidate.id,
+      fingerprint: candidate.fingerprint,
+      attempt: previous.attempts,
+      failed: previous.failed,
+      reason: "unconfirmed_click",
+    });
+    return {
+      outcome: previous.failed ? "failed" : "unconfirmed",
+      reason: "unconfirmed_click",
+    };
+  }
+
+  async function _visitSubagentTrayEntry(entry) {
+    if (!entry.item.isConnected) {
+      return { outcome: "miss", reason: "tray_item_disconnected" };
+    }
+    _queueEvent({
+      type: "tray_visit",
+      title: entry.title,
+      header: entry.headerText,
+    });
+    state.totalTrayVisits++;
+    clickEl(entry.item);
+    const selected = await _waitForSelectedSubagentGroup(entry.title);
+    if (!selected) {
+      _queueEvent({
+        type: "tray_visit_miss",
+        title: entry.title,
+        reason: "selected_subagent_not_mounted",
+      });
+      return { outcome: "miss", reason: "selected_subagent_not_mounted" };
+    }
+    await new Promise((resolve) => setTimeout(resolve, CYCLE_TRAY_SETTLE_MS));
+    return _attemptTrayApproval({ ...selected, title: entry.title });
   }
 
   function _scheduleSubagentCycle(delayMs = CYCLE_AUTOMATIC_INTERVAL_MS) {
@@ -986,59 +1426,114 @@
     _getVirtualizerSnapshot(true);
     _discoverSubagentRows(document);
     const records = _activeSubagentRecords();
-    if (records.length === 0) {
-      const result = { ok: true, rows: 0, confirmed: 0, failed: 0, misses: 0 };
+    const trayEntries = _runningSubagentTrayEntries();
+    if (records.length === 0 && trayEntries.length === 0) {
+      const result = {
+        ok: true,
+        rows: 0,
+        confirmed: 0,
+        failed: 0,
+        misses: 0,
+        trayVisits: 0,
+        trayConfirmed: 0,
+        trayFailed: 0,
+        trayMisses: 0,
+      };
       state.lastCycle = { ...result, ts: new Date().toISOString() };
+      if (state.running && state.cycleEnabled) {
+        _scheduleSubagentCycle(CYCLE_AUTOMATIC_INTERVAL_MS);
+      }
       return result;
     }
-    const container = _scrollContainer();
-    if (!container) {
-      return { ok: false, reason: "ambiguous_scroll_container" };
-    }
 
-    const context = _captureScrollContext(container);
+    const container = records.length > 0 ? _scrollContainer(records) : null;
+    const context = container ? _captureScrollContext(container) : null;
+    const editorContext =
+      trayEntries.length > 0 ? _captureEditorSelectionContext() : null;
     const generation = ++state.cycleGeneration;
     state.cycleActive = true;
     const startedAt = new Date().toISOString();
     const startedPerformance = performance.now();
-    const summary = { ok: true, rows: 0, confirmed: 0, failed: 0, misses: 0 };
+    const summary = {
+      ok: true,
+      rows: 0,
+      confirmed: 0,
+      failed: 0,
+      misses: 0,
+      trayVisits: 0,
+      trayConfirmed: 0,
+      trayFailed: 0,
+      trayMisses: 0,
+    };
     _queueEvent({
       type: "cycle_started",
       explicit,
       taskCount: records.length,
+      trayTaskCount: trayEntries.length,
       composerId: records[0]?.parentComposerId || null,
     });
 
     try {
-      for (const record of records) {
-        if (performance.now() - startedPerformance > CYCLE_MAX_DURATION_MS) {
-          summary.misses++;
+      // Give the backup navigation path a chance before row confirmation can
+      // consume the shared cycle budget. The normal mounted-composer scanner
+      // remains active independently at the fallback poll cadence.
+      for (const entry of trayEntries) {
+        if (
+          performance.now() - startedPerformance > CYCLE_MAX_DURATION_MS ||
+          !state.running ||
+          generation !== state.cycleGeneration
+        ) {
           break;
         }
-        if (!state.running || generation !== state.cycleGeneration) break;
-        summary.rows++;
-        let result = await _attemptSubagentApproval(record, context, false);
-        if (result.outcome === "unconfirmed" && state.running) {
-          await new Promise((resolve) => setTimeout(resolve, 250));
-          result = await _attemptSubagentApproval(record, context, true);
-          if (result.outcome === "unconfirmed") {
-            record.status = "failed";
-            record.failure = "unconfirmed_click";
-            summary.failed++;
+        summary.trayVisits++;
+        const result = await _visitSubagentTrayEntry(entry);
+        if (result.outcome === "confirmed") summary.trayConfirmed++;
+        if (result.outcome === "failed") summary.trayFailed++;
+        if (result.outcome === "miss") summary.trayMisses++;
+      }
+
+      if (!context && records.length > 0) {
+        summary.misses += records.length;
+        _queueEvent({
+          type: "cycle_miss",
+          reason: "ambiguous_scroll_container",
+          taskCount: records.length,
+        });
+      } else if (context) {
+        for (const record of records) {
+          if (performance.now() - startedPerformance > CYCLE_MAX_DURATION_MS) {
+            summary.misses++;
+            break;
           }
+          if (!state.running || generation !== state.cycleGeneration) break;
+          summary.rows++;
+          let result = await _attemptSubagentApproval(record, context, false);
+          if (result.outcome === "unconfirmed" && state.running) {
+            await new Promise((resolve) => setTimeout(resolve, 250));
+            result = await _attemptSubagentApproval(record, context, true);
+            if (result.outcome === "unconfirmed") {
+              record.status = "failed";
+              record.failure = "unconfirmed_click";
+              summary.failed++;
+            }
+          }
+          if (result.outcome === "confirmed") summary.confirmed++;
+          if (result.outcome === "miss") summary.misses++;
         }
-        if (result.outcome === "confirmed") summary.confirmed++;
-        if (result.outcome === "miss") summary.misses++;
       }
     } finally {
-      _restoreScrollContext(context);
+      if (context?.container?.isConnected) _restoreScrollContext(context);
+      _restoreEditorSelectionContext(editorContext);
+      _settleFocusAfterAutomation(editorContext || context, "subagent_cycle");
       state.cycleActive = false;
       state.lastCycle = {
         ...summary,
         ts: new Date().toISOString(),
         startedAt,
-        autoFollowChanged: context.autoFollowChanged,
-        restoredScrollTop: context.container.scrollTop,
+        autoFollowChanged: context?.autoFollowChanged || false,
+        restoredScrollTop: context?.container?.isConnected
+          ? context.container.scrollTop
+          : null,
       };
       _persistSubagentRegistry();
       _queueEvent({
@@ -1046,8 +1541,13 @@
         ...state.lastCycle,
       });
       if (state.running && state.cycleEnabled) {
+        const needsSoonerRetry =
+          summary.failed > 0 ||
+          summary.misses > 0 ||
+          summary.trayFailed > 0 ||
+          summary.trayMisses > 0;
         _scheduleSubagentCycle(
-          summary.failed > 0 || summary.misses > 0 ? 2000 : CYCLE_AUTOMATIC_INTERVAL_MS
+          needsSoonerRetry ? 2000 : CYCLE_AUTOMATIC_INTERVAL_MS
         );
       }
     }
@@ -1068,6 +1568,8 @@
 
   function exportSubagentRegistry() {
     const tasks = Array.from(state.subagents.values()).map(_sanitizeSubagentRecord);
+    const trayEntries = _runningSubagentTrayEntries({ bounded: false });
+    const trayAttempts = Array.from(state.trayApprovalAttempts.values());
     const counts = {
       active: tasks.filter((task) => ACTIVE_SUBAGENT_STATUSES.has(task.status)).length,
       waiting: tasks.filter((task) => task.status === "approval_pending").length,
@@ -1084,6 +1586,13 @@
       cycleEnabled: state.cycleEnabled,
       cycleActive: state.cycleActive,
       counts,
+      tray: {
+        running: trayEntries.length,
+        visits: state.totalTrayVisits,
+        attempts: state.totalTrayApprovalAttempts,
+        confirmed: state.totalTrayConfirmedApprovals,
+        failed: trayAttempts.filter((entry) => entry.failed).length,
+      },
       lastCycle: state.lastCycle,
       virtualizer: virtualizer.ok
         ? {
@@ -1276,20 +1785,26 @@
     return null;
   }
 
-  function _matchesLabelSet(el, labelSet) {
+  function _matchesLabelSet(el, labelSet, options = {}) {
     if (!el || !el.textContent) return false;
     const raw = el.textContent.trim();
     if (!raw || raw.length > 40) return false;
-    if (!isVisible(el) || !isClickable(el) || isInExcludedZone(el)) return false;
+    if (
+      !isVisible(el) ||
+      !isClickable(el) ||
+      (isInExcludedZone(el) && !options.allowExcluded)
+    ) {
+      return false;
+    }
     return labelSet.has(normalizeLabel(raw));
   }
 
-  function matchesDismissal(el) {
-    return _matchesLabelSet(el, DISMISS_PATTERNS);
+  function matchesDismissal(el, options = {}) {
+    return _matchesLabelSet(el, DISMISS_PATTERNS, options);
   }
 
-  function matchesCompanion(el) {
-    return _matchesLabelSet(el, COMPANION_PATTERNS);
+  function matchesCompanion(el, options = {}) {
+    return _matchesLabelSet(el, COMPANION_PATTERNS, options);
   }
 
   function _hasNearbyMatch(el, matchFn) {
@@ -1308,12 +1823,12 @@
     return false;
   }
 
-  function hasNearbyDismissal(el) {
-    return _hasNearbyMatch(el, matchesDismissal);
+  function hasNearbyDismissal(el, options = {}) {
+    return _hasNearbyMatch(el, (candidate) => matchesDismissal(candidate, options));
   }
 
-  function hasNearbyCompanion(el) {
-    return _hasNearbyMatch(el, matchesCompanion);
+  function hasNearbyCompanion(el, options = {}) {
+    return _hasNearbyMatch(el, (candidate) => matchesCompanion(candidate, options));
   }
 
   function _isPromptRoot(el) {
@@ -1321,12 +1836,13 @@
   }
 
   function _isComposerSurface(el) {
-    const inputBox = document.querySelector("div.full-input-box");
-    if (!inputBox) return false;
-    let node = inputBox;
-    for (let d = 0; d < 8 && node && node !== document.body; d++) {
-      if (node.contains(el)) return true;
-      node = node.parentElement;
+    const inputBoxes = document.querySelectorAll("div.full-input-box");
+    for (const inputBox of inputBoxes) {
+      let node = inputBox;
+      for (let d = 0; d < 8 && node && node !== document.body; d++) {
+        if (node.contains(el)) return true;
+        node = node.parentElement;
+      }
     }
     return false;
   }
@@ -1337,12 +1853,18 @@
     return _isPromptRoot(btn.el) || _isComposerSurface(btn.el);
   }
 
-  function isModalSingleActionApprove(btn) {
+  function isModalSingleActionApprove(btn, options = {}) {
     if (!btn || btn.kind !== "approval" || !btn.el) return false;
     if (!["approve", "approve_request", "approve_terminal_command"].includes(btn.id)) return false;
 
     const root = btn.el.closest(PROMPT_ROOT_SELECTORS.join(", "));
-    if (!root || isInExcludedZone(root) || !isVisible(root)) return false;
+    if (
+      !root ||
+      (isInExcludedZone(root) && !options.allowExcluded) ||
+      !isVisible(root)
+    ) {
+      return false;
+    }
 
     const controls = [];
     const seen = new Set();
@@ -1350,14 +1872,20 @@
       for (const el of root.querySelectorAll(sel)) {
         if (seen.has(el)) continue;
         seen.add(el);
-        if (!isVisible(el) || !isClickable(el) || isInExcludedZone(el)) continue;
+        if (
+          !isVisible(el) ||
+          !isClickable(el) ||
+          (isInExcludedZone(el) && !options.allowExcluded)
+        ) {
+          continue;
+        }
         const text = (el.textContent || "").trim();
         if (!text || text.length > 60) continue;
         controls.push(el);
       }
     }
 
-    if (controls.some((el) => matchesDismissal(el))) return false;
+    if (controls.some((el) => matchesDismissal(el, options))) return false;
     return controls.length > 0 && controls.length <= 2;
   }
 
@@ -1440,10 +1968,15 @@
     const buttons = [];
     const seen = new Set();
 
-    const inputBox = document.querySelector("div.full-input-box");
-    if (inputBox) {
+    const inputBoxes = Array.from(document.querySelectorAll("div.full-input-box"));
+    for (const inputBox of inputBoxes) {
+      const surfaceStart = buttons.length;
       let ancestor = inputBox;
-      for (let aDepth = 0; ancestor && aDepth < 4 && buttons.length === 0; aDepth++) {
+      for (
+        let aDepth = 0;
+        ancestor && aDepth < 4 && buttons.length === surfaceStart;
+        aDepth++
+      ) {
         let sib = ancestor.previousElementSibling;
         let sibIdx = 0;
         while (sib && sibIdx < 5) {
@@ -1453,6 +1986,24 @@
         }
         ancestor = ancestor.parentElement;
       }
+
+      if (buttons.length === surfaceStart) {
+        let composerRoot = null;
+        let node = inputBox;
+        for (let i = 0; i < 8 && node && node !== document.body; i++) {
+          const cn = (node.className || "").toString();
+          if (
+            /composer|chat|conversation/i.test(cn) ||
+            (node.id && /composer/i.test(node.id))
+          ) {
+            composerRoot = node;
+          }
+          node = node.parentElement;
+        }
+        if (composerRoot) {
+          collectApprovalMatches(composerRoot, buttons, seen);
+        }
+      }
     }
 
     if (buttons.length === 0) {
@@ -1460,21 +2011,6 @@
       for (const root of promptRoots) {
         if (isInExcludedZone(root)) continue;
         collectApprovalMatches(root, buttons, seen);
-      }
-    }
-
-    if (buttons.length === 0 && inputBox) {
-      let composerRoot = null;
-      let node = inputBox;
-      for (let i = 0; i < 8 && node && node !== document.body; i++) {
-        const cn = (node.className || "").toString();
-        if (/composer|chat|conversation/i.test(cn) || (node.id && /composer/i.test(node.id))) {
-          composerRoot = node;
-        }
-        node = node.parentElement;
-      }
-      if (composerRoot) {
-        collectApprovalMatches(composerRoot, buttons, seen);
       }
     }
 
@@ -1741,8 +2277,13 @@
 
     const command = _extractCommandText(btn.el);
     const promptCapture = _capturePromptSubtree(btn.el);
+    const focusContext = {
+      focusedElement: document.activeElement,
+      interactionGeneration: state.interactionGeneration,
+    };
 
     clickEl(btn.el);
+    _settleFocusAfterAutomation(focusContext, "direct_scan");
     _markClicked(btn.fingerprint);
     state.totalClicks++;
     state.totalClickAttempts++;
@@ -1831,6 +2372,8 @@
     const relevant = [
       ...BUTTON_SELECTORS,
       ...PROMPT_ROOT_SELECTORS,
+      SUBAGENT_TRAY_ITEM_SELECTOR,
+      ".composer-toolbar-section-header-label",
       `[data-link="${RESUME_DATA_LINK}"]`,
     ].join(", ");
     return element.matches(relevant) || !!element.querySelector?.(relevant);
@@ -1843,6 +2386,7 @@
       if (!state.running) return;
       const discoveryRoots = new Set();
       let shouldScanApprovals = false;
+      let shouldScheduleTrayCycle = false;
       for (const record of records) {
         if (record.type === "childList") {
           for (const node of record.addedNodes) {
@@ -1854,6 +2398,13 @@
               element.querySelector?.(SUBAGENT_SURFACE_SELECTOR)
             ) {
               discoveryRoots.add(element);
+            }
+            if (
+              element.closest?.(SUBAGENT_TRAY_ITEM_SELECTOR) ||
+              element.querySelector?.(SUBAGENT_TRAY_ITEM_SELECTOR) ||
+              element.matches?.(".composer-toolbar-section-header-label")
+            ) {
+              shouldScheduleTrayCycle = true;
             }
             if (_mutationElementMayContainApproval(element)) shouldScanApprovals = true;
           }
@@ -1871,6 +2422,9 @@
       }
       if (discoveryRoots.size > 0) {
         _discoverSubagentRows(Array.from(discoveryRoots));
+      }
+      if (shouldScheduleTrayCycle && state.cycleEnabled) {
+        _scheduleSubagentCycle(100);
       }
       if (!shouldScanApprovals) return;
       if (state.observerDebounceTimer) clearTimeout(state.observerDebounceTimer);
@@ -2035,6 +2589,11 @@
       cooldownEntries: state.fingerprintCooldowns.size,
       totalClickAttempts: state.totalClickAttempts,
       totalConfirmedApprovals: state.totalConfirmedApprovals,
+      activeFocusKind: _focusKind(document.activeElement),
+      cycleFocusBlockReason: document.hasFocus()
+        ? _activeEditingSurfaceBlockReason()
+        : null,
+      lastFocusRestore: state.lastFocusRestore,
       subagents: exportSubagentRegistry(),
       visibleButtons: _debugButtons(),
       candidates,
@@ -2104,6 +2663,7 @@
   }
 
   function status() {
+    const registry = exportSubagentRegistry();
     const s = {
       strategyVersion: STRATEGY_VERSION,
       scriptHash: state.scriptHash,
@@ -2125,7 +2685,13 @@
       shareSafeTitle: state.shareSafeTitle,
       cycleEnabled: state.cycleEnabled,
       cycleActive: state.cycleActive,
-      subagentCounts: exportSubagentRegistry().counts,
+      subagentCounts: registry.counts,
+      subagentTray: registry.tray,
+      activeFocusKind: _focusKind(document.activeElement),
+      cycleFocusBlockReason: document.hasFocus()
+        ? _activeEditingSurfaceBlockReason()
+        : null,
+      lastFocusRestore: state.lastFocusRestore,
       lastCycle: state.lastCycle,
     };
     console.log(`${LOG_PREFIX} status`, JSON.stringify(s, null, 2));

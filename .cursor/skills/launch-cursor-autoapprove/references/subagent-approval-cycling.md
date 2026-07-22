@@ -4,10 +4,11 @@
 
 **Implemented for the dedicated legacy IDE renderer.**
 
-This document describes the recovery path for approval cards that belong to
-subagent rows which Cursor has virtualized out of the live DOM. The
-implementation targets the dedicated **legacy IDE** window launched by this
-skill. Agent Window support remains a separate later phase.
+This document describes two recovery paths: exact registered subagent rows that
+Cursor virtualized out of the parent transcript, and exact entries under the
+`N subagents running` composer tray. The implementation targets the dedicated
+**legacy IDE** window launched by this skill. Agent Window support remains a
+separate later phase.
 
 The shipped CLI is:
 
@@ -58,8 +59,10 @@ file was removed after the test.
 - record task identity while its row is mounted
 - revisit registered running tasks when their rows are unmounted
 - click only an eligible approval inside the exact registered row
+- visit exact running-subagent tray entries when parent-row recovery is
+  unavailable, then scope matching to the selected child agent editor
 - verify the approval resolved
-- restore the user's scroll position
+- restore the user's selected tabs, scroll position, and focus
 
 ### Deferred
 
@@ -82,6 +85,8 @@ file was removed after the test.
 6. **Restore context**: preserve the selected conversation and scroll position.
 7. **Keep normal scanning**: immediate visible-prompt handling remains the fast
    path; cycling is recovery.
+8. **Navigate narrowly**: tray recovery must resolve one exact row title to one
+   selected agent tab/resource before relaxing the editor-zone exclusion.
 
 ## Identity Model
 
@@ -268,7 +273,7 @@ Run a recovery cycle when all are true:
 
 - gate is ON
 - cycling is enabled
-- at least one task is `running` or `approval_pending`
+- at least one registered task is active or one exact running-tray entry exists
 - no cycle is already active
 - no approval was confirmed for that task during its cooldown
 
@@ -280,12 +285,31 @@ Use adaptive timing:
 
 Avoid a constant full-transcript sweep.
 
+### Running-subagent tray fallback
+
+Some selected child agent editors contain `div.conversations` but no
+`div.full-input-box`, so the input-anchored direct path cannot trust them.
+Recovery matches the exact `N subagents running` header, visits at most eight
+`.composer-toolbar-background-job-item-clickable` rows per round-robin pass,
+and requires exactly one selected agent tab with matching title and a mounted
+conversation. The tab's resource UUID becomes the target identity.
+
+Within that one editor group, exact approval labels still require a nearby
+dismissal/companion or narrow modal rule. Unrelated modals and covered controls
+block the click. Each prompt gets at most two attempts and is confirmed only
+when the candidate disappears. The cycle then restores every previously
+selected editor tab and focus; Cursor's tab widget requires
+`mousedown`/`mouseup` before `click` for reliable restoration.
+
 ### User-interaction guard
 
 Postpone automatic cycling when:
 
 - the dedicated window is focused and the user typed, scrolled, or clicked
   within the last two seconds
+- the focused window has its integrated terminal or another non-composer
+  editable surface active, even if the last keystroke was more than two seconds
+  ago
 - the composer input contains unsent text
 - a modal unrelated to the registered row is active
 
@@ -400,7 +424,12 @@ After each task or cycle:
 
 - if the user was near the bottom, restore to the new bottom
 - otherwise restore the saved `scrollTop`, adjusted for bounded list-size drift
-- restore focus only if the same element is still connected
+- restore tabs and scroll without calling `focus()` from either subsystem
+- settle focus through one owner using an interaction generation: keep the
+  starting target only when no newer interaction exists; otherwise follow the
+  latest user-selected terminal/editor target
+- repeat the guarded focus settle after 300 ms so Cursor's asynchronous
+  post-approval focus cannot overwrite the user
 - do not focus the composer automatically
 
 Record whether Cursor's auto-follow changed the position during the cycle.
@@ -417,6 +446,9 @@ Add event types:
 - `approval_attempted`
 - `approval_confirmed`
 - `approval_unconfirmed`
+- `tray_visit`, `tray_visit_miss`
+- `tray_approval_attempted`, `tray_approval_confirmed`,
+  `tray_approval_unconfirmed`
 - `cycle_finished`
 
 `caa status` should show:
@@ -503,7 +535,18 @@ confirmed, and the original scroll position is restored.
 Exit criteria: two or more concurrent subagents with identical `Allow|Stop`
 labels all progress without cooldown collisions or false clicks.
 
-### Phase D: Agent Window adapter — deferred
+### Phase D: running-subagent tray fallback — implemented
+
+- exact running-tray discovery and round-robin bounds
+- selected child tab/resource identity
+- read-only child editor approval scope
+- confirmation, two-attempt cap, and tab/focus restoration
+
+Live validation on Cursor 3.12.17 mounted a child with one conversations
+surface and no input, confirmed a real `Run` approval in 101 ms, and restored
+the previous editor tab across repeated cycles.
+
+### Phase E: Agent Window adapter — deferred
 
 - bind the separate Agent Window CDP target explicitly
 - add Agent Window composer anchors
@@ -528,6 +571,9 @@ Required live cases:
 10. The pinned CDP target disappears.
 11. Gate OFF prevents every cycle and click.
 12. A non-subagent `Allow` elsewhere in the workbench is never clicked.
+13. A running tray child has a read-only editor with no composer input.
+14. Multiple tray rows are visited round-robin and the original tabs are
+    restored.
 
 For each case save:
 
@@ -562,6 +608,8 @@ after its row is already unmounted was not deterministically reproduced.
 - Gate OFF disables normal and cycling paths.
 - Ambiguous identity or selector drift causes no click.
 - No prompt or command text is persisted in the registry.
+- Tray recovery is bounded, confirms disappearance, caps retries, and restores
+  the selected editor tabs.
 - Agent Window behavior is not silently treated as legacy IDE behavior.
 
 ## Known Risks
