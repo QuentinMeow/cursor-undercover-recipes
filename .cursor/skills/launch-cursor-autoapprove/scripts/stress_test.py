@@ -280,16 +280,16 @@ def _get_recent(port: int, target_id: str | None) -> list[dict]:
 def _get_injector_interval_seconds(port: int, target_id: str | None) -> float:
     result = launcher._cdp_evaluate(
         port,
-        "typeof acceptStatus === 'function' ? acceptStatus().interval : 2000",
+        "typeof acceptStatus === 'function' ? acceptStatus().interval : 500",
         target_id=target_id,
     )
-    ms = result.get("result", {}).get("result", {}).get("value", 2000)
+    ms = result.get("result", {}).get("result", {}).get("value", 500)
     try:
         value = float(ms)
     except (TypeError, ValueError):
-        value = 2000.0
+        value = 500.0
     if value <= 0:
-        value = 2000.0
+        value = 500.0
     return value / 1000.0
 
 

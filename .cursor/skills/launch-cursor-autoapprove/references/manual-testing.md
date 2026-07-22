@@ -38,7 +38,7 @@ LAUNCHER="$HOME/.cursor/launch-autoapprove/launcher.py"
 You should see:
 
 - `Gate: ON`
-- `Poll: 2s fallback interval` (unless you selected another interval)
+- `Poll: 0.5s fallback interval` (unless you selected another interval)
 - an `Injector:` hash
 - a window title like `autoapprove ✅ <repo>`
 
@@ -360,16 +360,16 @@ The observer still handles normal DOM changes after its 300ms debounce.
 gate off first.
 
 ```bash
-/usr/bin/python3 "$LAUNCHER" on --interval 0.5
-/usr/bin/python3 "$LAUNCHER" status
 /usr/bin/python3 "$LAUNCHER" on --interval 2
+/usr/bin/python3 "$LAUNCHER" status
+/usr/bin/python3 "$LAUNCHER" on --interval 0.5
 /usr/bin/python3 "$LAUNCHER" status
 ```
 
 Expected result:
 
-- the first status shows `Poll: 0.5s fallback interval`
-- the second status shows `Poll: 2s fallback interval`
+- the first status shows `Poll: 2s fallback interval`
+- the second status restores the default: `Poll: 0.5s fallback interval`
 - both status checks show `Gate: ON`
 - an invalid value such as `--interval 0` is rejected before contacting Cursor
 
@@ -593,6 +593,59 @@ Expected result:
 
 - session is removed cleanly
 
+## Test 13: Virtualized Subagent Approval Cycling
+
+1. Enable the gate and opt-in cycle scheduler:
+
+```bash
+/usr/bin/python3 "$LAUNCHER" on
+/usr/bin/python3 "$LAUNCHER" cycle --on
+```
+
+2. Start at least two subagents while the parent continues producing enough
+   output to unmount their original task rows.
+   For a sustained concurrency check, start four read-only subagents that each
+   run `/bin/sleep 60` before printing a unique completion marker. Keep the
+   parent producing useful inspection/test output during that minute.
+3. Inspect the registry and run one explicit recovery pass:
+
+```bash
+/usr/bin/python3 "$LAUNCHER" subagents
+/usr/bin/python3 "$LAUNCHER" cycle --once
+/usr/bin/python3 "$LAUNCHER" status
+```
+
+Expected result:
+
+- every task has a distinct task/row identity even when labels are identical
+- unmounted registered rows are revisited without permanently expanding the list
+- `approval_attempted` is followed by `approval_confirmed` only after the card
+  resolves
+- the original scroll position and focus are restored
+- unsent composer text or an unrelated modal blocks the cycle
+- `off` halts normal scans and cycling
+- with the 0.5-second fallback, separate eligible task cards can be approved on
+  consecutive scans while fingerprint cooldown prevents re-clicking one card
+
+## Test 14: Renderer Safety and Reload Rebinding
+
+1. While a long transcript streams, watch `status`.
+2. Confirm scan duration remains bounded and the JavaScript heap is shown.
+3. Reopen/reload the dedicated renderer, then run:
+
+```bash
+/usr/bin/python3 "$LAUNCHER" on
+```
+
+Expected result:
+
+- ordinary scans remain well below the 250ms circuit threshold
+- three consecutive slow scans or heap above 768 MiB turns the gate OFF and
+  records a `safety_trip`
+- if exactly one replacement workbench target exists, `on` reports the old and
+  new target IDs and reinjects successfully
+- multiple possible workbench targets still fail closed
+
 ## Cleanup
 
 Pause auto-clicking when you are done:
@@ -652,7 +705,7 @@ The injector's DOM selectors are coupled to specific Cursor versions. Always rec
 | Cursor Version | Chrome Version | Injector Hash | Shell Run | Subagent Allow | Date Validated |
 |---------------|----------------|---------------|-----------|----------------|----------------|
 | 3.0.8 | Chrome/142.0.7444.265 | 7e641c1041dd | OK | OK | 2026-04-03 |
-| 3.12.17 | Chrome/144.0.7559.236 | 6f4963b0b16b | OK (real Run) | No real prompt surfaced; synthetic companion OK | 2026-07-18 |
+| 3.12.17 | Chrome/144.0.7559.236 | 460391c03c13 | OK (real Run) | OK (4 concurrent real Allow prompts; 60s tasks) | 2026-07-21 |
 
 ### Version Upgrade Checklist
 

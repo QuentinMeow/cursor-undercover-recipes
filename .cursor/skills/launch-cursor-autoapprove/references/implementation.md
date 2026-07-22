@@ -22,7 +22,7 @@ were retired.
 The injector uses a three-layer architecture:
 
 1. **Surface Observer**: A `MutationObserver` detects DOM changes after a 300ms
-   debounce. A configurable fallback poll (`setInterval`, 2 seconds by default)
+   debounce. A configurable fallback poll (`setInterval`, 0.5 seconds by default)
    catches anything the observer misses.
 2. **Policy Engine**: Separates candidate discovery (finding buttons) from
    click decisions (eligibility guards, fingerprint cooldown).
@@ -30,6 +30,10 @@ The injector uses a three-layer architecture:
    `state.eventQueue`. The launcher drains this queue via CDP and persists
    events to `history.jsonl` and per-prompt artifact files under
    `~/.cursor/launch-autoapprove/prompt-artifacts/`.
+4. **Subagent Recovery**: Mounted `task-subagent` rows are registered by exact
+   workspace/target/composer/tool identity. Opt-in bounded cycles rematerialize
+   registered rows, scope approval matching to that row, confirm resolution,
+   and restore scroll/focus.
 
 Prompt fingerprinting (sorted button labels within the prompt root) prevents
 the same unresolved prompt from being clicked repeatedly every poll cycle.
@@ -43,10 +47,12 @@ default and intended for future hardening as internal APIs stabilize.
 
 | Command | Flags | Behavior |
 |---|---|---|
-| `launch` | `--workspace`/`-w`, positional `PATH\|ALIAS`, `--interval SECONDS` | Start dedicated Cursor for a local workspace or registered alias, inject script, turn gate ON. SSH folder URI aliases dispatch through the SSH launch flow. The fallback scan defaults to 2 seconds. |
+| `launch` | `--workspace`/`-w`, positional `PATH\|ALIAS`, `--interval SECONDS` | Start dedicated Cursor for a local workspace or registered alias, inject script, turn gate ON. SSH folder URI aliases dispatch through the SSH launch flow. The fallback scan defaults to 0.5 seconds. |
 | `launch-ssh` | positional `HOST`, optional absolute `PATH`, `--no-preflight`, `--interval SECONDS` | Start dedicated Cursor connected to an SSH remote host via `--folder-uri`, inject script, turn gate ON. Path-specific launches preflight the remote directory with `ssh <host> test -d <path>` before profile/session creation. |
 | `on` | `-w PATH\|SLUG`, `--interval SECONDS` (both optional) | Turn gate ON; optionally update and persist the running session's fallback scan interval; reload script if hash drift is detected. |
 | `off` | `-w PATH\|SLUG` (optional) | Turn gate OFF; keep dedicated window open. |
+| `cycle` | exactly one of `--on`, `--off`, `--once`; optional `-w PATH\|SLUG` | Enable/disable automatic subagent recovery or run one explicit bounded cycle. |
+| `subagents` | `-w PATH\|SLUG`, `--json` (both optional) | Show the sanitized renderer registry and persisted row/status hints. |
 | `status` | `-w PATH\|SLUG` (optional) | Print session details. Shows all sessions if `-w` omitted; ambiguous slugs use the picker. |
 | `stop` | `-w PATH\|SLUG` (optional), `--all` | Turn gate OFF, terminate dedicated process, and remove session entry when shutdown succeeds. `--all` must not be combined with `-w` or a positional workspace. |
 | `alias` | `set <name> <path>`, `remove <name>`, `list` | Manage workspace aliases stored in `config.json`. See [Workspace Aliases](#workspace-aliases-configjson) below. |
@@ -61,7 +67,7 @@ Behavior notes:
 - Multiple workspaces can run simultaneously, each with its own PID, CDP port,
   and profile directory.
 - Poll intervals are per-session, accept values from 0.25 through 60 seconds,
-  default to 2 seconds, and can be changed while the gate is already ON.
+  default to 0.5 seconds, and can be changed while the gate is already ON.
 - `launch` only blocks if the same workspace is already running.
 - `on` / `off` auto-detect the target when one running session matches.
 - `stop` prefers running sessions when any are alive, but `stop -w ...` can
@@ -101,6 +107,7 @@ After global install:
 | `~/.cursor/launch-autoapprove/config.json` | Workspace aliases and user configuration |
 | `~/.cursor/launch-autoapprove/history.jsonl` | Append-only NDJSON event log (rotates at 5 MB) |
 | `~/.cursor/launch-autoapprove/commands.jsonl` | Dedicated command-approval ledger (rotates at 10 MB) |
+| `~/.cursor/launch-autoapprove/subagents.json` | Atomic, sanitized per-session registry snapshots; no prompt or command bodies |
 | `~/.cursor/launch-autoapprove/dedicated-profile-<slug>/` | Per-workspace Cursor profile |
 | `~/.cursor/skills/global-launch-cursor-autoapprove/` | Global slash-command docs |
 
@@ -116,7 +123,7 @@ After global install:
       "slug": "<directory-name-or-ssh-slug>",
       "launched_at": "<UTC ISO timestamp>",
       "cdp_target_id": "<CDP page target ID>",
-      "poll_interval_seconds": 2.0,
+      "poll_interval_seconds": 0.5,
       "kind": "ssh",
       "ssh_host": "<ssh-config-host>",
       "remote_path": "/path/on/remote"
@@ -141,6 +148,12 @@ Recorded event types:
 - `blocked_candidate` — buttons in trusted context that failed eligibility
 - `unknown_prompt` — buttons outside trusted context (potential missing patterns)
 - `state_probe` — internal state probe results (when feature-flagged)
+- `subagent_discovered`, `subagent_status` — task registry transitions
+- `cycle_started`, `row_materialized`, `cycle_miss`, `cycle_finished` — bounded
+  recovery evidence
+- `approval_attempted`, `approval_confirmed`, `approval_unconfirmed` — separate
+  dispatch from proven resolution
+- `safety_trip` — the injector turned itself off after scan/heap limits
 
 The `click`, `blocked_candidate`, and `unknown_prompt` events include a
 `fingerprint` field (sorted button labels within the prompt root), a `prompt`
@@ -278,9 +291,11 @@ this ID to `_cdp_evaluate()`, which looks up the specific target by ID rather
 than iterating through all pages.
 
 If the bound target ID is not found in the current `/json` listing, the
-command fails closed with a clear error. If `target_id` is `None` (backward
-compatibility or fresh launch before the target is pinned), the legacy
-workbench-first heuristic is used.
+command normally fails closed. `on`, `off`, `cycle`, and `subagents` may rebind
+after a renderer reload only when the same CDP port exposes exactly one
+workbench target; ambiguous target sets still fail closed. If `target_id` is
+`None` (backward compatibility or fresh launch before the target is pinned),
+the legacy workbench-first heuristic is used.
 
 `caa status` reports:
 - The bound target ID
@@ -316,9 +331,10 @@ run simultaneously.
 
 ### Timers, Observer, and State
 
-- `MutationObserver` on `document.body` (childList, subtree, attributes)
-  with 300ms debounce fires `checkAndClick` on DOM changes
-- Fallback poll interval: `2000ms` by default (`state.interval`), configurable
+- `MutationObserver` on `document.body` filters ordinary streamed text and
+  reacts immediately only to task-row or approval-control changes. Approval
+  scans use a 300ms debounce plus a 500ms minimum scan gap.
+- Fallback poll interval: `500ms` by default (`state.interval`), configurable
   per session from 250–60000ms
 - Calling `startAccept(<milliseconds>)` while already running replaces the
   existing fallback timer immediately instead of returning early
@@ -326,6 +342,45 @@ run simultaneously.
 - Tracks click history in memory (`state.clicks`, max 100 entries)
 - Event queue (`state.eventQueue`, max 200 entries) for launcher to drain
 - Fingerprint cooldown map (`state.fingerprintCooldowns`, 8s per fingerprint)
+- Per-task registry (`state.subagents`) mirrored to namespaced `localStorage`
+- Cached private virtualizer snapshot (5-second TTL; one forced refresh per
+  cycle instead of toggling the debug API per mutation)
+- Safety telemetry for scan duration, JavaScript heap, and circuit-breaker state
+
+### Renderer Safety Circuit
+
+The injector fails closed when its own renderer work becomes pathological:
+
+- delete-file fallback scans mounted virtual rows plus at most 100 deduplicated
+  `.composer-tool-former-message` roots, never `document.body`
+- cycles visit at most 20 tasks and stop after 10 seconds
+- three consecutive approval scans above 250ms turn the gate OFF
+- JavaScript heap above 768 MiB turns the gate OFF when Chromium exposes
+  `performance.memory`
+- `status` reports last/max scan duration, heap, and any safety trip
+
+Cursor can still consume substantial memory while rendering a large transcript
+with no injector loaded. The circuit limits injector contribution; it cannot
+prevent a product-level workbench crash.
+
+### Half-Second Concurrent Stress Evidence
+
+On Cursor 3.12.17, four concurrent subagents each requested permission and then
+slept for 60 seconds while the parent emitted enough output to move their task
+rows offscreen. The live event ledger recorded four distinct `Allow|Stop`
+approvals, including two consecutive clicks 0.5 seconds apart. All four tasks
+later transitioned to `completed` after offscreen row revisits.
+
+A simultaneous 90-second snapshot run recorded 43 samples and two additional
+parent-command clicks. After 339 scans, the maximum scan duration was 48.4ms,
+JavaScript heap was 247.7 MiB, and the safety circuit did not trip. This
+validates the faster fallback cadence for the tested transcript, but the
+250ms/768 MiB fail-safe bounds remain necessary for larger product workloads.
+
+The first real-prompt replay after this stress run exposed a delete-file
+regression from the earlier row-only fallback scope (11/12 fixtures passed).
+Adding the capped exact former-message surface restored the preserved editor
+card without restoring broad scanning; the rerun passed 12/12.
 
 ### Candidate Discovery
 
@@ -512,6 +567,9 @@ settings remain there until manually removed.
 - fallback poll interval
 - recent click entries (last 3 printed)
 - last approved command preview (first line + line count) when available
+- click attempts versus confirmed cycle approvals
+- cycle toggle/activity, task counts, and last-cycle outcome
+- last/max scan duration, JavaScript heap, and safety-trip reason
 - WARNING if multiple workbench targets exist on the port
 - WARNING if the bound target is missing
 
@@ -619,6 +677,7 @@ prevent regression.
 ## Related Docs
 
 - [Manual testing guide](manual-testing.md)
+- [Subagent approval cycling design](subagent-approval-cycling.md)
 - [Retired approaches and migration context](retired-approaches.md)
 
 ---
