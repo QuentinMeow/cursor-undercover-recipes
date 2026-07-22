@@ -161,7 +161,9 @@
     virtualizerCache: null,
     virtualizerCacheAt: 0,
     subagents: new Map(),
-    cycleEnabled: false,
+    // Recovery for registered subagent rows is part of the default launch
+    // behavior. Users can still disable it explicitly with `caa cycle --off`.
+    cycleEnabled: true,
     cycleActive: false,
     cycleTimer: null,
     cycleGeneration: 0,
@@ -415,7 +417,12 @@
   }
 
   function _deriveTaskStatus(row, existingStatus = "discovered") {
-    if (_visibleRowApproval(row)) return "approval_pending";
+    if (_visibleRowApproval(row)) {
+      // An unconfirmed click is terminal until the card actually changes.
+      // Otherwise mutation discovery immediately reactivates the same failed
+      // task and the default-on scheduler retries it forever.
+      return existingStatus === "failed" ? "failed" : "approval_pending";
+    }
     if (_rowHasLabel(row, new Set(["stop"]))) return "running";
     const toolStatus = String(
       row.querySelector("[data-tool-status]")?.getAttribute("data-tool-status") || ""
@@ -1544,6 +1551,12 @@
     return null;
   }
 
+  function _isCycleOwnedSubagentCandidate(btn) {
+    if (!state.cycleEnabled || !btn?.el) return false;
+    const row = btn.el.closest(SUBAGENT_ROW_SELECTOR);
+    return !!_taskForRow(row);
+  }
+
   function _debugSurface(el) {
     if (!el) return "none";
     if (_isPromptRoot(el)) return "modal";
@@ -1683,14 +1696,19 @@
       ...btn,
       reason: _eligibilityReason(btn),
       fingerprint: _promptFingerprint(btn.el),
+      cycleOwned: _isCycleOwnedSubagentCandidate(btn),
     }));
 
     const eligible = evaluated
-      .filter((btn) => btn.reason !== null)
+      .filter((btn) => btn.reason !== null && !btn.cycleOwned)
       .sort((a, b) => (priority[a.kind || "approval"] ?? 9) - (priority[b.kind || "approval"] ?? 9));
 
-    const blocked = evaluated.filter((btn) => btn.reason === null && _hasTrustedPromptContext(btn));
-    const unknown = evaluated.filter((btn) => btn.reason === null && !_hasTrustedPromptContext(btn));
+    const blocked = evaluated.filter(
+      (btn) => !btn.cycleOwned && btn.reason === null && _hasTrustedPromptContext(btn)
+    );
+    const unknown = evaluated.filter(
+      (btn) => !btn.cycleOwned && btn.reason === null && !_hasTrustedPromptContext(btn)
+    );
 
     for (const btn of blocked) {
       _queueEvent({
@@ -1718,14 +1736,8 @@
       });
     }
 
-    if (eligible.length === 0) return;
-
-    const btn = eligible[0];
-
-    if (_isCoolingDown(btn.fingerprint)) {
-      console.log(`${LOG_PREFIX} skipping ${btn.id} (cooldown for fingerprint ${btn.fingerprint.slice(0, 20)})`);
-      return;
-    }
+    const btn = eligible.find((candidate) => !_isCoolingDown(candidate.fingerprint));
+    if (!btn) return;
 
     const command = _extractCommandText(btn.el);
     const promptCapture = _capturePromptSubtree(btn.el);
@@ -1995,6 +2007,7 @@
         id: btn.id || "",
         text: btn.text || "",
         reason: _eligibilityReason(btn),
+        cycleOwned: _isCycleOwnedSubagentCandidate(btn),
         surface: _debugSurface(btn.el),
         fingerprint: fp,
         coolingDown: _isCoolingDown(fp),
@@ -2025,7 +2038,7 @@
       subagents: exportSubagentRegistry(),
       visibleButtons: _debugButtons(),
       candidates,
-      eligible: candidates.filter((c) => c.reason !== null),
+      eligible: candidates.filter((c) => c.reason !== null && !c.cycleOwned),
       ts: new Date().toISOString(),
     };
   }

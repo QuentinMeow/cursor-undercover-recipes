@@ -25,8 +25,9 @@ description: >-
 # Launch Cursor Auto-Approve
 
 Open a dedicated Cursor window with the DOM auto-accept script injected and the
-gate ON. Approval prompts in that window are auto-clicked. Simple `on` / `off`
-commands toggle the gate later.
+gate ON. Bounded cycling for registered nested-subagent rows also starts ON so
+offscreen approvals can be recovered. Simple commands can pause either behavior
+later.
 
 This is the supported auto-approval skill in this repo. The older
 `cursor-autoapprove` and `personal-cursor-quickapprove` experiments were
@@ -85,8 +86,9 @@ When the user asks for auto-approval on an **SSH remote** host, run:
 Then tell the user:
 
 > A dedicated Cursor window has opened for this project with auto-approval ON.
-> Move your agent work to that window. Use `caa off` to pause, `caa on` to resume,
-> and `caa stop` to close the dedicated auto-approve window when done.
+> Nested-subagent cycling is also ON. Move your agent work to that window. Use
+> `caa off` to pause the gate, `caa on` to resume it, `caa cycle --off` to opt
+> out of cycling, and `caa stop` to close the dedicated window when done.
 
 The agent does NOT need to deactivate at end of task. The user controls the
 lifecycle with `on`/`off`/`stop`.
@@ -95,11 +97,11 @@ lifecycle with `on`/`off`/`stop`.
 
 | Command | What it does |
 |---------|-------------|
-| `launch [-w PATH] [PATH\|ALIAS] [--interval SECONDS]` | Open dedicated Cursor, inject DOM script, gate ON. Accepts a concrete path, a registered local alias, or a registered SSH folder URI alias. The fallback scan defaults to 0.5 seconds (range: 0.25–60). Auto-registers the workspace slug as an alias. Blocks only if the same workspace is already running. Multiple workspaces can run simultaneously. |
-| `launch-ssh <host> [/absolute/remote/path] [--no-preflight] [--interval SECONDS]` | Open dedicated Cursor connected to an SSH remote host (from `~/.ssh/config`), inject script, and use the same configurable fallback interval. Path-specific launches first verify the remote directory with `ssh <host> test -d <path>` so bad host/path pairs fail before creating a profile or alias. |
+| `launch [-w PATH] [PATH\|ALIAS] [--interval SECONDS]` | Open dedicated Cursor, inject DOM script, and turn the gate and registered nested-subagent cycling ON. Accepts a concrete path, a registered local alias, or a registered SSH folder URI alias. The fallback scan defaults to 0.5 seconds (range: 0.25–60). Auto-registers the workspace slug as an alias. Blocks only if the same workspace is already running. Multiple workspaces can run simultaneously. |
+| `launch-ssh <host> [/absolute/remote/path] [--no-preflight] [--interval SECONDS]` | Open dedicated Cursor connected to an SSH remote host (from `~/.ssh/config`), inject script, and turn the gate and registered nested-subagent cycling ON. Path-specific launches first verify the remote directory with `ssh <host> test -d <path>` so bad host/path pairs fail before creating a profile or alias. |
 | `on [-w PATH\|SLUG] [--interval SECONDS]` | Resume auto-clicking (`startAccept()` via CDP). An interval supplied while already ON takes effect immediately and persists for the session. Reloads stale in-window injector code when hash differs. Auto-detected if only one session, otherwise opens an interactive picker in a TTY. |
 | `off [-w PATH\|SLUG]` | Pause auto-clicking (`stopAccept()` via CDP) while keeping the dedicated window open. Auto-detected if only one session, otherwise opens an interactive picker in a TTY. |
-| `cycle --on\|--off\|--once [-w PATH\|SLUG]` | Opt-in recovery for registered subagent approval rows that Cursor virtualized out of the DOM. Targets exact row identity, confirms the result, restores scroll/focus, and fails closed on drift. |
+| `cycle --on\|--off\|--once [-w PATH\|SLUG]` | Control default-on recovery for registered subagent approval rows that Cursor virtualized out of the DOM. Use `--off` to opt out, `--on` to re-enable, or `--once` for one bounded pass. Targets exact row identity, confirms the result, restores scroll/focus, and fails closed on drift. |
 | `subagents [-w PATH\|SLUG] [--json]` | Show the sanitized renderer task registry, row hints, statuses, attempts, and confirmation timestamps. |
 | `status [-w PATH\|SLUG]` | Show session details including last approved command preview. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
 | `stop [-w PATH\|SLUG] [--all]` | Pause gate, close dedicated Cursor process, and remove session when shutdown succeeds. Without `-w`, it prefers running sessions when any are alive; if none are running, it falls back to stale entries for cleanup. Use `--all` to stop every session, but do not combine `--all` with `-w` or a positional workspace. |
@@ -137,7 +139,9 @@ use `caa --help` (or the full launcher path with `--help`).
    (`on`/`off`/`status`/`stop`) address exactly that page.
 5. The injector uses a MutationObserver (300ms debounce) for fast detection,
    with a configurable fallback poll (0.5 seconds by default), and clicks at
-   most one eligible candidate per scan.
+   most one eligible candidate per scan. Distinct prompts can be clicked on
+   consecutive scans; the same unresolved prompt stays deduped for eight
+   seconds.
 6. The injector continuously maintains the window title
    (`autoapprove ✅ <repo>` or `autoapprove ⏸ <repo>`) via a 3-second
    interval, so the title self-heals if Cursor resets it — unless
@@ -151,9 +155,10 @@ use `caa --help` (or the full launcher path with `--help`).
 9. If the installed injector changed after the window was launched, `on`
    reloads the in-window script so the running window picks up the latest
    pattern fixes.
-10. Optional subagent cycling records exact mounted task-row identity, revisits
-    registered unmounted rows through the TanStack virtualizer snapshot, and
-    counts confirmations separately from click attempts.
+10. Default-on nested-subagent cycling records exact mounted task-row identity,
+    revisits registered unmounted rows through the TanStack virtualizer
+    snapshot, and counts confirmations separately from click attempts. Use
+    `caa cycle --off` for the explicit opt-out.
 11. Renderer safety bounds rate-limit mutation scans, cache private
     virtualizer snapshots, cap cycle duration, and turn the gate OFF after
     repeated slow scans or excessive JavaScript heap use.
@@ -163,6 +168,8 @@ Cursor 3.12.17. Cycling handles nested subagent rows inside that selected
 parent; pinned and other sidebar rows remain navigation entries, not hidden
 chat DOMs. Separate visible dedicated windows can work in parallel even when
 one is not OS-focused; minimized/hidden windows still need direct validation.
+Agent Window and top-level sidebar cycling remain deferred and would require a
+separate opt-in implementation.
 
 **Note on Cursor-specific preferences**: Model selection, agent mode, and
 similar UI state live in `state.vscdb` (a per-profile SQLite database) and

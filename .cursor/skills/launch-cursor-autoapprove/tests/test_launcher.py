@@ -10,10 +10,92 @@ from unittest import mock
 
 
 LAUNCHER_PATH = Path(__file__).parents[1] / "scripts" / "launcher.py"
+INJECTOR_PATH = Path(__file__).parents[1] / "scripts" / "devtools_auto_accept.js"
 SPEC = importlib.util.spec_from_file_location("launch_autoapprove_launcher", LAUNCHER_PATH)
 assert SPEC and SPEC.loader
 launcher = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(launcher)
+
+
+class InjectorSourceTests(unittest.TestCase):
+    def test_subagent_cycling_is_enabled_in_initial_renderer_state(self) -> None:
+        source = INJECTOR_PATH.read_text()
+        state_start = source.index("const state = {")
+        state_end = source.index("\n  };", state_start)
+        initial_state = source[state_start:state_end]
+
+        self.assertIn("cycleEnabled: true,", initial_state)
+        self.assertNotIn("cycleEnabled: false,", initial_state)
+
+    def test_failed_task_stays_failed_while_approval_remains_visible(self) -> None:
+        source = INJECTOR_PATH.read_text()
+        function_start = source.index("function _deriveTaskStatus(")
+        function_end = source.index("\n  function ", function_start)
+        derive_status = source[function_start:function_end]
+
+        self.assertIn(
+            'return existingStatus === "failed" ? "failed" : "approval_pending";',
+            derive_status,
+        )
+        self.assertNotIn(
+            'if (_visibleRowApproval(row)) return "approval_pending";',
+            derive_status,
+        )
+
+    def test_cycle_owned_subagents_bypass_normal_and_debug_eligible_paths(self) -> None:
+        source = INJECTOR_PATH.read_text()
+
+        ownership_start = source.index("function _isCycleOwnedSubagentCandidate(")
+        ownership_end = source.index("\n  function ", ownership_start)
+        ownership = source[ownership_start:ownership_end]
+        self.assertIn(
+            "if (!state.cycleEnabled || !btn?.el) return false;",
+            ownership,
+        )
+        self.assertIn("return !!_taskForRow(row);", ownership)
+
+        scanner_start = source.index("function _checkAndClickImpl(")
+        scanner_end = source.index("\n  function ", scanner_start)
+        scanner = source[scanner_start:scanner_end]
+        self.assertIn(
+            "cycleOwned: _isCycleOwnedSubagentCandidate(btn),",
+            scanner,
+        )
+        self.assertIn(
+            ".filter((btn) => btn.reason !== null && !btn.cycleOwned)",
+            scanner,
+        )
+        self.assertEqual(
+            scanner.count("!btn.cycleOwned && btn.reason === null"),
+            2,
+        )
+
+        debug_start = source.index("function debugSnapshot(")
+        debug_end = source.index("\n  function ", debug_start)
+        debug_snapshot = source[debug_start:debug_end]
+        self.assertIn(
+            "cycleOwned: _isCycleOwnedSubagentCandidate(btn),",
+            debug_snapshot,
+        )
+        self.assertIn(
+            "eligible: candidates.filter((c) => c.reason !== null && !c.cycleOwned),",
+            debug_snapshot,
+        )
+
+    def test_scanner_skips_cooling_candidates_before_selecting_one(self) -> None:
+        source = INJECTOR_PATH.read_text()
+        scanner_start = source.index("function _checkAndClickImpl(")
+        scanner_end = source.index("\n  function ", scanner_start)
+        scanner = source[scanner_start:scanner_end]
+
+        self.assertIn(
+            "const btn = eligible.find((candidate) => "
+            "!_isCoolingDown(candidate.fingerprint));",
+            scanner,
+        )
+        self.assertIn("if (!btn) return;", scanner)
+        self.assertNotIn("const btn = eligible[0];", scanner)
+        self.assertNotIn("if (_isCoolingDown(btn.fingerprint))", scanner)
 
 
 class ParserTests(unittest.TestCase):

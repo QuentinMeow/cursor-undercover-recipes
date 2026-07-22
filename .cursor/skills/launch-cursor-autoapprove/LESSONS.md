@@ -305,6 +305,11 @@
   from being clicked every 500ms. Do not slow global polling to solve a
   per-prompt deduplication problem.
 
+- **A cooling candidate must not abort the whole scan**: Apply per-prompt
+  cooldown while selecting the scan's one click. If the first eligible
+  candidate is cooling down, continue to the next distinct candidate; return
+  only when all eligible candidates are cooling down.
+
 - **Concurrent approval tests need delayed work plus parent transcript growth**:
   Launch several read-only tasks that do useful inspection before a 60-second
   sleep, then keep the parent producing relevant output. This exercises
@@ -353,3 +358,24 @@
 - **Renderer reloads invalidate pinned target IDs without necessarily changing
   the main PID or CDP port**: Rebind only when exactly one workbench target
   exists. Ambiguous target sets must still fail closed.
+
+## Automation Defaults
+
+- **A launch-time ON promise must include bounded recovery for routine hidden
+  states**: If virtualization can hide approvals from the normal scan, leaving
+  exact-row recovery OFF creates a partially working default that appears
+  reliable only after manual scrolling. Enable safety-scoped recovery with the
+  main automation and preserve an explicit opt-out.
+
+## Retry State Reconciliation
+
+- **Discovery must not reopen an exhausted retry state**: If the same unresolved
+  approval remains after the bounded retry fails, preserve the terminal failure
+  until the approval clears and changed row state can be observed. Otherwise
+  each mutation silently resets the retry budget and creates an unbounded loop.
+
+- **Retry-governed actions need one click owner**: A confirmation-aware cycle
+  cannot enforce retry limits if a generic scanner can click the same registered
+  control on its own cooldown. Route owned candidates exclusively through the
+  bounded path, while retaining generic fallback when ownership is absent or
+  disabled.

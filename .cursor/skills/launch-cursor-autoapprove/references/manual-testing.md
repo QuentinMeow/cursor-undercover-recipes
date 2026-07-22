@@ -38,6 +38,7 @@ LAUNCHER="$HOME/.cursor/launch-autoapprove/launcher.py"
 You should see:
 
 - `Gate: ON`
+- `Cycle: ON`
 - `Poll: 0.5s fallback interval` (unless you selected another interval)
 - an `Injector:` hash
 - a window title like `autoapprove ✅ <repo>`
@@ -545,7 +546,7 @@ Expected result:
 - `Session:` shows the SSH host name as the slug
 - `SSH Host:` shows `my-devbox`
 - `Workspace:` shows the `vscode-remote://ssh-remote+my-devbox/` URI
-- `Gate: ON` and an `Injector:` hash
+- `Gate: ON`, `Cycle: ON`, and an `Injector:` hash
 
 3. Toggle the gate:
 
@@ -595,12 +596,14 @@ Expected result:
 
 ## Test 13: Virtualized Subagent Approval Cycling
 
-1. Enable the gate and opt-in cycle scheduler:
+1. Confirm a new launch started both the gate and cycle scheduler:
 
 ```bash
-/usr/bin/python3 "$LAUNCHER" on
-/usr/bin/python3 "$LAUNCHER" cycle --on
+/usr/bin/python3 "$LAUNCHER" status
 ```
+
+Expected result: `Gate: ON` and `Cycle: ON`. `cycle --on` is only needed to
+re-enable cycling after an explicit `cycle --off`.
 
 2. Start at least two subagents while the parent continues producing enough
    output to unmount their original task rows.
@@ -615,8 +618,18 @@ Expected result:
 /usr/bin/python3 "$LAUNCHER" status
 ```
 
+4. Verify the explicit opt-out and re-enable controls:
+
+```bash
+/usr/bin/python3 "$LAUNCHER" cycle --off
+/usr/bin/python3 "$LAUNCHER" status
+/usr/bin/python3 "$LAUNCHER" cycle --on
+```
+
 Expected result:
 
+- a new session reports `Cycle: ON`; `cycle --off` reports `Cycle: OFF`, and
+  `cycle --on` restores it
 - every task has a distinct task/row identity even when labels are identical
 - unmounted registered rows are revisited without permanently expanding the list
 - `approval_attempted` is followed by `approval_confirmed` only after the card
@@ -624,8 +637,10 @@ Expected result:
 - the original scroll position and focus are restored
 - unsent composer text or an unrelated modal blocks the cycle
 - `off` halts normal scans and cycling
-- with the 0.5-second fallback, separate eligible task cards can be approved on
-  consecutive scans while fingerprint cooldown prevents re-clicking one card
+- with the 0.5-second fallback, distinct mounted eligible prompts can be
+  approved on consecutive scans even if the first clicked prompt remains
+  mounted; the same unresolved fingerprint is not clicked again for eight
+  seconds
 
 ## Test 14: Renderer Safety and Reload Rebinding
 

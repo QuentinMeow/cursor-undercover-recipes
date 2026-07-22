@@ -31,9 +31,9 @@ The injector uses a three-layer architecture:
    events to `history.jsonl` and per-prompt artifact files under
    `~/.cursor/launch-autoapprove/prompt-artifacts/`.
 4. **Subagent Recovery**: Mounted `task-subagent` rows are registered by exact
-   workspace/target/composer/tool identity. Opt-in bounded cycles rematerialize
-   registered rows, scope approval matching to that row, confirm resolution,
-   and restore scroll/focus.
+   workspace/target/composer/tool identity. Default-on bounded cycles
+   rematerialize registered rows, scope approval matching to that row, confirm
+   resolution, and restore scroll/focus. `cycle --off` is the explicit opt-out.
 
 Prompt fingerprinting (sorted button labels within the prompt root) prevents
 the same unresolved prompt from being clicked repeatedly every poll cycle.
@@ -47,11 +47,11 @@ default and intended for future hardening as internal APIs stabilize.
 
 | Command | Flags | Behavior |
 |---|---|---|
-| `launch` | `--workspace`/`-w`, positional `PATH\|ALIAS`, `--interval SECONDS` | Start dedicated Cursor for a local workspace or registered alias, inject script, turn gate ON. SSH folder URI aliases dispatch through the SSH launch flow. The fallback scan defaults to 0.5 seconds. |
-| `launch-ssh` | positional `HOST`, optional absolute `PATH`, `--no-preflight`, `--interval SECONDS` | Start dedicated Cursor connected to an SSH remote host via `--folder-uri`, inject script, turn gate ON. Path-specific launches preflight the remote directory with `ssh <host> test -d <path>` before profile/session creation. |
+| `launch` | `--workspace`/`-w`, positional `PATH\|ALIAS`, `--interval SECONDS` | Start dedicated Cursor for a local workspace or registered alias, inject script, and turn the gate and registered nested-subagent cycling ON. SSH folder URI aliases dispatch through the SSH launch flow. The fallback scan defaults to 0.5 seconds. |
+| `launch-ssh` | positional `HOST`, optional absolute `PATH`, `--no-preflight`, `--interval SECONDS` | Start dedicated Cursor connected to an SSH remote host via `--folder-uri`, inject script, and turn the gate and registered nested-subagent cycling ON. Path-specific launches preflight the remote directory with `ssh <host> test -d <path>` before profile/session creation. |
 | `on` | `-w PATH\|SLUG`, `--interval SECONDS` (both optional) | Turn gate ON; optionally update and persist the running session's fallback scan interval; reload script if hash drift is detected. |
 | `off` | `-w PATH\|SLUG` (optional) | Turn gate OFF; keep dedicated window open. |
-| `cycle` | exactly one of `--on`, `--off`, `--once`; optional `-w PATH\|SLUG` | Enable/disable automatic subagent recovery or run one explicit bounded cycle. |
+| `cycle` | exactly one of `--on`, `--off`, `--once`; optional `-w PATH\|SLUG` | Opt out of default-on automatic subagent recovery, re-enable it, or run one explicit bounded cycle. |
 | `subagents` | `-w PATH\|SLUG`, `--json` (both optional) | Show the sanitized renderer registry and persisted row/status hints. |
 | `status` | `-w PATH\|SLUG` (optional) | Print session details. Shows all sessions if `-w` omitted; ambiguous slugs use the picker. |
 | `stop` | `-w PATH\|SLUG` (optional), `--all` | Turn gate OFF, terminate dedicated process, and remove session entry when shutdown succeeds. `--all` must not be combined with `-w` or a positional workspace. |
@@ -266,7 +266,8 @@ When you run `caa launch --workspace <path>`:
 9. Wait for a new Cursor main PID that includes the expected launch args.
 10. Save session to `state.json` under the workspace path (local) or folder URI (SSH) key.
 11. Inject `devtools_auto_accept.js` via CDP `Runtime.evaluate`.
-12. Call `startAccept(<interval-ms>)` and sync title to
+12. Call `startAccept(<interval-ms>)`, which starts the gate and the default-on
+    bounded scheduler for registered nested-subagent rows, then sync title to
     `autoapprove ✅ <repo>`.
 
 If `open -na` path detection fails, the launcher falls back to direct executable
@@ -343,9 +344,25 @@ run simultaneously.
 - Event queue (`state.eventQueue`, max 200 entries) for launcher to drain
 - Fingerprint cooldown map (`state.fingerprintCooldowns`, 8s per fingerprint)
 - Per-task registry (`state.subagents`) mirrored to namespaced `localStorage`
+- Nested-subagent recovery starts with `state.cycleEnabled: true`; `cycle --off`
+  disables it explicitly and `cycle --on` re-enables it
 - Cached private virtualizer snapshot (5-second TTL; one forced refresh per
   cycle instead of toggling the debug API per mutation)
 - Safety telemetry for scan duration, JavaScript heap, and circuit-breaker state
+
+### Registered Subagent Click Ownership
+
+Default-on recovery uses one click owner for each registered subagent approval.
+When cycling is enabled and a candidate belongs to an exact registered task row,
+`_isCycleOwnedSubagentCandidate()` marks it `cycleOwned`. The ordinary
+`_checkAndClickImpl()` path excludes owned candidates from eligible clicks and
+from blocked/unknown telemetry, leaving the bounded, confirmation-aware cycle
+path as the sole click owner.
+
+`acceptDebugSnapshot()` includes `cycleOwned` on candidate records and excludes
+owned records from its `eligible` list so diagnostics match runtime behavior.
+When cycling is OFF, or no exact task identity is registered for the row,
+ownership is false and ordinary visible-card scanning continues to work.
 
 ### Renderer Safety Circuit
 
@@ -354,6 +371,10 @@ The injector fails closed when its own renderer work becomes pathological:
 - delete-file fallback scans mounted virtual rows plus at most 100 deduplicated
   `.composer-tool-former-message` roots, never `document.body`
 - cycles visit at most 20 tasks and stop after 10 seconds
+- an unconfirmed subagent click is retried once, then remains `failed` while
+  the same approval card is visible; mutation discovery cannot reactivate it,
+  and normal status derivation resumes after the approval clears so changed
+  row state can be observed
 - three consecutive approval scans above 250ms turn the gate OFF
 - JavaScript heap above 768 MiB turns the gate OFF when Chromium exposes
   `performance.memory`
@@ -487,15 +508,18 @@ Candidates are prioritized by `kind`:
 2. `connection`
 3. `resume`
 
-Only one candidate is clicked per poll interval (or observer-triggered cycle).
+Each scan selects the first prioritized candidate whose fingerprint is not
+cooling down, and clicks at most one candidate. A cooling higher-priority
+prompt is skipped so a distinct eligible prompt can be clicked on the next
+0.5-second fallback scan (or an observer-triggered scan).
 
 ### Click Deduplication (Fingerprint Cooldown)
 
 Each prompt's fingerprint is computed from the sorted normalized labels of
 all buttons within the prompt root. After a click, the fingerprint enters an
 8-second cooldown. During cooldown, the same prompt cannot be clicked again.
-This prevents the double-click problem where a prompt that doesn't immediately
-disappear gets clicked on every poll cycle.
+This per-prompt cooldown prevents an unresolved prompt from being clicked on
+every scan without throttling other distinct eligible prompts.
 
 ### Command Text Extraction
 
@@ -672,7 +696,8 @@ prevent regression.
   instead of revealing multiple hidden chats. Therefore a DOM injector can
   approve the selected agent only. Cycling sidebar rows could approve agents
   sequentially, but would visibly change the selected conversation and is not
-  equivalent to simultaneous background approval.
+  equivalent to simultaneous background approval. Agent Window and top-level
+  sidebar cycling remain deferred and would require a separate opt-in adapter.
 
 ## Related Docs
 
