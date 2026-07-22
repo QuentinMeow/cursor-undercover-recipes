@@ -205,6 +205,58 @@
   input. Treat that as a separate opt-in design, not an extension of the
   current selected-chat injector.
 
+## Running-Subagent Tray Recovery
+
+- **Read-only subagent editors may have no composer input**: On Cursor 3.12.17,
+  selecting an `N subagents running` tray entry mounted a child editor with
+  `div.conversations` but no `div.full-input-box`. Input-anchored discovery
+  cannot recognize that surface. Use exact tray-row and selected-tab identity
+  to establish a narrow trusted scope.
+
+- **A navigation fallback must restore actual widget state**: Calling
+  `HTMLElement.click()` did not restore Cursor's selected editor tab. The tab
+  widget required a synthetic `mousedown`/`mouseup` sequence before `click`.
+  Verify restoration by reading `aria-selected` after the cycle, not by assuming
+  a dispatched click changed selection.
+
+- **Excluded-zone exceptions must be identity-scoped**: Child agent editors
+  live under the normally excluded editor workbench part. Permit matching there
+  only after an exact running-tray title resolves to one selected agent tab and
+  one conversations surface. Keep exact approval labels, nearby dismissal or
+  companion evidence, unrelated-modal blocking, and click coverage checks.
+
+- **Redundant approval paths still need bounded ownership**: Keep immediate
+  mounted-composer scanning as the fast path and use tray navigation as
+  recovery. Visit a bounded number of tray rows per pass, confirm that each
+  prompt changed, cap retries, and retain the interaction guard so redundancy
+  does not become unbounded UI churn.
+
+## Focus Preservation During Recovery
+
+- **A start-only interaction guard is not enough**: Even a 150 ms approval
+  cycle can overlap a user moving from chat to the terminal. Track a monotonic
+  interaction generation through the entire asynchronous cycle, not only the
+  time since the last input at cycle start.
+
+- **Never restore stale focus from multiple owners**: Scroll restoration and
+  tab restoration both calling `focus()` can overwrite a newer user choice.
+  Keep scroll/tab state restoration focus-free and route focus through one
+  owner that resolves the latest user target. Use that owner for direct
+  approval clicks too, because product post-click behavior can change focus
+  without any tab navigation.
+
+- **Focused editing surfaces should block automatic navigation**: When the
+  dedicated window is focused and its terminal or another non-composer editor
+  is active, postpone row/tray cycling even if the user has paused typing for
+  more than the normal interaction timeout. Direct non-navigating approval
+  scans can continue.
+
+- **Product focus can settle after the automation promise**: Cursor may focus
+  its agent surface asynchronously after an approval resolves. Restore focus
+  immediately and once more after a short delay, but re-resolve the latest user
+  interaction before the delayed attempt so the correction cannot itself steal
+  focus.
+
 ## Harness Engineering
 
 - **Pass/fail lines are not enough; save per-case evidence artifacts**: Stress tests

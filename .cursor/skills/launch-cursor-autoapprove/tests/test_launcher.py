@@ -97,6 +97,127 @@ class InjectorSourceTests(unittest.TestCase):
         self.assertNotIn("const btn = eligible[0];", scanner)
         self.assertNotIn("if (_isCoolingDown(btn.fingerprint))", scanner)
 
+    def test_direct_scanner_checks_all_mounted_composer_surfaces(self) -> None:
+        source = INJECTOR_PATH.read_text()
+        find_start = source.index("function findApprovalButtons(")
+        find_end = source.index("\n  function ", find_start)
+        find_buttons = source[find_start:find_end]
+        surface_start = source.index("function _isComposerSurface(")
+        surface_end = source.index("\n  function ", surface_start)
+        composer_surface = source[surface_start:surface_end]
+
+        self.assertIn(
+            'const inputBoxes = Array.from(document.querySelectorAll("div.full-input-box"));',
+            find_buttons,
+        )
+        self.assertIn("for (const inputBox of inputBoxes)", find_buttons)
+        self.assertIn(
+            'const inputBoxes = document.querySelectorAll("div.full-input-box");',
+            composer_surface,
+        )
+        self.assertNotIn(
+            'document.querySelector("div.full-input-box")',
+            composer_surface,
+        )
+
+    def test_cycle_visits_running_subagent_tray_and_restores_editor_tabs(self) -> None:
+        source = INJECTOR_PATH.read_text()
+        tray_start = source.index("function _runningSubagentTrayEntries(")
+        tray_end = source.index("\n  function ", tray_start)
+        tray_discovery = source[tray_start:tray_end]
+        wait_start = source.index("async function _waitForSelectedSubagentGroup(")
+        wait_end = source.index("\n  function ", wait_start)
+        wait_for_group = source[wait_start:wait_end]
+        eligibility_start = source.index("function _trayEligibilityReason(")
+        eligibility_end = source.index("\n  function ", eligibility_start)
+        tray_eligibility = source[eligibility_start:eligibility_end]
+        cycle_start = source.index("async function runSubagentCycle(")
+        cycle_end = source.index("\n  function ", cycle_start)
+        cycle = source[cycle_start:cycle_end]
+
+        self.assertIn("SUBAGENT_TRAY_HEADER_PATTERN.test(headerText)", tray_discovery)
+        self.assertIn("SUBAGENT_TRAY_ITEM_SELECTOR", tray_discovery)
+        self.assertIn("CYCLE_MAX_TRAY_ITEMS", tray_discovery)
+        self.assertIn('group.querySelector("div.conversations")', wait_for_group)
+        self.assertNotIn('group.querySelector("div.full-input-box")', wait_for_group)
+        self.assertIn("group?.contains(candidate.el)", tray_eligibility)
+        self.assertIn(
+            "hasNearbyDismissal(candidate.el, { allowExcluded: true })",
+            tray_eligibility,
+        )
+        self.assertIn(
+            "const match = matchesApproval(el, { allowExcluded: true });",
+            source,
+        )
+        self.assertIn("const trayEntries = _runningSubagentTrayEntries();", cycle)
+        self.assertIn("await _visitSubagentTrayEntry(entry);", cycle)
+        self.assertLess(
+            cycle.index("for (const entry of trayEntries)"),
+            cycle.index("if (!context && records.length > 0)"),
+        )
+        self.assertIn("_restoreEditorSelectionContext(editorContext);", cycle)
+        self.assertIn("_activateEditorTab(tab);", source)
+
+    def test_tray_approval_retries_are_bounded(self) -> None:
+        source = INJECTOR_PATH.read_text()
+        attempt_start = source.index("async function _attemptTrayApproval(")
+        attempt_end = source.index("\n  function ", attempt_start)
+        attempt = source[attempt_start:attempt_end]
+
+        self.assertIn(
+            "previous.attempts >= CYCLE_TRAY_MAX_ATTEMPTS",
+            attempt,
+        )
+        self.assertIn("previous.failed = true;", attempt)
+        self.assertIn('reason: "tray_retry_exhausted"', attempt)
+
+    def test_automatic_cycle_pauses_while_terminal_or_editor_is_focused(self) -> None:
+        source = INJECTOR_PATH.read_text()
+        focus_start = source.index("function _activeEditingSurfaceBlockReason(")
+        focus_end = source.index("\n  function ", focus_start)
+        focus_guard = source[focus_start:focus_end]
+        block_start = source.index("function _cycleBlockReason(")
+        block_end = source.index("\n  function ", block_start)
+        cycle_block = source[block_start:block_end]
+
+        self.assertIn("textarea.xterm-helper-textarea", focus_guard)
+        self.assertIn('return "terminal_focused";', focus_guard)
+        self.assertIn('return editable && !composerEditable ? "editor_focused"', focus_guard)
+        self.assertIn(
+            "const focusReason = _activeEditingSurfaceBlockReason();",
+            cycle_block,
+        )
+        self.assertIn("if (focusReason) return focusReason;", cycle_block)
+
+    def test_cycle_focus_restoration_preserves_newer_user_focus(self) -> None:
+        source = INJECTOR_PATH.read_text()
+        restore_start = source.index("function _settleFocusAfterAutomation(")
+        restore_end = source.index("\n  function ", restore_start)
+        restore_focus = source[restore_start:restore_end]
+        scroll_start = source.index("function _restoreScrollContext(")
+        scroll_end = source.index("\n  function ", scroll_start)
+        restore_scroll = source[scroll_start:scroll_end]
+        tabs_start = source.index("function _restoreEditorSelectionContext(")
+        tabs_end = source.index("\n  function ", tabs_start)
+        restore_tabs = source[tabs_start:tabs_end]
+        cycle_start = source.index("async function runSubagentCycle(")
+        cycle_end = source.index("\n  function ", cycle_start)
+        cycle = source[cycle_start:cycle_end]
+
+        self.assertIn("_focusTargetForContext(context)", restore_focus)
+        self.assertIn("state.lastUserFocusGeneration", source)
+        self.assertIn("FOCUS_SETTLE_DELAY_MS", restore_focus)
+        self.assertNotIn(".focus(", restore_scroll)
+        self.assertNotIn(".focus(", restore_tabs)
+        self.assertIn(
+            '_settleFocusAfterAutomation(editorContext || context, "subagent_cycle");',
+            cycle,
+        )
+        self.assertIn(
+            '_settleFocusAfterAutomation(focusContext, "direct_scan");',
+            source,
+        )
+
 
 class ParserTests(unittest.TestCase):
     def test_default_poll_interval_is_half_second(self) -> None:
@@ -141,6 +262,14 @@ class SubagentSnapshotTests(unittest.TestCase):
             "targetId": "target",
             "cycleEnabled": True,
             "counts": {"active": 1},
+            "tray": {
+                "running": 2,
+                "visits": 3,
+                "attempts": 1,
+                "confirmed": 1,
+                "failed": 0,
+                "prompt": "secret",
+            },
             "tasks": [{
                 "taskKey": "task",
                 "rowKey": "row",
@@ -160,6 +289,8 @@ class SubagentSnapshotTests(unittest.TestCase):
         self.assertNotIn("command", clean["tasks"][0])
         self.assertNotIn("prompt", clean["tasks"][0])
         self.assertEqual(clean["tasks"][0]["title"], "Safe title")
+        self.assertEqual(clean["tray"]["confirmed"], 1)
+        self.assertNotIn("prompt", clean["tray"])
 
     def test_sync_writes_atomic_multi_session_snapshot(self) -> None:
         exported = {

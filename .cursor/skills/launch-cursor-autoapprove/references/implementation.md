@@ -30,10 +30,13 @@ The injector uses a three-layer architecture:
    `state.eventQueue`. The launcher drains this queue via CDP and persists
    events to `history.jsonl` and per-prompt artifact files under
    `~/.cursor/launch-autoapprove/prompt-artifacts/`.
-4. **Subagent Recovery**: Mounted `task-subagent` rows are registered by exact
-   workspace/target/composer/tool identity. Default-on bounded cycles
-   rematerialize registered rows, scope approval matching to that row, confirm
-   resolution, and restore scroll/focus. `cycle --off` is the explicit opt-out.
+4. **Subagent Recovery**: The default-on bounded cycle has two paths. It
+   rematerializes registered `task-subagent` rows by exact
+   workspace/target/composer/tool identity. It also visits exact entries under
+   the `N subagents running` composer tray, mounts each read-only child agent
+   editor, scans that selected editor, and restores the prior tabs/focus.
+   Tray visits run before row confirmation so the backup cannot be starved by
+   the shared cycle budget. `cycle --off` disables both recovery paths.
 
 Prompt fingerprinting (sorted button labels within the prompt root) prevents
 the same unresolved prompt from being clicked repeatedly every poll cycle.
@@ -346,6 +349,12 @@ run simultaneously.
 - Per-task registry (`state.subagents`) mirrored to namespaced `localStorage`
 - Nested-subagent recovery starts with `state.cycleEnabled: true`; `cycle --off`
   disables it explicitly and `cycle --on` re-enables it
+- Running-subagent tray visits are round-robin bounded to eight entries and the
+  shared cycle remains capped at 10 seconds
+- Tray approvals use exact selected-tab resource identity, confirmation, and a
+  two-attempt limit; aggregate visits/attempts/confirmations appear in status
+- Real user interactions increment a monotonic generation and retain the latest
+  terminal/editor target for focus-safe restoration
 - Cached private virtualizer snapshot (5-second TTL; one forced refresh per
   cycle instead of toggling the debug API per mutation)
 - Safety telemetry for scan duration, JavaScript heap, and circuit-breaker state
@@ -363,6 +372,59 @@ path as the sole click owner.
 owned records from its `eligible` list so diagnostics match runtime behavior.
 When cycling is OFF, or no exact task identity is registered for the row,
 ownership is false and ordinary visible-card scanning continues to work.
+
+### Running-Subagent Tray Fallback
+
+The ordinary direct path now inspects every mounted input-backed composer, not
+only the first `div.full-input-box`. Some child agent editors are read-only,
+however, and contain `div.conversations` with no input. The tray fallback
+handles those surfaces:
+
+1. Match an exact header such as `1 subagent running`.
+2. Collect only `.composer-toolbar-background-job-item-clickable` descendants
+   of that header's section, up to eight per round-robin pass.
+3. Save selected tabs, focused element, and the existing scroll context.
+4. Select one tray row and require exactly one selected agent tab whose title
+   matches the row and whose group contains `div.conversations`.
+5. Use the tab's agent resource UUID as approval identity.
+6. Scan only that editor group. The editor workbench exclusion is relaxed only
+   in this exact scope; exact labels, dismissal/companion evidence, unrelated
+   modal blocking, and hit coverage remain required.
+7. Confirm the candidate disappeared and allow at most two attempts for the
+   same resource/prompt fingerprint.
+8. Restore the original selected tabs. Cursor's tab widget requires
+   `mousedown`/`mouseup` before `click`; plain `HTMLElement.click()` did not
+   restore selection in live testing.
+9. Settle focus through the shared focus owner described below.
+
+Tray attempts emit `tray_visit`, `tray_visit_miss`,
+`tray_approval_attempted`, `tray_approval_confirmed`, and
+`tray_approval_unconfirmed`. The normal mounted-composer scanner remains active
+as the fast path.
+
+### Focus-Safe Recovery
+
+Automatic row/tray recovery pauses while the focused Cursor window has
+`textarea.xterm-helper-textarea` or another non-composer editable surface
+focused. This focus guard is independent of the two-second recent-interaction
+timeout, so pausing while typing does not allow navigation to resume underneath
+an idle terminal.
+
+Every real pointer/keyboard/scroll interaction increments
+`state.interactionGeneration`. Cycle contexts save that generation and their
+starting focus. Scroll and tab restoration never call `focus()` directly.
+After restoration, one focus owner chooses:
+
+- the starting target if no newer user interaction occurred
+- the latest terminal/editor target if the user changed focus during the cycle
+- no target if the newer interaction was not an editable focus choice
+
+The chosen target is restored immediately and after 300 ms. The delayed pass
+re-resolves the latest interaction before acting, which corrects Cursor's
+asynchronous post-approval focus without overwriting a newer user choice.
+The direct mounted-prompt scanner captures the same focus context around its
+click and uses this owner as well. `focus_restored` is emitted only when the
+delayed pass actually corrects focus.
 
 ### Renderer Safety Circuit
 
@@ -407,7 +469,8 @@ card without restoring broad scanning; the rerun passed 12/12.
 
 Approval candidates are collected in this order:
 
-1. Siblings above `div.full-input-box` (chat-adjacent scan, depth <= 5)
+1. Siblings above every mounted `div.full-input-box` (chat-adjacent scan,
+   depth <= 5 per composer)
 2. If step 1 found nothing, prompt roots (`role=dialog`, `role=alertdialog`,
    `aria-modal`) -- excludes class-based selectors
 3. If steps 1-2 found nothing, fallback to the nearest composer/chat root from
@@ -593,6 +656,10 @@ settings remain there until manually removed.
 - last approved command preview (first line + line count) when available
 - click attempts versus confirmed cycle approvals
 - cycle toggle/activity, task counts, and last-cycle outcome
+- running-subagent tray count plus tray visits, attempts, confirmations, and
+  failed retry states
+- active focus kind, any focus reason pausing automatic cycles, and the last
+  focus-settle outcome
 - last/max scan duration, JavaScript heap, and safety-trip reason
 - WARNING if multiple workbench targets exist on the port
 - WARNING if the bound target is missing
@@ -690,14 +757,14 @@ prevent regression.
   "visible"` and continued clicking real `Run` prompts. Parallel visible
   dedicated windows can work. Minimized/hidden renderers may still be
   throttled and require separate validation.
-- **Inactive sidebar agents are not mounted chat surfaces**: Direct inspection
+- **Inactive top-level sidebar agents are not mounted chat surfaces**: Direct inspection
   on Cursor 3.12.17 found one `div.full-input-box` and one `div.conversations`
   before and after selecting a pinned row. Selection replaced the mounted chat
   instead of revealing multiple hidden chats. Therefore a DOM injector can
-  approve the selected agent only. Cycling sidebar rows could approve agents
-  sequentially, but would visibly change the selected conversation and is not
-  equivalent to simultaneous background approval. Agent Window and top-level
-  sidebar cycling remain deferred and would require a separate opt-in adapter.
+  approve those top-level agents only when selected. This is distinct from the
+  implemented `N subagents running` tray, which indexes nested child agents and
+  is visited sequentially with tab/focus restoration. Agent Window and
+  unrelated top-level sidebar cycling remain deferred.
 
 ## Related Docs
 

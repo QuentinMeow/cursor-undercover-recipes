@@ -44,6 +44,10 @@ one, scan/click, and restore the original row. That would be sequential rather
 than simultaneous, visibly change the UI, and rely on unstable private DOM
 selectors, so it is intentionally not enabled by default.
 
+This limitation does not apply to the nested `N subagents running` composer
+tray. Issue 021 implemented bounded sequential recovery for that exact tray;
+unrelated top-level sidebar agents remain deferred.
+
 ## Lessons extracted
 
 See `../LESSONS.md` — "Sidebar Agent Mounting".

@@ -706,6 +706,16 @@ def _sanitize_subagent_snapshot(snapshot: dict, workspace: str, slug: str) -> di
         "cycleEnabled": snapshot.get("cycleEnabled") is True,
         "cycleActive": snapshot.get("cycleActive") is True,
         "counts": snapshot.get("counts") if isinstance(snapshot.get("counts"), dict) else {},
+        "tray": (
+            {
+                key: value
+                for key, value in snapshot.get("tray", {}).items()
+                if key in {"running", "visits", "attempts", "confirmed", "failed"}
+                and isinstance(value, int)
+            }
+            if isinstance(snapshot.get("tray"), dict)
+            else {}
+        ),
         "lastCycle": (
             snapshot.get("lastCycle")
             if isinstance(snapshot.get("lastCycle"), dict)
@@ -1895,6 +1905,18 @@ def _print_session_status(session: dict) -> None:
             if gate.get("cycleActive"):
                 cycle_label += " (running)"
             print(f"Cycle:     {cycle_label}")
+            focus_label = str(gate.get("activeFocusKind") or "unknown")
+            if gate.get("cycleFocusBlockReason"):
+                focus_label += f" (cycle paused: {gate['cycleFocusBlockReason']})"
+            print(f"Focus:     {focus_label}")
+            if isinstance(gate.get("lastFocusRestore"), dict):
+                focus_restore = gate["lastFocusRestore"]
+                print(
+                    "FocusLast: "
+                    f"{focus_restore.get('outcome', 'unknown')} "
+                    f"{focus_restore.get('targetKind', 'unknown')} "
+                    f"({focus_restore.get('phase', 'unknown')})"
+                )
             counts = (
                 registry.get("counts", {})
                 if isinstance(registry, dict)
@@ -1908,6 +1930,20 @@ def _print_session_status(session: dict) -> None:
                     f"{counts.get('completed', 0)} completed, "
                     f"{counts.get('failed', 0)} failed"
                 )
+            tray = (
+                registry.get("tray", {})
+                if isinstance(registry, dict)
+                else gate.get("subagentTray", {})
+            )
+            if isinstance(tray, dict):
+                print(
+                    "Tray:      "
+                    f"{tray.get('running', 0)} running, "
+                    f"{tray.get('visits', 0)} visits, "
+                    f"{tray.get('attempts', 0)} attempts, "
+                    f"{tray.get('confirmed', 0)} confirmed, "
+                    f"{tray.get('failed', 0)} failed"
+                )
             last_cycle = (
                 registry.get("lastCycle")
                 if isinstance(registry, dict)
@@ -1918,7 +1954,9 @@ def _print_session_status(session: dict) -> None:
                     f"LastCycle: {last_cycle.get('ts')} "
                     f"({last_cycle.get('rows', 0)} rows, "
                     f"{last_cycle.get('confirmed', 0)} confirmed, "
-                    f"{last_cycle.get('failed', 0)} failed)"
+                    f"{last_cycle.get('failed', 0)} failed; "
+                    f"{last_cycle.get('trayVisits', 0)} tray visits, "
+                    f"{last_cycle.get('trayConfirmed', 0)} tray confirmed)"
                 )
             if "shareSafeTitle" in gate:
                 tmode = "discreet" if gate.get("shareSafeTitle") else "branded"
@@ -2655,6 +2693,16 @@ def cmd_subagents(args: argparse.Namespace) -> int:
         f"{counts.get('failed', 0)} failed, "
         f"{counts.get('stale', 0)} stale"
     )
+    tray = snapshot.get("tray", {})
+    if isinstance(tray, dict):
+        print(
+            "Tray:      "
+            f"{tray.get('running', 0)} running, "
+            f"{tray.get('visits', 0)} visits, "
+            f"{tray.get('attempts', 0)} attempts, "
+            f"{tray.get('confirmed', 0)} confirmed, "
+            f"{tray.get('failed', 0)} failed"
+        )
     tasks = snapshot.get("tasks", [])
     if not tasks:
         print("No registered subagent task rows.")

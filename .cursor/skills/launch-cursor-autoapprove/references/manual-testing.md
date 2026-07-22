@@ -618,7 +618,29 @@ re-enable cycling after an explicit `cycle --off`.
 /usr/bin/python3 "$LAUNCHER" status
 ```
 
-4. Verify the explicit opt-out and re-enable controls:
+4. Trigger a real approval in a child listed under `N subagents running`.
+   Before the cycle, note the selected editor tab. After one automatic or
+   explicit pass, inspect status/history:
+
+```bash
+/usr/bin/python3 "$LAUNCHER" status
+/usr/bin/python3 "$LAUNCHER" history -n 30 --json
+```
+
+5. While recovery work remains, focus the integrated terminal and type. Pause
+   for more than two seconds, then run `status` from another shell/window if
+   possible. Also try moving into the terminal immediately after a cycle starts.
+
+Expected focus result:
+
+- terminal input remains focused
+- `Focus: terminal (cycle paused: terminal_focused)` appears while the
+  dedicated window and terminal are focused
+- moving focus away allows automatic cycling to resume
+- if the user changes focus during a cycle, `FocusLast` targets the newer
+  terminal/editor choice instead of the stale cycle-start element
+
+6. Verify the explicit opt-out and re-enable controls:
 
 ```bash
 /usr/bin/python3 "$LAUNCHER" cycle --off
@@ -634,6 +656,11 @@ Expected result:
 - unmounted registered rows are revisited without permanently expanding the list
 - `approval_attempted` is followed by `approval_confirmed` only after the card
   resolves
+- tray recovery records `tray_visit`, then
+  `tray_approval_attempted`/`tray_approval_confirmed` for a real child approval
+- the tray line reports running rows plus visit/attempt/confirmation totals
+- the editor tab selected before tray recovery is selected again afterward;
+  the child tab may remain open
 - the original scroll position and focus are restored
 - unsent composer text or an unrelated modal blocks the cycle
 - `off` halts normal scans and cycling

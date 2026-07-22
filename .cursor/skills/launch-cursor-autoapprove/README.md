@@ -4,8 +4,9 @@
 
 `launch-cursor-autoapprove` is the supported auto-approval workflow in this
 repo. It launches a dedicated Cursor process, injects a DOM auto-accept script
-via CDP, and starts with both the approval gate and bounded nested-subagent
-cycling ON. Simple commands can pause either behavior later.
+via CDP, and starts with both the approval gate and two-path bounded subagent
+recovery ON: direct mounted-composer scanning plus running-subagent tray
+navigation. Simple commands can pause either behavior later.
 
 The dedicated window is isolated at process level, so auto-clicking does not
 spill into your normal Cursor windows.
@@ -76,7 +77,7 @@ built-in usage summary, `caa help` for examples and doc paths, or
 | `launch-ssh <host> [/absolute/remote/path] [--no-preflight] [--interval SECONDS]` | Start dedicated Cursor connected to an SSH remote host from `~/.ssh/config`, inject script, and turn the gate and nested-subagent cycling ON. Path-specific launches verify the remote directory with `ssh <host> test -d <path>` before creating a profile or alias. |
 | `on [--interval SECONDS]` | Turn gate ON and optionally change/persist the session's fallback scan interval. Reloads injector code when in-window hash differs from the current injector file. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
 | `off` | Turn gate OFF without closing the dedicated window. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
-| `cycle --on\|--off\|--once` | Control recovery for registered nested-subagent approval rows that were virtualized out of the DOM. It starts ON; use `--off` to opt out, `--on` to re-enable, or `--once` for one explicit bounded pass. |
+| `cycle --on\|--off\|--once` | Control both recovery paths: registered parent-transcript rows and exact entries in the `N subagents running` tray. It starts ON; use `--off` to opt out, `--on` to re-enable, or `--once` for one explicit bounded pass. |
 | `subagents [--json]` | Show the sanitized task registry, row hints, attempts, and confirmations. |
 | `status` | Show PID, CDP port, workspace, gate state, click count, injector hash, current title, recent clicks, and last approved command preview. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
 | `stop` | Turn gate OFF, close the dedicated Cursor process, and clear local session state when shutdown succeeds. Without `-w`, it prefers running sessions when any are alive; if none are running, it falls back to stale entries for cleanup. Use `--all` to stop every session, and do not combine `--all` with `-w` or a positional workspace. |
@@ -99,9 +100,11 @@ built-in usage summary, `caa help` for examples and doc paths, or
   eligible prompts can be clicked on consecutive scans, while the same
   unresolved prompt remains deduped for eight seconds.
 - Subagent cycling is ON by default for new `launch` and `launch-ssh` sessions.
-  It targets only exact registered task rows inside the selected parent
-  conversation, uses bounded cycles and interaction guards, and restores the
-  original scroll/focus state. Use `caa cycle --off` to opt out.
+  It targets exact registered task rows inside the selected parent and visits
+  exact running-subagent tray entries as a backup. Cycles are bounded,
+  approvals are confirmed with capped retries, and original tabs, scroll, and
+  focus are restored. Automatic cycling pauses while the focused window has its
+  terminal or another non-chat editor active. Use `caa cycle --off` to opt out.
 - `stop` ends the session and closes the dedicated process; the dedicated profile
   folder persists for reuse on the next `launch`.
 - If two sessions share the same folder name, use `-w <full-path>` instead of a
@@ -118,15 +121,19 @@ built-in usage summary, `caa help` for examples and doc paths, or
   heap above 768 MiB trips the gate OFF and appears under `status`.
 - Keep the gate OFF (`caa off`) when doing sensitive UI actions in the dedicated
   window that are unrelated to approvals.
+- Direct visible-prompt scans remain active while the terminal is focused, but
+  row/tray navigation waits. Focus restoration tracks newer user interaction
+  and performs a guarded delayed correction for Cursor's asynchronous focus.
 - A non-focused but still visible dedicated window continued auto-clicking in
   Cursor 3.12.17 (`document.hasFocus() === false`). Minimized/hidden renderers
   may still be throttled, so verify with `status` for unattended workflows.
-  Each dedicated window handles its one mounted, selected conversation.
 - Inactive sidebar conversations are not mounted in the workbench DOM. The
   injector can approve the selected conversation, but cannot directly click
-  prompts in every pinned/sidebar agent at the same time.
-- Agent Window and top-level sidebar-conversation cycling remain deferred and
-  would require a separate opt-in implementation.
+  prompts in every pinned/sidebar agent at the same time. The implemented
+  running-subagent tray fallback is sequential recovery for nested children,
+  not simultaneous top-level sidebar approval.
+- Agent Window and unrelated top-level sidebar-conversation cycling remain
+  deferred.
 
 ## Migration Note (Retired Approach Cleanup)
 
