@@ -7,7 +7,7 @@ Subcommands:
     launch-ssh  Open dedicated Cursor connected to an SSH remote host, inject DOM script, gate ON
     on          Resume auto-clicking (startAccept via CDP)
     off         Pause auto-clicking (stopAccept via CDP)
-    cycle       Enable, disable, or run subagent approval cycling
+    cycle       Enable, disable, or run bounded agent approval cycling
     subagents   Show the renderer-local subagent task registry
     status      Show gate state and click count
     alias       Manage workspace aliases
@@ -716,6 +716,41 @@ def _sanitize_subagent_snapshot(snapshot: dict, workspace: str, slug: str) -> di
             if isinstance(snapshot.get("tray"), dict)
             else {}
         ),
+        "pinned": (
+            {
+                **{
+                    key: value
+                    for key, value in snapshot.get("pinned", {}).items()
+                    if key in {
+                        "total",
+                        "active",
+                        "eligible",
+                        "ambiguous",
+                        "visits",
+                        "attempts",
+                        "confirmed",
+                        "failed",
+                    }
+                    and isinstance(value, int)
+                },
+                "lastRestore": (
+                    {
+                        key: value
+                        for key, value in snapshot.get("pinned", {})
+                        .get("lastRestore", {})
+                        .items()
+                        if key in {"ok", "reason", "ts"}
+                        and isinstance(value, (bool, str))
+                    }
+                    if isinstance(
+                        snapshot.get("pinned", {}).get("lastRestore"), dict
+                    )
+                    else None
+                ),
+            }
+            if isinstance(snapshot.get("pinned"), dict)
+            else {}
+        ),
         "lastCycle": (
             snapshot.get("lastCycle")
             if isinstance(snapshot.get("lastCycle"), dict)
@@ -784,7 +819,12 @@ def _drain_injector_events(port: int, target_id: str | None,
         )
         if record_type in ("blocked_candidate", "unknown_prompt"):
             _save_prompt_artifact(ev, slug)
-        if record_type in ("click", "approval_confirmed"):
+        if record_type in (
+            "click",
+            "approval_confirmed",
+            "tray_approval_confirmed",
+            "pinned_approval_confirmed",
+        ):
             _log_command(ev, workspace, slug)
         persisted.append(ev)
     return persisted
@@ -813,7 +853,7 @@ def _help_doc_lines() -> list[str]:
             f"  README: {doc_dir / 'README.md'}",
             f"  Implementation: {doc_dir / 'references' / 'implementation.md'}",
             f"  Manual testing: {doc_dir / 'references' / 'manual-testing.md'}",
-            f"  Subagent cycling: {doc_dir / 'references' / 'subagent-approval-cycling.md'}",
+            f"  Agent cycling: {doc_dir / 'references' / 'subagent-approval-cycling.md'}",
             f"  Skill guide: {doc_dir / 'SKILL.md'}",
         ])
     else:
@@ -1944,19 +1984,49 @@ def _print_session_status(session: dict) -> None:
                     f"{tray.get('confirmed', 0)} confirmed, "
                     f"{tray.get('failed', 0)} failed"
                 )
+            pinned = (
+                registry.get("pinned", {})
+                if isinstance(registry, dict)
+                else gate.get("pinnedAgents", {})
+            )
+            if isinstance(pinned, dict):
+                print(
+                    "Pinned:    "
+                    f"{pinned.get('active', 0)}/{pinned.get('total', 0)} active, "
+                    f"{pinned.get('ambiguous', 0)} ambiguous, "
+                    f"{pinned.get('visits', 0)} visits, "
+                    f"{pinned.get('attempts', 0)} attempts, "
+                    f"{pinned.get('confirmed', 0)} confirmed, "
+                    f"{pinned.get('failed', 0)} failed"
+                )
+                if isinstance(pinned.get("lastRestore"), dict):
+                    restore = pinned["lastRestore"]
+                    print(
+                        "PinnedLast:"
+                        f" {restore.get('reason', 'unknown')} "
+                        f"({restore.get('ts', '-')})"
+                    )
             last_cycle = (
                 registry.get("lastCycle")
                 if isinstance(registry, dict)
                 else gate.get("lastCycle")
             )
             if isinstance(last_cycle, dict) and last_cycle.get("ts"):
+                aborted = (
+                    f"; aborted={last_cycle['abortedReason']}"
+                    if last_cycle.get("abortedReason")
+                    else ""
+                )
                 print(
                     f"LastCycle: {last_cycle.get('ts')} "
                     f"({last_cycle.get('rows', 0)} rows, "
                     f"{last_cycle.get('confirmed', 0)} confirmed, "
                     f"{last_cycle.get('failed', 0)} failed; "
                     f"{last_cycle.get('trayVisits', 0)} tray visits, "
-                    f"{last_cycle.get('trayConfirmed', 0)} tray confirmed)"
+                    f"{last_cycle.get('trayConfirmed', 0)} tray confirmed; "
+                    f"{last_cycle.get('pinnedVisits', 0)} pinned visits, "
+                    f"{last_cycle.get('pinnedConfirmed', 0)} pinned confirmed"
+                    f"{aborted})"
                 )
             if "shareSafeTitle" in gate:
                 tmode = "discreet" if gate.get("shareSafeTitle") else "branded"
@@ -2578,7 +2648,7 @@ def _cdp_json_expression(port: int, expression: str, target_id: str | None,
 
 
 def cmd_cycle(args: argparse.Namespace) -> int:
-    """Enable, disable, or explicitly run bounded subagent approval cycling."""
+    """Enable, disable, or explicitly run bounded agent approval cycling."""
     state = _load_state()
     session = _resolve_session(
         args, state, allow_interactive=True, command_name="cycle",
@@ -2616,7 +2686,7 @@ def cmd_cycle(args: argparse.Namespace) -> int:
 
     if result is None:
         print(
-            "Subagent cycling API is unavailable. Reinstall globally and run "
+            "Agent cycling API is unavailable. Reinstall globally and run "
             "'caa on' to reload the injector.",
             file=sys.stderr,
         )
@@ -2630,13 +2700,17 @@ def cmd_cycle(args: argparse.Namespace) -> int:
                 f"[{slug}] Cycle finished: {result.get('rows', 0)} row(s), "
                 f"{result.get('confirmed', 0)} confirmed, "
                 f"{result.get('failed', 0)} failed, "
-                f"{result.get('misses', 0)} missed."
+                f"{result.get('misses', 0)} missed; "
+                f"{result.get('trayVisits', 0)} tray visit(s), "
+                f"{result.get('trayConfirmed', 0)} confirmed; "
+                f"{result.get('pinnedVisits', 0)} pinned visit(s), "
+                f"{result.get('pinnedConfirmed', 0)} confirmed."
             )
         else:
             print(f"[{slug}] Cycle did not run: {result.get('reason', 'unknown')}")
             return 1
     else:
-        print(f"[{slug}] Subagent approval cycling {'ON' if mode == 'on' else 'OFF'}.")
+        print(f"[{slug}] Agent approval cycling {'ON' if mode == 'on' else 'OFF'}.")
         if mode == "on" and not result.get("cycleActive"):
             print("  The scheduler will run while the main auto-approve gate is ON.")
     if drained:
@@ -2702,6 +2776,17 @@ def cmd_subagents(args: argparse.Namespace) -> int:
             f"{tray.get('attempts', 0)} attempts, "
             f"{tray.get('confirmed', 0)} confirmed, "
             f"{tray.get('failed', 0)} failed"
+        )
+    pinned = snapshot.get("pinned", {})
+    if isinstance(pinned, dict):
+        print(
+            "Pinned:    "
+            f"{pinned.get('active', 0)}/{pinned.get('total', 0)} active, "
+            f"{pinned.get('ambiguous', 0)} ambiguous, "
+            f"{pinned.get('visits', 0)} visits, "
+            f"{pinned.get('attempts', 0)} attempts, "
+            f"{pinned.get('confirmed', 0)} confirmed, "
+            f"{pinned.get('failed', 0)} failed"
         )
     tasks = snapshot.get("tasks", [])
     if not tasks:
@@ -3343,7 +3428,7 @@ def build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argument
 
     p_cycle = sub.add_parser(
         "cycle",
-        help="Enable, disable, or run subagent approval row cycling",
+        help="Enable, disable, or run bounded agent approval cycling",
     )
     p_cycle.add_argument("--workspace", "-w", help=ws_help)
     p_cycle.add_argument("workspace_pos", nargs="?", help=ws_help)

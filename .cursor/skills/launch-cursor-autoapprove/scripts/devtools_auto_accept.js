@@ -33,7 +33,7 @@
   const LOG_PREFIX = "[autoAccept]";
   const SCRIPT_HASH = globalThis.__cursorAutoAcceptScriptHash || "unknown";
   const REPO_SLUG = globalThis.__cursorAutoAcceptRepoSlug || "workspace";
-  const STRATEGY_VERSION = "2026-07-subagent-cycle-v3-focus-safe";
+  const STRATEGY_VERSION = "2026-07-agent-cycle-v4-pinned";
   const TITLE_SYNC_INTERVAL = 3000;
   /** Faster ping while discreet so Cursor cannot show a fresh native title for long. */
   const TITLE_SYNC_INTERVAL_SHARE_SAFE = 500;
@@ -51,6 +51,12 @@
   const SUBAGENT_TRAY_ITEM_SELECTOR = ".composer-toolbar-background-job-item-clickable";
   const SUBAGENT_TRAY_TITLE_SELECTOR = ".composer-toolbar-background-job-item-text";
   const SUBAGENT_TRAY_HEADER_PATTERN = /^\d+\s+subagents?\s+running$/i;
+  const AGENT_SIDEBAR_SECTION_SELECTOR = ".agent-sidebar-section";
+  const AGENT_SIDEBAR_SECTION_TITLE_SELECTOR = ".agent-sidebar-section-title";
+  const AGENT_SIDEBAR_CELL_SELECTOR = ".agent-sidebar-cell";
+  const AGENT_SIDEBAR_TITLE_SELECTOR = ".agent-sidebar-cell-text";
+  const PINNED_AGENT_SECTION_PATTERN = /^pinned$/i;
+  const PINNED_AGENT_ACTIVE_SELECTOR = ".spinning-loader";
   const SCROLL_CONTAINER_SELECTOR = ".virtualized-composer-messages-scroll-container";
   const CYCLE_INTERACTION_GUARD_MS = 2000;
   const CYCLE_MOUNT_TIMEOUT_MS = 250;
@@ -58,8 +64,11 @@
   const CYCLE_AUTOMATIC_INTERVAL_MS = 5000;
   const CYCLE_MAX_TASKS = 20;
   const CYCLE_MAX_TRAY_ITEMS = 8;
+  const CYCLE_MAX_PINNED_AGENTS = 2;
+  const CYCLE_PINNED_MAX_DURATION_MS = 3500;
   const CYCLE_MAX_DURATION_MS = 10000;
   const CYCLE_TRAY_MOUNT_TIMEOUT_MS = 800;
+  const CYCLE_PINNED_MOUNT_TIMEOUT_MS = 1500;
   const CYCLE_TRAY_MIN_CANDIDATE_WAIT_MS = 1000;
   const CYCLE_TRAY_QUIET_MS = 250;
   const CYCLE_TRAY_CANDIDATE_TIMEOUT_MS = 1500;
@@ -180,10 +189,17 @@
     cycleGeneration: 0,
     cycleCursor: 0,
     trayCursor: 0,
+    pinnedAgentCursor: 0,
     trayApprovalAttempts: new Map(),
+    pinnedApprovalAttempts: new Map(),
     totalTrayVisits: 0,
     totalTrayApprovalAttempts: 0,
     totalTrayConfirmedApprovals: 0,
+    totalPinnedVisits: 0,
+    totalPinnedApprovalAttempts: 0,
+    totalPinnedConfirmedApprovals: 0,
+    navigationApprovalScope: null,
+    lastPinnedRestore: null,
     lastCycle: null,
     lastUserInteractionAt: 0,
     lastUserInteractionType: null,
@@ -643,7 +659,10 @@
 
   function _setupInteractionGuard() {
     if (state.interactionGuardInstalled) return;
-    for (const type of ["pointerdown", "keydown", "wheel", "scroll"]) {
+    // Native scroll events also fire for Cursor's own transcript auto-follow
+    // and programmatic scrollTop changes, so they are not proof of user input.
+    // Wheel, keyboard, and pointer events cover direct user scrolling.
+    for (const type of ["pointerdown", "keydown", "wheel"]) {
       document.addEventListener(type, _recordUserInteraction, true);
     }
     state.interactionGuardInstalled = true;
@@ -774,7 +793,30 @@
     });
   }
 
-  async function _materializeSubagentRow(record, context) {
+  function _rollbackMaterializationScroll(context, materialized) {
+    const delta = Number(materialized?.scrollDelta || 0);
+    if (
+      !delta ||
+      !context?.container?.isConnected
+    ) {
+      return;
+    }
+    const currentTop = context.container.scrollTop;
+    _setProgrammaticScroll(context.container, currentTop - delta);
+    materialized.scrollDelta = 0;
+    _queueEvent({
+      type: "row_scroll_rollback",
+      taskKey: materialized.taskKey,
+      rowKey: materialized.rowKey,
+      delta: Math.round(delta),
+    });
+  }
+
+  async function _materializeSubagentRow(record, context, options = {}) {
+    const initialTakeover = _navigationTakeoverReason(options);
+    if (initialTakeover) {
+      return { row: null, reason: initialTakeover, scrollDelta: 0 };
+    }
     let row = _findExactRow(record.rowKey);
     const virtualizer = _getVirtualizerSnapshot();
     if (!virtualizer.ok) {
@@ -796,12 +838,28 @@
       return { row: null, reason: "hidden_or_zero_height_viewport" };
     }
     const targetTop = Math.max(0, snapshotRow.start - viewportHeight * 0.3);
+    const result = {
+      row: null,
+      reason: null,
+      scrollDelta: 0,
+      taskKey: record.taskKey,
+      rowKey: record.rowKey,
+    };
     if (!row || !_rowInsideViewport(row, context.container)) {
+      const beforeTop = context.container.scrollTop;
       _setProgrammaticScroll(context.container, targetTop);
+      result.scrollDelta = context.container.scrollTop - beforeTop;
       row = await _waitForExactRow(record.rowKey);
     }
+    const takeoverReason = _navigationTakeoverReason(options);
+    if (takeoverReason) {
+      result.reason = takeoverReason;
+      _rollbackMaterializationScroll(context, result);
+      return result;
+    }
     if (!row || row.getAttribute("data-find-row-key") !== record.rowKey) {
-      return { row: null, reason: "row_did_not_mount" };
+      result.reason = "row_did_not_mount";
+      return result;
     }
     _queueEvent({
       type: "row_materialized",
@@ -810,7 +868,8 @@
       rowIndexHint: record.rowIndexHint,
       rowStartHint: record.rowStartHint,
     });
-    return { row, reason: null };
+    result.row = row;
+    return result;
   }
 
   function _rowInsideViewport(row, container) {
@@ -873,14 +932,36 @@
     );
   }
 
-  async function _confirmCycleApproval(record, candidate, context) {
+  async function _confirmCycleApproval(
+    record,
+    candidate,
+    context,
+    options = {}
+  ) {
     for (const delay of CYCLE_CONFIRM_DELAYS_MS) {
       await new Promise((resolve) => setTimeout(resolve, delay));
       if (!state.running) return { confirmed: false, reason: "gate_off" };
+      const takeoverReason = _navigationTakeoverReason(options);
+      if (takeoverReason) {
+        return { confirmed: false, reason: takeoverReason };
+      }
       let row = _findExactRow(record.rowKey);
+      let remounted = null;
       if (!row) {
-        const remounted = await _materializeSubagentRow(record, context);
+        remounted = await _materializeSubagentRow(
+          record,
+          context,
+          options
+        );
+        if (["new_user_interaction", "window_focused"].includes(remounted.reason)) {
+          return { confirmed: false, reason: remounted.reason };
+        }
         row = remounted.row;
+      }
+      const afterMaterializeTakeover = _navigationTakeoverReason(options);
+      if (afterMaterializeTakeover) {
+        _rollbackMaterializationScroll(context, remounted);
+        return { confirmed: false, reason: afterMaterializeTakeover };
       }
       if (!row) continue;
       const nextStatus = _deriveTaskStatus(row, record.status);
@@ -909,8 +990,25 @@
     if (state.clicks.length > 100) state.clicks = state.clicks.slice(-100);
   }
 
-  async function _attemptSubagentApproval(record, context, retry = false) {
-    const materialized = await _materializeSubagentRow(record, context);
+  async function _attemptSubagentApproval(
+    record,
+    context,
+    retry = false,
+    options = {}
+  ) {
+    const materialized = await _materializeSubagentRow(
+      record,
+      context,
+      options
+    );
+    if (["new_user_interaction", "window_focused"].includes(materialized.reason)) {
+      return { outcome: "paused", reason: materialized.reason };
+    }
+    const materializeTakeover = _navigationTakeoverReason(options);
+    if (materializeTakeover) {
+      _rollbackMaterializationScroll(context, materialized);
+      return { outcome: "paused", reason: materializeTakeover };
+    }
     if (!materialized.row) {
       _queueEvent({
         type: "cycle_miss",
@@ -938,6 +1036,11 @@
 
     const command = _extractCommandText(candidate.el);
     const prompt = _capturePromptSubtree(candidate.el);
+    const clickTakeover = _navigationTakeoverReason(options);
+    if (clickTakeover) {
+      _rollbackMaterializationScroll(context, materialized);
+      return { outcome: "paused", reason: clickTakeover };
+    }
     const now = new Date().toISOString();
     record.status = "approval_attempted";
     record.lastAttemptAt = now;
@@ -962,7 +1065,12 @@
     });
     _persistSubagentRegistry();
 
-    const confirmation = await _confirmCycleApproval(record, candidate, context);
+    const confirmation = await _confirmCycleApproval(
+      record,
+      candidate,
+      context,
+      options
+    );
     if (confirmation.confirmed) {
       record.status = ["completed", "failed"].includes(confirmation.status)
         ? confirmation.status
@@ -998,6 +1106,10 @@
       retry,
       reason: confirmation.reason,
     });
+    if (["new_user_interaction", "window_focused"].includes(confirmation.reason)) {
+      _rollbackMaterializationScroll(context, materialized);
+      return { outcome: "paused", reason: confirmation.reason };
+    }
     return { outcome: "unconfirmed", reason: confirmation.reason };
   }
 
@@ -1026,6 +1138,96 @@
     const rotated = records.slice(start).concat(records.slice(0, start));
     state.cycleCursor = (start + CYCLE_MAX_TASKS) % records.length;
     return rotated.slice(0, CYCLE_MAX_TASKS);
+  }
+
+  function _agentSidebarRowTitle(row) {
+    return String(row?.querySelector(AGENT_SIDEBAR_TITLE_SELECTOR)?.textContent || "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .slice(0, 120);
+  }
+
+  function _agentSidebarTitleCounts() {
+    const counts = new Map();
+    for (const row of document.querySelectorAll(AGENT_SIDEBAR_CELL_SELECTOR)) {
+      const title = _agentSidebarRowTitle(row);
+      if (!title) continue;
+      const key = normalizeLabel(title);
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    return counts;
+  }
+
+  function _uniqueAgentSidebarRow(title) {
+    const wanted = normalizeLabel(title);
+    const matches = Array.from(
+      document.querySelectorAll(AGENT_SIDEBAR_CELL_SELECTOR)
+    ).filter((row) => normalizeLabel(_agentSidebarRowTitle(row)) === wanted);
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  function _resolvePinnedAgentEntry(title, options = {}) {
+    const item = _uniqueAgentSidebarRow(title);
+    if (!item || !item.isConnected || !isVisible(item) || !isClickable(item)) {
+      return null;
+    }
+    const section = item.closest(AGENT_SIDEBAR_SECTION_SELECTOR);
+    const sectionTitle = String(
+      section?.querySelector(AGENT_SIDEBAR_SECTION_TITLE_SELECTOR)?.textContent || ""
+    ).trim();
+    if (!section || !PINNED_AGENT_SECTION_PATTERN.test(sectionTitle)) return null;
+    const currentTitle = _agentSidebarRowTitle(item);
+    if (normalizeLabel(currentTitle) !== normalizeLabel(title)) return null;
+    const resolved = {
+      item,
+      title: currentTitle,
+      selected: item.getAttribute("data-selected") === "true",
+      active: !!item.querySelector(PINNED_AGENT_ACTIVE_SELECTOR),
+    };
+    if (options.activeOnly === true && !resolved.active) return null;
+    return resolved;
+  }
+
+  function _pinnedAgentEntries(options = {}) {
+    const raw = [];
+    for (const section of document.querySelectorAll(AGENT_SIDEBAR_SECTION_SELECTOR)) {
+      const sectionTitle = String(
+        section.querySelector(AGENT_SIDEBAR_SECTION_TITLE_SELECTOR)?.textContent || ""
+      ).trim();
+      if (!PINNED_AGENT_SECTION_PATTERN.test(sectionTitle)) continue;
+      for (const item of section.querySelectorAll(AGENT_SIDEBAR_CELL_SELECTOR)) {
+        const title = _agentSidebarRowTitle(item);
+        if (!title || !item.isConnected || !isVisible(item) || !isClickable(item)) continue;
+        raw.push({
+          item,
+          title,
+          selected: item.getAttribute("data-selected") === "true",
+          active: !!item.querySelector(PINNED_AGENT_ACTIVE_SELECTOR),
+        });
+      }
+    }
+
+    const titleCounts = _agentSidebarTitleCounts();
+    for (const entry of raw) {
+      entry.ambiguous = titleCounts.get(normalizeLabel(entry.title)) !== 1;
+    }
+    let entries =
+      options.includeAmbiguous === true
+        ? raw
+        : raw.filter((entry) => !entry.ambiguous);
+    if (options.activeOnly === true) {
+      entries = entries.filter((entry) => entry.active);
+    }
+    if (options.includeSelected !== true) {
+      entries = entries.filter((entry) => !entry.selected);
+    }
+    if (options.bounded === false || entries.length <= CYCLE_MAX_PINNED_AGENTS) {
+      return entries;
+    }
+    const start = state.pinnedAgentCursor % entries.length;
+    const rotated = entries.slice(start).concat(entries.slice(0, start));
+    state.pinnedAgentCursor = (start + CYCLE_MAX_PINNED_AGENTS) % entries.length;
+    return rotated.slice(0, CYCLE_MAX_PINNED_AGENTS);
   }
 
   function _runningSubagentTrayEntries(options = {}) {
@@ -1084,8 +1286,8 @@
     };
   }
 
-  function _activateEditorTab(tab) {
-    const rect = tab.getBoundingClientRect();
+  function _activateNavigationElement(element) {
+    const rect = element.getBoundingClientRect();
     const options = {
       bubbles: true,
       cancelable: true,
@@ -1095,21 +1297,211 @@
       clientX: rect.left + rect.width / 2,
       clientY: rect.top + rect.height / 2,
     };
-    tab.dispatchEvent(new MouseEvent("mousedown", options));
-    tab.dispatchEvent(new MouseEvent("mouseup", { ...options, buttons: 0 }));
-    if (typeof tab.click === "function") tab.click();
+    element.dispatchEvent(new MouseEvent("mousedown", options));
+    element.dispatchEvent(new MouseEvent("mouseup", { ...options, buttons: 0 }));
+    if (typeof element.click === "function") element.click();
   }
 
-  function _restoreEditorSelectionContext(context) {
-    if (!context) return;
+  function _activateEditorTab(tab) {
+    _activateNavigationElement(tab);
+  }
+
+  function _activateAgentSidebarRow(row) {
+    _activateNavigationElement(row);
+  }
+
+  async function _restoreEditorSelectionContext(context, options = {}) {
+    if (!context) return { ok: true, reason: "no_context" };
+    const takeoverReason = () => _navigationTakeoverReason(options);
+    if (takeoverReason()) {
+      return { ok: false, preserved: true, reason: takeoverReason() };
+    }
     const ordered = context.selections
       .filter(({ group, tab }) => group.isConnected && tab.isConnected)
       .sort((a, b) =>
         a.group === context.focusedGroup ? 1 : b.group === context.focusedGroup ? -1 : 0
       );
+    if (ordered.length !== context.selections.length) {
+      return { ok: false, reason: "editor_selection_identity_disconnected" };
+    }
     for (const { group, tab } of ordered) {
       if (_selectedEditorTab(group) !== tab) _activateEditorTab(tab);
     }
+    const deadline = performance.now() + CYCLE_TRAY_MOUNT_TIMEOUT_MS;
+    while (performance.now() <= deadline) {
+      const reason = takeoverReason();
+      if (reason) {
+        return { ok: false, preserved: true, reason };
+      }
+      if (
+        ordered.every(
+          ({ group, tab }) =>
+            group.isConnected &&
+            tab.isConnected &&
+            _selectedEditorTab(group) === tab
+        )
+      ) {
+        return { ok: true, reason: "editor_selection_restored" };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return { ok: false, reason: "editor_selection_not_restored" };
+  }
+
+  function _selectedAgentGroupNow(title) {
+    const wanted = normalizeLabel(title);
+    const matches = [];
+    for (const group of document.querySelectorAll(".editor-group-container")) {
+      const tab = _selectedEditorTab(group);
+      const tabText = String(tab?.innerText || tab?.textContent || "")
+        .trim()
+        .replace(/\s+/g, " ");
+      if (
+        tab &&
+        normalizeLabel(tabText) === wanted &&
+        group.querySelector("div.conversations")
+      ) {
+        matches.push({ group, tab });
+      }
+    }
+    if (matches.length !== 1) return null;
+    const match = matches[0];
+    return {
+      ...match,
+      targetKey:
+        match.tab.getAttribute("data-resource-name") ||
+        match.tab.getAttribute("data-resource-id") ||
+        title,
+    };
+  }
+
+  function _singleMountedAgentGroup() {
+    const groups = Array.from(
+      document.querySelectorAll(".editor-group-container")
+    ).filter((group) => group.querySelector("div.conversations"));
+    return groups.length === 1 ? groups[0] : null;
+  }
+
+  function _beginNavigationApprovalScope(source, group, targetKey) {
+    state.navigationApprovalScope = {
+      source,
+      group: group?.isConnected ? group : null,
+      targetKey,
+      pending: true,
+    };
+  }
+
+  function _captureAgentSidebarSelectionContext() {
+    const selectedRows = Array.from(
+      document.querySelectorAll(
+        `${AGENT_SIDEBAR_CELL_SELECTOR}[data-selected="true"]`
+      )
+    ).filter((row) => _agentSidebarRowTitle(row));
+    if (selectedRows.length !== 1) return null;
+    const row = selectedRows[0];
+    const title = _agentSidebarRowTitle(row);
+    if (!_uniqueAgentSidebarRow(title)) return null;
+    const selectedGroup = _selectedAgentGroupNow(title);
+    if (!selectedGroup) return null;
+    const scrollContainers = selectedGroup.group.querySelectorAll(
+      SCROLL_CONTAINER_SELECTOR
+    );
+    const container = scrollContainers.length === 1 ? scrollContainers[0] : null;
+    const scroll = container
+      ? {
+          scrollTop: container.scrollTop,
+          wasNearBottom:
+            Math.max(0, container.scrollHeight - container.clientHeight - container.scrollTop) <=
+            80,
+        }
+      : null;
+    return {
+      row,
+      title,
+      resourceKey: selectedGroup.targetKey,
+      scroll,
+      interactionGeneration: state.interactionGeneration,
+    };
+  }
+
+  function _recordPinnedRestore(result) {
+    state.lastPinnedRestore = { ...result, ts: new Date().toISOString() };
+    _queueEvent({ type: "pinned_restore", ...result });
+    return result;
+  }
+
+  async function _restoreAgentSidebarSelectionContext(context, options = {}) {
+    const shouldPreserveUserSelection = () =>
+      options.preserveOnInteraction === true &&
+      state.interactionGeneration !== context.interactionGeneration;
+    if (shouldPreserveUserSelection()) {
+      return _recordPinnedRestore({
+        ok: true,
+        preserved: true,
+        reason: "preserved_new_user_selection",
+      });
+    }
+    const row = context?.title ? _uniqueAgentSidebarRow(context.title) : null;
+    if (!row) {
+      return _recordPinnedRestore({
+        ok: false,
+        reason: "original_agent_identity_ambiguous",
+      });
+    }
+    if (row.getAttribute("data-selected") !== "true") {
+      _activateAgentSidebarRow(row);
+    }
+    const selected = await _waitForSelectedSubagentGroup(
+      context.title,
+      CYCLE_PINNED_MOUNT_TIMEOUT_MS,
+      {
+        interactionGeneration: options.preserveOnInteraction
+          ? context.interactionGeneration
+          : null,
+      }
+    );
+    if (shouldPreserveUserSelection()) {
+      return _recordPinnedRestore({
+        ok: true,
+        preserved: true,
+        reason: "preserved_new_user_selection",
+      });
+    }
+    if (
+      !selected ||
+      row.getAttribute("data-selected") !== "true"
+    ) {
+      return _recordPinnedRestore({
+        ok: false,
+        reason: "original_agent_not_restored",
+      });
+    }
+    if (
+      context.resourceKey &&
+      selected.targetKey !== context.resourceKey
+    ) {
+      return _recordPinnedRestore({
+        ok: false,
+        reason: "original_agent_resource_changed",
+      });
+    }
+    if (context.scroll) {
+      const containers = selected.group.querySelectorAll(SCROLL_CONTAINER_SELECTOR);
+      if (containers.length === 1) {
+        const container = containers[0];
+        const top = context.scroll.wasNearBottom
+          ? Math.max(0, container.scrollHeight - container.clientHeight)
+          : Math.min(
+              context.scroll.scrollTop,
+              Math.max(0, container.scrollHeight - container.clientHeight)
+            );
+        _setProgrammaticScroll(container, top);
+      }
+    }
+    return _recordPinnedRestore({
+      ok: true,
+      reason: "original_agent_restored",
+    });
   }
 
   function _focusKind(element) {
@@ -1202,10 +1594,28 @@
     setTimeout(() => attempt("delayed"), FOCUS_SETTLE_DELAY_MS);
   }
 
-  async function _waitForSelectedSubagentGroup(title) {
+  function _navigationTakeoverReason(options = {}) {
+    if (
+      Number.isFinite(options.interactionGeneration) &&
+      state.interactionGeneration !== options.interactionGeneration
+    ) {
+      return "new_user_interaction";
+    }
+    if (options.abortIfWindowFocused === true && document.hasFocus()) {
+      return "window_focused";
+    }
+    return null;
+  }
+
+  async function _waitForSelectedSubagentGroup(
+    title,
+    timeoutMs = CYCLE_TRAY_MOUNT_TIMEOUT_MS,
+    options = {}
+  ) {
     const wanted = normalizeLabel(title);
-    const deadline = performance.now() + CYCLE_TRAY_MOUNT_TIMEOUT_MS;
+    const deadline = performance.now() + timeoutMs;
     while (performance.now() <= deadline) {
+      if (_navigationTakeoverReason(options)) return null;
       const matches = [];
       for (const group of document.querySelectorAll(".editor-group-container")) {
         const tab = _selectedEditorTab(group);
@@ -1261,7 +1671,7 @@
     return candidates;
   }
 
-  function _trayCandidates(group, targetKey) {
+  function _trayCandidates(group, targetKey, source = "tray") {
     const candidates = _trayApprovalMatches(group)
       .map((candidate) => ({
         ...candidate,
@@ -1270,14 +1680,38 @@
       .filter((candidate) => candidate.reason !== null)
       .filter((candidate) => _notCoveredByUnrelatedElement(candidate.el));
     for (const candidate of candidates) {
+      candidate.promptRoot =
+        candidate.el.closest(PROMPT_ROOT_SELECTORS.join(", ")) ||
+        candidate.el.parentElement;
+      candidate.promptFingerprint = _promptFingerprint(candidate.el);
       candidate.fingerprint = [
-        "tray",
+        source,
         state.workspace,
         targetKey,
-        _promptFingerprint(candidate.el),
+        candidate.promptFingerprint,
       ].join("|");
     }
     return candidates;
+  }
+
+  function _navigatedTargetStillSelected(target) {
+    if (
+      !target.group?.isConnected ||
+      !target.tab?.isConnected ||
+      _selectedEditorTab(target.group) !== target.tab
+    ) {
+      return false;
+    }
+    if (
+      target.selectionElement &&
+      (
+        !target.selectionElement.isConnected ||
+        target.selectionElement.getAttribute("data-selected") !== "true"
+      )
+    ) {
+      return false;
+    }
+    return true;
   }
 
   function _waitForTrayCandidates(target) {
@@ -1306,16 +1740,21 @@
           clearTimeout(timer);
           timer = null;
         }
-        if (
-          !target.group?.isConnected ||
-          !target.tab?.isConnected ||
-          _selectedEditorTab(target.group) !== target.tab
-        ) {
+        if (!_navigatedTargetStillSelected(target)) {
           finish([], "selected_subagent_changed");
           return;
         }
+        const takeoverReason = _navigationTakeoverReason(target);
+        if (takeoverReason) {
+          finish([], takeoverReason);
+          return;
+        }
 
-        const candidates = _trayCandidates(target.group, target.targetKey);
+        const candidates = _trayCandidates(
+          target.group,
+          target.targetKey,
+          target.source
+        );
         if (candidates.length > 0) {
           finish(candidates, null);
           return;
@@ -1352,23 +1791,62 @@
     });
   }
 
-  function _sameTrayApprovalStillPresent(group, candidate) {
-    if (!group?.isConnected) return false;
-    return _trayCandidates(group, candidate.targetKey).some(
-      (next) =>
-        next.id === candidate.id &&
-        normalizeLabel(next.text) === normalizeLabel(candidate.text)
-    );
+  function _rawNavigatedApprovalStillPresent(target, candidate) {
+    if (!target.group?.isConnected) return false;
+    const root =
+      candidate.promptRoot?.isConnected &&
+      target.group.contains(candidate.promptRoot)
+        ? candidate.promptRoot
+        : target.group;
+    const seen = new Set();
+    for (const selector of BUTTON_SELECTORS) {
+      for (const el of root.querySelectorAll(selector)) {
+        if (seen.has(el)) continue;
+        seen.add(el);
+        const text = String(el.textContent || "").trim();
+        if (
+          !text ||
+          text.length > 60 ||
+          normalizeLabel(text) !== normalizeLabel(candidate.text)
+        ) {
+          continue;
+        }
+        if (
+          root === target.group &&
+          _promptFingerprint(el) !== candidate.promptFingerprint
+        ) {
+          continue;
+        }
+        return true;
+      }
+    }
+    return false;
   }
 
-  async function _attemptTrayApproval(target) {
+  async function _attemptNavigatedApproval(target, source) {
+    state.navigationApprovalScope = {
+      source,
+      group: target.group,
+      targetKey: target.targetKey,
+    };
+    // Keep ownership after the attempt returns. The ordinary scanner can run
+    // on mutations while the cycle is restoring navigation; releasing here
+    // would let it retry an unconfirmed control before the original agent/tab
+    // is remounted. runSubagentCycle clears this scope after restoration.
+    return _attemptNavigatedApprovalImpl(target, source);
+  }
+
+  async function _attemptNavigatedApprovalImpl(target, source) {
+    target.source = source;
+    const attemptsMap =
+      source === "pinned" ? state.pinnedApprovalAttempts : state.trayApprovalAttempts;
     const waitResult = await _waitForTrayCandidates(target);
     if (waitResult.candidates.length === 0) {
       const approvalControls = target.group?.isConnected
         ? _trayApprovalMatches(target.group).length
         : 0;
       _queueEvent({
-        type: "tray_no_candidate",
+        type: `${source}_no_candidate`,
         targetKey: target.targetKey,
         title: target.title,
         reason: waitResult.reason,
@@ -1377,23 +1855,25 @@
       });
       return {
         outcome:
-          waitResult.reason === "selected_subagent_changed"
-            ? "miss"
-            : "no_candidate",
+          ["window_focused", "new_user_interaction"].includes(waitResult.reason)
+            ? "paused"
+            : waitResult.reason === "selected_subagent_changed"
+              ? "miss"
+              : "no_candidate",
         reason: waitResult.reason,
       };
     }
     const candidate = waitResult.candidates[0];
     candidate.targetKey = target.targetKey;
-    const previous = state.trayApprovalAttempts.get(candidate.fingerprint) || {
+    const previous = attemptsMap.get(candidate.fingerprint) || {
       attempts: 0,
       failed: false,
       targetKey: target.targetKey,
     };
     if (previous.failed || previous.attempts >= CYCLE_TRAY_MAX_ATTEMPTS) {
       previous.failed = true;
-      state.trayApprovalAttempts.set(candidate.fingerprint, previous);
-      return { outcome: "failed", reason: "tray_retry_exhausted" };
+      attemptsMap.set(candidate.fingerprint, previous);
+      return { outcome: "failed", reason: `${source}_retry_exhausted` };
     }
     if (_isCoolingDown(candidate.fingerprint)) {
       return { outcome: "cooldown" };
@@ -1403,17 +1883,21 @@
     const prompt = _capturePromptSubtree(candidate.el);
     previous.attempts += 1;
     previous.lastAttemptAt = new Date().toISOString();
-    state.trayApprovalAttempts.set(candidate.fingerprint, previous);
-    if (state.trayApprovalAttempts.size > 100) {
-      state.trayApprovalAttempts.delete(state.trayApprovalAttempts.keys().next().value);
+    attemptsMap.set(candidate.fingerprint, previous);
+    if (attemptsMap.size > 100) {
+      attemptsMap.delete(attemptsMap.keys().next().value);
     }
     state.totalClicks++;
     state.totalClickAttempts++;
-    state.totalTrayApprovalAttempts++;
+    if (source === "pinned") {
+      state.totalPinnedApprovalAttempts++;
+    } else {
+      state.totalTrayApprovalAttempts++;
+    }
     clickEl(candidate.el);
     _markClicked(candidate.fingerprint);
     _queueEvent({
-      type: "tray_approval_attempted",
+      type: `${source}_approval_attempted`,
       targetKey: target.targetKey,
       title: target.title,
       pattern_id: candidate.id,
@@ -1425,34 +1909,72 @@
       command,
     });
 
+    let consecutiveAbsentChecks = 0;
     for (const delay of CYCLE_TRAY_CONFIRM_DELAYS_MS) {
       await new Promise((resolve) => setTimeout(resolve, delay));
       if (!state.running) return { outcome: "unconfirmed", reason: "gate_off" };
-      if (!_sameTrayApprovalStillPresent(target.group, candidate)) {
-        state.trayApprovalAttempts.delete(candidate.fingerprint);
-        state.totalConfirmedApprovals++;
-        state.totalTrayConfirmedApprovals++;
-        _pushRecentConfirmedClick(candidate, command, "tray");
+      const takeoverReason = _navigationTakeoverReason(target);
+      if (takeoverReason) {
         _queueEvent({
-          type: "tray_approval_confirmed",
+          type: `${source}_approval_unconfirmed`,
           targetKey: target.targetKey,
           title: target.title,
           pattern_id: candidate.id,
-          text: candidate.text,
-          reason: "candidate_gone",
-          eligibility_reason: candidate.reason,
           fingerprint: candidate.fingerprint,
-          prompt,
-          command,
+          attempt: previous.attempts,
+          failed: false,
+          reason: takeoverReason,
         });
-        return { outcome: "confirmed", reason: "candidate_gone" };
+        return { outcome: "paused", reason: takeoverReason };
       }
+      if (!_navigatedTargetStillSelected(target)) {
+        _queueEvent({
+          type: `${source}_approval_unconfirmed`,
+          targetKey: target.targetKey,
+          title: target.title,
+          pattern_id: candidate.id,
+          fingerprint: candidate.fingerprint,
+          attempt: previous.attempts,
+          failed: false,
+          reason: "selected_agent_changed",
+        });
+        return { outcome: "unconfirmed", reason: "selected_agent_changed" };
+      }
+      consecutiveAbsentChecks = _rawNavigatedApprovalStillPresent(
+        target,
+        candidate
+      )
+        ? 0
+        : consecutiveAbsentChecks + 1;
+    }
+    if (consecutiveAbsentChecks >= 2) {
+      attemptsMap.delete(candidate.fingerprint);
+      state.totalConfirmedApprovals++;
+      if (source === "pinned") {
+        state.totalPinnedConfirmedApprovals++;
+      } else {
+        state.totalTrayConfirmedApprovals++;
+      }
+      _pushRecentConfirmedClick(candidate, command, source);
+      _queueEvent({
+        type: `${source}_approval_confirmed`,
+        targetKey: target.targetKey,
+        title: target.title,
+        pattern_id: candidate.id,
+        text: candidate.text,
+        reason: "candidate_gone",
+        eligibility_reason: candidate.reason,
+        fingerprint: candidate.fingerprint,
+        prompt,
+        command,
+      });
+      return { outcome: "confirmed", reason: "candidate_gone" };
     }
 
     previous.failed = previous.attempts >= CYCLE_TRAY_MAX_ATTEMPTS;
-    state.trayApprovalAttempts.set(candidate.fingerprint, previous);
+    attemptsMap.set(candidate.fingerprint, previous);
     _queueEvent({
-      type: "tray_approval_unconfirmed",
+      type: `${source}_approval_unconfirmed`,
       targetKey: target.targetKey,
       title: target.title,
       pattern_id: candidate.id,
@@ -1467,9 +1989,13 @@
     };
   }
 
-  async function _visitSubagentTrayEntry(entry) {
+  async function _visitSubagentTrayEntry(entry, options = {}) {
     if (!entry.item.isConnected) {
       return { outcome: "miss", reason: "tray_item_disconnected" };
+    }
+    const takeoverReason = _navigationTakeoverReason(options);
+    if (takeoverReason) {
+      return { outcome: "paused", reason: takeoverReason };
     }
     _queueEvent({
       type: "tray_visit",
@@ -1477,17 +2003,110 @@
       header: entry.headerText,
     });
     state.totalTrayVisits++;
+    _beginNavigationApprovalScope(
+      "tray",
+      entry.item.closest(".editor-group-container") || _singleMountedAgentGroup(),
+      entry.title
+    );
     clickEl(entry.item);
-    const selected = await _waitForSelectedSubagentGroup(entry.title);
+    const selected = await _waitForSelectedSubagentGroup(
+      entry.title,
+      CYCLE_TRAY_MOUNT_TIMEOUT_MS,
+      options
+    );
     if (!selected) {
+      const pausedReason = _navigationTakeoverReason(options);
+      if (pausedReason) {
+        return { outcome: "paused", reason: pausedReason, visited: true };
+      }
       _queueEvent({
         type: "tray_visit_miss",
         title: entry.title,
         reason: "selected_subagent_not_mounted",
       });
-      return { outcome: "miss", reason: "selected_subagent_not_mounted" };
+      return {
+        outcome: "miss",
+        reason: "selected_subagent_not_mounted",
+        visited: true,
+      };
     }
-    return _attemptTrayApproval({ ...selected, title: entry.title });
+    const result = await _attemptNavigatedApproval(
+      { ...selected, ...options, title: entry.title },
+      "tray"
+    );
+    return { ...result, visited: true };
+  }
+
+  async function _visitPinnedAgentEntry(entry, options = {}) {
+    const resolved = _resolvePinnedAgentEntry(entry.title, {
+      activeOnly: options.automatic === true,
+    });
+    if (!resolved) {
+      return { outcome: "miss", reason: "pinned_agent_identity_changed" };
+    }
+    const takeoverReason = _navigationTakeoverReason(options);
+    if (takeoverReason) {
+      _queueEvent({
+        type: "pinned_cycle_paused",
+        title: resolved.title,
+        reason: takeoverReason,
+      });
+      return { outcome: "paused", reason: takeoverReason };
+    }
+    _queueEvent({
+      type: "pinned_visit",
+      title: resolved.title,
+      active: resolved.active,
+      selected: resolved.selected,
+    });
+    state.totalPinnedVisits++;
+    _beginNavigationApprovalScope(
+      "pinned",
+      _singleMountedAgentGroup(),
+      resolved.title
+    );
+    if (!resolved.selected) {
+      _activateAgentSidebarRow(resolved.item);
+    }
+    const selected = await _waitForSelectedSubagentGroup(
+      resolved.title,
+      CYCLE_PINNED_MOUNT_TIMEOUT_MS,
+      options
+    );
+    const current = _resolvePinnedAgentEntry(resolved.title, {
+      activeOnly: options.automatic === true,
+    });
+    if (
+      !selected ||
+      !current ||
+      current.item !== resolved.item ||
+      !current.selected
+    ) {
+      const pausedReason = _navigationTakeoverReason(options);
+      if (pausedReason) {
+        return { outcome: "paused", reason: pausedReason, visited: true };
+      }
+      _queueEvent({
+        type: "pinned_visit_miss",
+        title: resolved.title,
+        reason: "selected_pinned_agent_not_mounted",
+      });
+      return {
+        outcome: "miss",
+        reason: "selected_pinned_agent_not_mounted",
+        visited: true,
+      };
+    }
+    const result = await _attemptNavigatedApproval(
+      {
+        ...selected,
+        ...options,
+        title: resolved.title,
+        selectionElement: resolved.item,
+      },
+      "pinned"
+    );
+    return { ...result, visited: true };
   }
 
   function _scheduleSubagentCycle(delayMs = CYCLE_AUTOMATIC_INTERVAL_MS) {
@@ -1514,12 +2133,38 @@
       if (!explicit && state.cycleEnabled) _scheduleSubagentCycle(1000);
       return { ok: false, reason: blocked };
     }
+    const navigationOptions = {
+      interactionGeneration: state.interactionGeneration,
+      abortIfWindowFocused: !explicit && !document.hasFocus(),
+    };
+    const restorationOptions = {
+      interactionGeneration: navigationOptions.interactionGeneration,
+    };
 
     _getVirtualizerSnapshot(true);
     _discoverSubagentRows(document);
-    const records = _activeSubagentRecords();
-    const trayEntries = _runningSubagentTrayEntries();
-    if (records.length === 0 && trayEntries.length === 0) {
+    let records = _activeSubagentRecords();
+    let trayEntries = _runningSubagentTrayEntries();
+    let pinnedEntries = _pinnedAgentEntries({
+      activeOnly: !explicit,
+      includeSelected: explicit,
+    });
+    if (!explicit && document.hasFocus()) pinnedEntries = [];
+    const sidebarContext =
+      pinnedEntries.length > 0 ? _captureAgentSidebarSelectionContext() : null;
+    if (pinnedEntries.length > 0 && !sidebarContext) {
+      _queueEvent({
+        type: "pinned_cycle_skipped",
+        reason: "original_agent_selection_ambiguous",
+        pinnedTaskCount: pinnedEntries.length,
+      });
+      pinnedEntries = [];
+    }
+    if (
+      records.length === 0 &&
+      trayEntries.length === 0 &&
+      pinnedEntries.length === 0
+    ) {
       const result = {
         ok: true,
         rows: 0,
@@ -1530,6 +2175,10 @@
         trayConfirmed: 0,
         trayFailed: 0,
         trayMisses: 0,
+        pinnedVisits: 0,
+        pinnedConfirmed: 0,
+        pinnedFailed: 0,
+        pinnedMisses: 0,
       };
       state.lastCycle = { ...result, ts: new Date().toISOString() };
       if (state.running && state.cycleEnabled) {
@@ -1538,14 +2187,12 @@
       return result;
     }
 
-    const container = records.length > 0 ? _scrollContainer(records) : null;
-    const context = container ? _captureScrollContext(container) : null;
-    const editorContext =
-      trayEntries.length > 0 ? _captureEditorSelectionContext() : null;
+    const outerEditorContext =
+      pinnedEntries.length > 0 ? _captureEditorSelectionContext() : null;
     const generation = ++state.cycleGeneration;
     state.cycleActive = true;
     const startedAt = new Date().toISOString();
-    const startedPerformance = performance.now();
+    const pinnedStartedPerformance = performance.now();
     const summary = {
       ok: true,
       rows: 0,
@@ -1556,67 +2203,316 @@
       trayConfirmed: 0,
       trayFailed: 0,
       trayMisses: 0,
+      pinnedVisits: 0,
+      pinnedConfirmed: 0,
+      pinnedFailed: 0,
+      pinnedMisses: 0,
+      abortedReason: null,
     };
     _queueEvent({
       type: "cycle_started",
       explicit,
       taskCount: records.length,
       trayTaskCount: trayEntries.length,
+      pinnedTaskCount: pinnedEntries.length,
       composerId: records[0]?.parentComposerId || null,
     });
 
+    let context = null;
+    let editorContext = null;
+    let sidebarRestored = pinnedEntries.length === 0;
+    let abortAfterPinned = false;
+    let preserveUserSelection = false;
     try {
-      // Give the backup navigation path a chance before row confirmation can
-      // consume the shared cycle budget. The normal mounted-composer scanner
-      // remains active independently at the fallback poll cadence.
-      for (const entry of trayEntries) {
+      for (const entry of pinnedEntries) {
         if (
-          performance.now() - startedPerformance > CYCLE_MAX_DURATION_MS ||
+          performance.now() - pinnedStartedPerformance >
+            CYCLE_PINNED_MAX_DURATION_MS ||
           !state.running ||
           generation !== state.cycleGeneration
         ) {
           break;
         }
-        summary.trayVisits++;
-        const result = await _visitSubagentTrayEntry(entry);
-        if (result.outcome === "confirmed") summary.trayConfirmed++;
-        if (result.outcome === "failed") summary.trayFailed++;
-        if (result.outcome === "miss") summary.trayMisses++;
-      }
-
-      if (!context && records.length > 0) {
-        summary.misses += records.length;
-        _queueEvent({
-          type: "cycle_miss",
-          reason: "ambiguous_scroll_container",
-          taskCount: records.length,
+        const beforeVisitTakeover = _navigationTakeoverReason(navigationOptions);
+        if (beforeVisitTakeover) {
+          abortAfterPinned = true;
+          preserveUserSelection =
+            beforeVisitTakeover === "new_user_interaction";
+          summary.abortedReason = beforeVisitTakeover;
+          break;
+        }
+        const result = await _visitPinnedAgentEntry(entry, {
+          ...navigationOptions,
+          automatic: !explicit,
         });
-      } else if (context) {
-        for (const record of records) {
-          if (performance.now() - startedPerformance > CYCLE_MAX_DURATION_MS) {
-            summary.misses++;
-            break;
-          }
-          if (!state.running || generation !== state.cycleGeneration) break;
-          summary.rows++;
-          let result = await _attemptSubagentApproval(record, context, false);
-          if (result.outcome === "unconfirmed" && state.running) {
-            await new Promise((resolve) => setTimeout(resolve, 250));
-            result = await _attemptSubagentApproval(record, context, true);
-            if (result.outcome === "unconfirmed") {
-              record.status = "failed";
-              record.failure = "unconfirmed_click";
-              summary.failed++;
+        if (result.visited) summary.pinnedVisits++;
+        if (result.outcome === "paused") {
+          abortAfterPinned = true;
+          preserveUserSelection = result.reason === "new_user_interaction";
+          summary.abortedReason = result.reason;
+          break;
+        }
+        if (result.outcome === "confirmed") summary.pinnedConfirmed++;
+        if (result.outcome === "failed") summary.pinnedFailed++;
+        if (result.outcome === "miss") summary.pinnedMisses++;
+        const afterVisitTakeover = _navigationTakeoverReason(navigationOptions);
+        if (afterVisitTakeover) {
+          abortAfterPinned = true;
+          preserveUserSelection =
+            afterVisitTakeover === "new_user_interaction";
+          summary.abortedReason = afterVisitTakeover;
+          break;
+        }
+      }
+      if (sidebarContext) {
+        if (preserveUserSelection) {
+          _recordPinnedRestore({
+            ok: true,
+            preserved: true,
+            reason: "preserved_new_user_selection",
+          });
+          sidebarRestored = true;
+          summary.abortedReason = "new_user_interaction";
+        } else {
+          const restored = await _restoreAgentSidebarSelectionContext(
+            sidebarContext,
+            { preserveOnInteraction: true }
+          );
+          sidebarRestored = restored.ok;
+          if (restored.preserved) {
+            preserveUserSelection = true;
+            abortAfterPinned = true;
+            summary.abortedReason = "new_user_interaction";
+          } else {
+            if (!restored.ok) {
+              summary.pinnedMisses++;
+              abortAfterPinned = true;
+              summary.abortedReason = restored.reason;
+            }
+            const editorRestored = await _restoreEditorSelectionContext(
+              outerEditorContext,
+              restorationOptions
+            );
+            if (editorRestored.preserved) {
+              preserveUserSelection = true;
+              abortAfterPinned = true;
+              summary.abortedReason = editorRestored.reason;
+            } else if (!editorRestored.ok) {
+              summary.pinnedMisses++;
+              abortAfterPinned = true;
+              summary.abortedReason = editorRestored.reason;
+            }
+            if (abortAfterPinned && !summary.abortedReason) {
+              summary.abortedReason = "window_focused";
             }
           }
-          if (result.outcome === "confirmed") summary.confirmed++;
-          if (result.outcome === "miss") summary.misses++;
+        }
+      }
+
+      if (!abortAfterPinned) {
+        // Top-level agent navigation replaces the mounted conversation. Refresh
+        // nested-row and tray references after restoring the original agent.
+        _getVirtualizerSnapshot(true);
+        _discoverSubagentRows(document);
+        records = _activeSubagentRecords();
+        trayEntries = _runningSubagentTrayEntries();
+        const container = records.length > 0 ? _scrollContainer(records) : null;
+        context = container ? _captureScrollContext(container) : null;
+        editorContext =
+          trayEntries.length > 0 ? _captureEditorSelectionContext() : null;
+        const nestedStartedPerformance = performance.now();
+
+        // Give the backup navigation path a chance before row confirmation can
+        // consume the nested-path budget. Pinned navigation has a separate
+        // smaller budget, so it cannot starve existing recovery.
+        for (const entry of trayEntries) {
+          if (
+            performance.now() - nestedStartedPerformance >
+              CYCLE_MAX_DURATION_MS ||
+            !state.running ||
+            generation !== state.cycleGeneration
+          ) {
+            break;
+          }
+          const beforeTrayTakeover = _navigationTakeoverReason(navigationOptions);
+          if (beforeTrayTakeover) {
+            abortAfterPinned = true;
+            preserveUserSelection =
+              beforeTrayTakeover === "new_user_interaction";
+            summary.abortedReason = beforeTrayTakeover;
+            break;
+          }
+          const result = await _visitSubagentTrayEntry(
+            entry,
+            navigationOptions
+          );
+          if (result.visited) summary.trayVisits++;
+          if (result.outcome === "paused") {
+            abortAfterPinned = true;
+            preserveUserSelection = result.reason === "new_user_interaction";
+            summary.abortedReason = result.reason;
+            break;
+          }
+          if (result.outcome === "confirmed") summary.trayConfirmed++;
+          if (result.outcome === "failed") summary.trayFailed++;
+          if (result.outcome === "miss") summary.trayMisses++;
+          const afterTrayTakeover = _navigationTakeoverReason(navigationOptions);
+          if (afterTrayTakeover) {
+            abortAfterPinned = true;
+            preserveUserSelection =
+              afterTrayTakeover === "new_user_interaction";
+            summary.abortedReason = afterTrayTakeover;
+            break;
+          }
+        }
+
+        if (abortAfterPinned) {
+          // A focus transition or newer user interaction owns the remainder of
+          // this cycle. Do not continue into virtual-row navigation.
+        } else if (!context && records.length > 0) {
+          summary.misses += records.length;
+          _queueEvent({
+            type: "cycle_miss",
+            reason: "ambiguous_scroll_container",
+            taskCount: records.length,
+          });
+        } else if (context) {
+          for (const record of records) {
+            if (
+              performance.now() - nestedStartedPerformance >
+              CYCLE_MAX_DURATION_MS
+            ) {
+              summary.misses++;
+              break;
+            }
+            if (!state.running || generation !== state.cycleGeneration) break;
+            const beforeRowTakeover = _navigationTakeoverReason(navigationOptions);
+            if (beforeRowTakeover) {
+              abortAfterPinned = true;
+              preserveUserSelection =
+                beforeRowTakeover === "new_user_interaction";
+              summary.abortedReason = beforeRowTakeover;
+              break;
+            }
+            summary.rows++;
+            let result = await _attemptSubagentApproval(
+              record,
+              context,
+              false,
+              navigationOptions
+            );
+            if (result.outcome === "paused") {
+              abortAfterPinned = true;
+              preserveUserSelection = result.reason === "new_user_interaction";
+              summary.abortedReason = result.reason;
+              break;
+            }
+            if (result.outcome === "unconfirmed" && state.running) {
+              await new Promise((resolve) => setTimeout(resolve, 250));
+              const beforeRetryTakeover =
+                _navigationTakeoverReason(navigationOptions);
+              if (beforeRetryTakeover) {
+                abortAfterPinned = true;
+                preserveUserSelection =
+                  beforeRetryTakeover === "new_user_interaction";
+                summary.abortedReason = beforeRetryTakeover;
+                break;
+              }
+              result = await _attemptSubagentApproval(
+                record,
+                context,
+                true,
+                navigationOptions
+              );
+              if (result.outcome === "paused") {
+                abortAfterPinned = true;
+                preserveUserSelection =
+                  result.reason === "new_user_interaction";
+                summary.abortedReason = result.reason;
+                break;
+              }
+              if (result.outcome === "unconfirmed") {
+                record.status = "failed";
+                record.failure = "unconfirmed_click";
+                summary.failed++;
+              }
+            }
+            if (result.outcome === "confirmed") summary.confirmed++;
+            if (result.outcome === "miss") summary.misses++;
+            const afterRowTakeover = _navigationTakeoverReason(navigationOptions);
+            if (afterRowTakeover) {
+              abortAfterPinned = true;
+              preserveUserSelection =
+                afterRowTakeover === "new_user_interaction";
+              summary.abortedReason = afterRowTakeover;
+              break;
+            }
+          }
         }
       }
     } finally {
-      if (context?.container?.isConnected) _restoreScrollContext(context);
-      _restoreEditorSelectionContext(editorContext);
-      _settleFocusAfterAutomation(editorContext || context, "subagent_cycle");
+      const finalTakeover = _navigationTakeoverReason(navigationOptions);
+      if (finalTakeover) {
+        summary.abortedReason = finalTakeover;
+        if (finalTakeover === "new_user_interaction") {
+          preserveUserSelection = true;
+        }
+      }
+      if (!preserveUserSelection && context?.container?.isConnected) {
+        _restoreScrollContext(context);
+      }
+      if (!preserveUserSelection) {
+        const editorRestored = await _restoreEditorSelectionContext(
+          editorContext,
+          restorationOptions
+        );
+        if (editorRestored.preserved) {
+          preserveUserSelection = true;
+          summary.abortedReason = editorRestored.reason;
+        } else if (!editorRestored.ok) {
+          summary.trayMisses++;
+          _queueEvent({
+            type: "navigation_restore",
+            ok: false,
+            reason: editorRestored.reason,
+          });
+        }
+      }
+      if (sidebarContext && !sidebarRestored && !preserveUserSelection) {
+        const restored = await _restoreAgentSidebarSelectionContext(
+          sidebarContext,
+          { preserveOnInteraction: true }
+        );
+        sidebarRestored = restored.ok;
+        if (restored.preserved) {
+          preserveUserSelection = true;
+          summary.abortedReason = "new_user_interaction";
+        } else if (!restored.ok) {
+          summary.pinnedMisses++;
+        }
+      }
+      if (!preserveUserSelection) {
+        const outerRestored = await _restoreEditorSelectionContext(
+          outerEditorContext,
+          restorationOptions
+        );
+        if (outerRestored.preserved) {
+          preserveUserSelection = true;
+          summary.abortedReason = outerRestored.reason;
+        } else if (!outerRestored.ok) {
+          summary.pinnedMisses++;
+          _queueEvent({
+            type: "navigation_restore",
+            ok: false,
+            reason: outerRestored.reason,
+          });
+        }
+      }
+      _settleFocusAfterAutomation(
+        outerEditorContext || editorContext || context,
+        "subagent_cycle"
+      );
+      state.navigationApprovalScope = null;
       state.cycleActive = false;
       state.lastCycle = {
         ...summary,
@@ -1637,7 +2533,9 @@
           summary.failed > 0 ||
           summary.misses > 0 ||
           summary.trayFailed > 0 ||
-          summary.trayMisses > 0;
+          summary.trayMisses > 0 ||
+          summary.pinnedFailed > 0 ||
+          summary.pinnedMisses > 0;
         _scheduleSubagentCycle(
           needsSoonerRetry ? 2000 : CYCLE_AUTOMATIC_INTERVAL_MS
         );
@@ -1662,6 +2560,12 @@
     const tasks = Array.from(state.subagents.values()).map(_sanitizeSubagentRecord);
     const trayEntries = _runningSubagentTrayEntries({ bounded: false });
     const trayAttempts = Array.from(state.trayApprovalAttempts.values());
+    const pinnedEntries = _pinnedAgentEntries({
+      bounded: false,
+      includeAmbiguous: true,
+      includeSelected: true,
+    });
+    const pinnedAttempts = Array.from(state.pinnedApprovalAttempts.values());
     const counts = {
       active: tasks.filter((task) => ACTIVE_SUBAGENT_STATUSES.has(task.status)).length,
       waiting: tasks.filter((task) => task.status === "approval_pending").length,
@@ -1684,6 +2588,17 @@
         attempts: state.totalTrayApprovalAttempts,
         confirmed: state.totalTrayConfirmedApprovals,
         failed: trayAttempts.filter((entry) => entry.failed).length,
+      },
+      pinned: {
+        total: pinnedEntries.length,
+        active: pinnedEntries.filter((entry) => entry.active).length,
+        eligible: pinnedEntries.filter((entry) => !entry.ambiguous).length,
+        ambiguous: pinnedEntries.filter((entry) => entry.ambiguous).length,
+        visits: state.totalPinnedVisits,
+        attempts: state.totalPinnedApprovalAttempts,
+        confirmed: state.totalPinnedConfirmedApprovals,
+        failed: pinnedAttempts.filter((entry) => entry.failed).length,
+        lastRestore: state.lastPinnedRestore,
       },
       lastCycle: state.lastCycle,
       virtualizer: virtualizer.ok
@@ -2180,7 +3095,15 @@
   }
 
   function _isCycleOwnedSubagentCandidate(btn) {
-    if (!state.cycleEnabled || !btn?.el) return false;
+    if (!btn?.el) return false;
+    const navigationScope = state.navigationApprovalScope;
+    if (state.cycleActive && navigationScope) {
+      // Portal/modal controls can be mounted under document.body with no
+      // editor-group ancestor. While navigation owns a target, fail closed by
+      // withholding every ordinary-scanner candidate until restoration.
+      return true;
+    }
+    if (!state.cycleEnabled) return false;
     const row = btn.el.closest(SUBAGENT_ROW_SELECTOR);
     return !!_taskForRow(row);
   }
@@ -2779,6 +3702,7 @@
       cycleActive: state.cycleActive,
       subagentCounts: registry.counts,
       subagentTray: registry.tray,
+      pinnedAgents: registry.pinned,
       activeFocusKind: _focusKind(document.activeElement),
       cycleFocusBlockReason: document.hasFocus()
         ? _activeEditingSurfaceBlockReason()

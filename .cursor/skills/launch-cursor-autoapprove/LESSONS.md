@@ -199,11 +199,35 @@
   the counts remained one. Inactive pinned agents therefore have no approval
   buttons available for a DOM injector to click.
 
-- **Do not call row cycling simultaneous approval**: Clicking each sidebar row
-  could expose and approve chats sequentially, but it changes the user's active
-  conversation, depends on unstable sidebar selectors, and can race with user
-  input. Treat that as a separate opt-in design, not an extension of the
-  current selected-chat injector.
+- **Pinned row cycling is sequential, never simultaneous**: Clicking each
+  sidebar row exposes one chat at a time. Automatic navigation must therefore
+  target only active unselected pinned rows while the Agent Window is
+  unfocused. A focused-window `cycle --once` is an explicit bounded test, not
+  background behavior.
+
+- **Top-level navigation needs exact restoration identity**: Use the exact
+  `Pinned` section, a normalized title unique across the rendered Agent
+  sidebar, `data-selected`, and matching selected editor resource. Never trust
+  a retained sidebar node after navigation; re-resolve the unique title and
+  Pinned-section membership immediately before every visit, then fail closed
+  on title/resource drift. Restore scroll against the remounted conversation
+  rather than a disconnected pre-navigation container.
+
+- **Refresh nested recovery after switching top-level agents**: Selecting a
+  pinned row replaces the mounted conversation, invalidating tray elements and
+  virtual-row references. Restore the original agent and rediscover nested
+  rows/tray entries before continuing the cycle.
+
+- **A newer user selection outranks automation restoration**: Capture an
+  interaction generation before top-level navigation. If it changes, abort the
+  entire cycle, preserve the user's current sidebar/tab/scroll selection, and
+  skip all remaining pinned, tray, and virtual-row navigation. Apply the same
+  guard while mounting, confirming, and restoring every path. A focus-only
+  transition may restore automation-owned state, but must still end that cycle.
+
+- **Give navigation paths independent budgets**: A slow pinned visit must not
+  consume the time reserved for tray or virtual-row recovery. Bound pinned
+  work separately and rotate its cursor across cycles.
 
 ## Running-Subagent Tray Recovery
 
@@ -243,12 +267,33 @@
   scan. Record the no-candidate reason, wait duration, and count of raw approval
   controls without persisting prompt content.
 
+- **Loss of eligibility is not approval confirmation**: A clicked control may
+  become disabled, hidden, covered, or briefly detached while the prompt
+  remains pending. Confirm against raw control presence over consecutive final
+  checks, not against the filtered set of currently clickable candidates. If a
+  framework reuses the same node, compare its current label and prompt identity
+  instead of treating connectedness alone as pending.
+
+- **Navigation ownership spans mount through verified restoration**:
+  Mutation-driven ordinary scans can run before a selected editor finishes
+  mounting and after synchronous restoration clicks are dispatched. Acquire
+  scoped ownership before navigation, then retain it until sidebar/resource
+  identity and selected tabs are observed restored so another click path cannot
+  race or retry concurrently. Body-level portal controls have no editor-group
+  ancestor, so fail closed by withholding every ordinary-scanner candidate
+  while navigation ownership is active.
+
 ## Focus Preservation During Recovery
 
 - **A start-only interaction guard is not enough**: Even a 150 ms approval
   cycle can overlap a user moving from chat to the terminal. Track a monotonic
   interaction generation through the entire asynchronous cycle, not only the
   time since the last input at cycle start.
+
+- **A native `scroll` event is not necessarily user input**: Cursor transcript
+  auto-follow and programmatic `scrollTop` changes can emit trusted scroll
+  events after the write. Track wheel, pointer, and keyboard intent instead;
+  otherwise normal output falsely aborts navigation as a user takeover.
 
 - **Never restore stale focus from multiple owners**: Scroll restoration and
   tab restoration both calling `focus()` can overwrite a newer user choice.
@@ -268,6 +313,12 @@
   immediately and once more after a short delay, but re-resolve the latest user
   interaction before the delayed attempt so the correction cannot itself steal
   focus.
+
+- **Rollback only automation's scroll contribution on takeover**: User input
+  can arrive while virtual-row materialization is awaiting a mount. Record the
+  actual programmatic scroll delta and subtract that delta from the current
+  position on takeover. This removes automation's movement while preserving
+  any relative wheel/keyboard movement the user added afterward.
 
 ## Harness Engineering
 

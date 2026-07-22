@@ -22,8 +22,9 @@ lesson_extracted: true
   re-enable command.
 - Preserve exact-row identity, bounded cycle duration/task counts, interaction
   guards, scroll/focus restoration, and renderer circuit breakers.
-- Keep Agent Window and top-level sidebar-conversation cycling deferred and
-  separate from selected-parent nested-subagent recovery.
+- Keep Agent Window and top-level sidebar-conversation cycling separate from
+  selected-parent nested-subagent recovery. Issue 014 later added a bounded,
+  background-only path for active pinned rows.
 
 ## Verification
 

@@ -48,10 +48,10 @@ class InjectorSourceTests(unittest.TestCase):
         ownership_start = source.index("function _isCycleOwnedSubagentCandidate(")
         ownership_end = source.index("\n  function ", ownership_start)
         ownership = source[ownership_start:ownership_end]
-        self.assertIn(
-            "if (!state.cycleEnabled || !btn?.el) return false;",
-            ownership,
-        )
+        self.assertIn("if (!btn?.el) return false;", ownership)
+        self.assertIn("if (state.cycleActive && navigationScope)", ownership)
+        self.assertNotIn("navigationScope.group.contains(btn.el)", ownership)
+        self.assertIn("if (!state.cycleEnabled) return false;", ownership)
         self.assertIn("return !!_taskForRow(row);", ownership)
 
         scanner_start = source.index("function _checkAndClickImpl(")
@@ -81,6 +81,16 @@ class InjectorSourceTests(unittest.TestCase):
             "eligible: candidates.filter((c) => c.reason !== null && !c.cycleOwned),",
             debug_snapshot,
         )
+        navigation_start = source.index("async function _attemptNavigatedApproval(")
+        navigation_end = source.index("\n  async function ", navigation_start)
+        navigation_attempt = source[navigation_start:navigation_end]
+        cycle_start = source.index("async function runSubagentCycle(")
+        cycle_end = source.index("\n  function ", cycle_start)
+        cycle = source[cycle_start:cycle_end]
+        self.assertIn("state.navigationApprovalScope = {", navigation_attempt)
+        self.assertNotIn("state.navigationApprovalScope = null", navigation_attempt)
+        self.assertIn("state.navigationApprovalScope = null;", cycle)
+        self.assertIn("function _beginNavigationApprovalScope(", source)
 
     def test_scanner_skips_cooling_candidates_before_selecting_one(self) -> None:
         source = INJECTOR_PATH.read_text()
@@ -131,7 +141,7 @@ class InjectorSourceTests(unittest.TestCase):
         candidate_wait_start = source.index("function _waitForTrayCandidates(")
         candidate_wait_end = source.index("\n  function ", candidate_wait_start)
         wait_for_candidate = source[candidate_wait_start:candidate_wait_end]
-        attempt_start = source.index("async function _attemptTrayApproval(")
+        attempt_start = source.index("async function _attemptNavigatedApprovalImpl(")
         attempt_end = source.index("\n  function ", attempt_start)
         attempt = source[attempt_start:attempt_end]
         eligibility_start = source.index("function _trayEligibilityReason(")
@@ -154,7 +164,7 @@ class InjectorSourceTests(unittest.TestCase):
             "const waitResult = await _waitForTrayCandidates(target);",
             attempt,
         )
-        self.assertIn('type: "tray_no_candidate"', attempt)
+        self.assertIn("type: `${source}_no_candidate`", attempt)
         self.assertIn("group?.contains(candidate.el)", tray_eligibility)
         self.assertIn(
             "hasNearbyDismissal(candidate.el, { allowExcluded: true })",
@@ -164,18 +174,18 @@ class InjectorSourceTests(unittest.TestCase):
             "const match = matchesApproval(el, { allowExcluded: true });",
             source,
         )
-        self.assertIn("const trayEntries = _runningSubagentTrayEntries();", cycle)
-        self.assertIn("await _visitSubagentTrayEntry(entry);", cycle)
+        self.assertIn("let trayEntries = _runningSubagentTrayEntries();", cycle)
+        self.assertIn("await _visitSubagentTrayEntry(", cycle)
         self.assertLess(
             cycle.index("for (const entry of trayEntries)"),
             cycle.index("if (!context && records.length > 0)"),
         )
-        self.assertIn("_restoreEditorSelectionContext(editorContext);", cycle)
+        self.assertIn("await _restoreEditorSelectionContext(", cycle)
         self.assertIn("_activateEditorTab(tab);", source)
 
     def test_tray_approval_retries_are_bounded(self) -> None:
         source = INJECTOR_PATH.read_text()
-        attempt_start = source.index("async function _attemptTrayApproval(")
+        attempt_start = source.index("async function _attemptNavigatedApprovalImpl(")
         attempt_end = source.index("\n  function ", attempt_start)
         attempt = source[attempt_start:attempt_end]
 
@@ -184,7 +194,108 @@ class InjectorSourceTests(unittest.TestCase):
             attempt,
         )
         self.assertIn("previous.failed = true;", attempt)
-        self.assertIn('reason: "tray_retry_exhausted"', attempt)
+        self.assertIn("reason: `${source}_retry_exhausted`", attempt)
+        self.assertIn("state.pinnedApprovalAttempts", attempt)
+        self.assertIn("state.trayApprovalAttempts", attempt)
+
+    def test_cycle_visits_and_restores_pinned_top_level_agents(self) -> None:
+        source = INJECTOR_PATH.read_text()
+        discovery_start = source.index("function _pinnedAgentEntries(")
+        discovery_end = source.index("\n  function ", discovery_start)
+        discovery = source[discovery_start:discovery_end]
+        visit_start = source.index("async function _visitPinnedAgentEntry(")
+        visit_end = source.index("\n  function ", visit_start)
+        visit = source[visit_start:visit_end]
+        restore_start = source.index(
+            "async function _restoreAgentSidebarSelectionContext("
+        )
+        restore_end = source.index("\n  function ", restore_start)
+        restore = source[restore_start:restore_end]
+        cycle_start = source.index("async function runSubagentCycle(")
+        cycle_end = source.index("\n  function ", cycle_start)
+        cycle = source[cycle_start:cycle_end]
+        wait_start = source.index("function _waitForTrayCandidates(")
+        wait_end = source.index("\n  function ", wait_start)
+        candidate_wait = source[wait_start:wait_end]
+        raw_check_start = source.index(
+            "function _rawNavigatedApprovalStillPresent("
+        )
+        raw_check_end = source.index("\n  function ", raw_check_start)
+        raw_check = source[raw_check_start:raw_check_end]
+
+        self.assertIn("PINNED_AGENT_SECTION_PATTERN.test(sectionTitle)", discovery)
+        self.assertIn('item.getAttribute("data-selected") === "true"', discovery)
+        self.assertIn("!!item.querySelector(PINNED_AGENT_ACTIVE_SELECTOR)", discovery)
+        self.assertIn(
+            "entry.ambiguous = titleCounts.get(normalizeLabel(entry.title)) !== 1",
+            discovery,
+        )
+        self.assertIn("const titleCounts = _agentSidebarTitleCounts();", discovery)
+        self.assertIn("raw.filter((entry) => !entry.ambiguous)", discovery)
+        self.assertIn("_resolvePinnedAgentEntry(entry.title", visit)
+        self.assertGreaterEqual(visit.count("_resolvePinnedAgentEntry("), 2)
+        self.assertIn("_activateAgentSidebarRow(resolved.item);", visit)
+        self.assertLess(
+            visit.index("_beginNavigationApprovalScope("),
+            visit.index("_activateAgentSidebarRow(resolved.item);"),
+        )
+        self.assertIn("_navigationTakeoverReason(options)", visit)
+        self.assertIn("CYCLE_PINNED_MOUNT_TIMEOUT_MS", visit)
+        self.assertIn("_navigationTakeoverReason(target)", candidate_wait)
+        self.assertIn("target.selectionElement.getAttribute", source)
+        self.assertIn("await _attemptNavigatedApproval(", visit)
+        self.assertIn("_uniqueAgentSidebarRow(context.title)", restore)
+        self.assertIn("_activateAgentSidebarRow(row);", restore)
+        self.assertIn("selected.targetKey !== context.resourceKey", restore)
+        self.assertIn("shouldPreserveUserSelection()", restore)
+        self.assertIn("normalizeLabel(text) !== normalizeLabel(candidate.text)", raw_check)
+        self.assertNotIn("isVisible(", raw_check)
+        self.assertNotIn("isClickable(", raw_check)
+        self.assertIn("activeOnly: !explicit", cycle)
+        self.assertIn("if (!explicit && document.hasFocus()) pinnedEntries = [];", cycle)
+        self.assertIn("await _visitPinnedAgentEntry(entry, {", cycle)
+        self.assertIn('if (result.outcome === "paused") {', cycle)
+        self.assertIn("preserveUserSelection = true;", cycle)
+        self.assertIn("if (!abortAfterPinned) {", cycle)
+        self.assertIn("CYCLE_PINNED_MAX_DURATION_MS", cycle)
+        self.assertIn("const nestedStartedPerformance = performance.now();", cycle)
+        self.assertIn("{ preserveOnInteraction: true }", cycle)
+        self.assertIn("_visitSubagentTrayEntry(", cycle)
+        self.assertIn("navigationOptions", cycle)
+        pinned_loop = cycle.index("for (const entry of pinnedEntries)")
+        self.assertLess(
+            pinned_loop,
+            cycle.index("_getVirtualizerSnapshot(true);", pinned_loop),
+        )
+
+    def test_navigated_confirmation_requires_raw_control_absence(self) -> None:
+        source = INJECTOR_PATH.read_text()
+        attempt_start = source.index("async function _attemptNavigatedApprovalImpl(")
+        attempt_end = source.index("\n  function ", attempt_start)
+        attempt = source[attempt_start:attempt_end]
+        raw_start = source.index("function _rawNavigatedApprovalStillPresent(")
+        raw_end = source.index("\n  function ", raw_start)
+        raw_check = source[raw_start:raw_end]
+
+        self.assertIn("normalizeLabel(text) !== normalizeLabel(candidate.text)", raw_check)
+        self.assertNotIn("_trayCandidates(", raw_check)
+        self.assertIn("let consecutiveAbsentChecks = 0;", attempt)
+        self.assertIn("_rawNavigatedApprovalStillPresent(", attempt)
+        self.assertIn("if (consecutiveAbsentChecks >= 2)", attempt)
+
+    def test_row_materialization_rolls_back_on_user_takeover(self) -> None:
+        source = INJECTOR_PATH.read_text()
+        materialize_start = source.index("async function _materializeSubagentRow(")
+        materialize_end = source.index("\n  function ", materialize_start)
+        materialize = source[materialize_start:materialize_end]
+        attempt_start = source.index("async function _attemptSubagentApproval(")
+        attempt_end = source.index("\n  function ", attempt_start)
+        attempt = source[attempt_start:attempt_end]
+
+        self.assertIn("_navigationTakeoverReason(options)", materialize)
+        self.assertIn("result.scrollDelta =", materialize)
+        self.assertIn("_rollbackMaterializationScroll(context, result);", materialize)
+        self.assertIn("_rollbackMaterializationScroll(context, materialized);", attempt)
 
     def test_automatic_cycle_pauses_while_terminal_or_editor_is_focused(self) -> None:
         source = INJECTOR_PATH.read_text()
@@ -194,6 +305,9 @@ class InjectorSourceTests(unittest.TestCase):
         block_start = source.index("function _cycleBlockReason(")
         block_end = source.index("\n  function ", block_start)
         cycle_block = source[block_start:block_end]
+        interaction_start = source.index("function _setupInteractionGuard(")
+        interaction_end = source.index("\n  function ", interaction_start)
+        interaction_guard = source[interaction_start:interaction_end]
 
         self.assertIn("textarea.xterm-helper-textarea", focus_guard)
         self.assertIn('return "terminal_focused";', focus_guard)
@@ -203,6 +317,11 @@ class InjectorSourceTests(unittest.TestCase):
             cycle_block,
         )
         self.assertIn("if (focusReason) return focusReason;", cycle_block)
+        self.assertIn(
+            '["pointerdown", "keydown", "wheel"]',
+            interaction_guard,
+        )
+        self.assertNotIn('"scroll"', interaction_guard)
 
     def test_cycle_focus_restoration_preserves_newer_user_focus(self) -> None:
         source = INJECTOR_PATH.read_text()
@@ -224,10 +343,11 @@ class InjectorSourceTests(unittest.TestCase):
         self.assertIn("FOCUS_SETTLE_DELAY_MS", restore_focus)
         self.assertNotIn(".focus(", restore_scroll)
         self.assertNotIn(".focus(", restore_tabs)
-        self.assertIn(
-            '_settleFocusAfterAutomation(editorContext || context, "subagent_cycle");',
-            cycle,
-        )
+        self.assertIn("_navigationTakeoverReason(options)", restore_tabs)
+        self.assertIn("_selectedEditorTab(group) === tab", restore_tabs)
+        self.assertIn("await _restoreEditorSelectionContext(", cycle)
+        self.assertIn("outerEditorContext || editorContext || context", cycle)
+        self.assertIn('"subagent_cycle"', cycle)
         self.assertIn(
             '_settleFocusAfterAutomation(focusContext, "direct_scan");',
             source,
@@ -285,6 +405,23 @@ class SubagentSnapshotTests(unittest.TestCase):
                 "failed": 0,
                 "prompt": "secret",
             },
+            "pinned": {
+                "total": 2,
+                "active": 1,
+                "eligible": 2,
+                "ambiguous": 0,
+                "visits": 4,
+                "attempts": 1,
+                "confirmed": 1,
+                "failed": 0,
+                "lastRestore": {
+                    "ok": True,
+                    "reason": "original_agent_restored",
+                    "ts": "2026-07-22T00:00:00Z",
+                    "prompt": "secret",
+                },
+                "titles": ["secret title"],
+            },
             "tasks": [{
                 "taskKey": "task",
                 "rowKey": "row",
@@ -306,6 +443,16 @@ class SubagentSnapshotTests(unittest.TestCase):
         self.assertEqual(clean["tasks"][0]["title"], "Safe title")
         self.assertEqual(clean["tray"]["confirmed"], 1)
         self.assertNotIn("prompt", clean["tray"])
+        self.assertEqual(clean["pinned"]["total"], 2)
+        self.assertEqual(clean["pinned"]["active"], 1)
+        self.assertEqual(clean["pinned"]["eligible"], 2)
+        self.assertEqual(clean["pinned"]["ambiguous"], 0)
+        self.assertEqual(
+            clean["pinned"]["lastRestore"]["reason"],
+            "original_agent_restored",
+        )
+        self.assertNotIn("prompt", clean["pinned"]["lastRestore"])
+        self.assertNotIn("titles", clean["pinned"])
 
     def test_sync_writes_atomic_multi_session_snapshot(self) -> None:
         exported = {

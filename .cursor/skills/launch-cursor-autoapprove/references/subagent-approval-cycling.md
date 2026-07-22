@@ -4,11 +4,11 @@
 
 **Implemented for the dedicated legacy IDE renderer.**
 
-This document describes two recovery paths: exact registered subagent rows that
-Cursor virtualized out of the parent transcript, and exact entries under the
-`N subagents running` composer tray. The implementation targets the dedicated
-**legacy IDE** window launched by this skill. Agent Window support remains a
-separate later phase.
+This document describes three recovery paths: exact registered subagent rows
+that Cursor virtualized out of the parent transcript, exact entries under the
+`N subagents running` composer tray, and active pinned top-level conversations
+in the bound Agent Window sidebar. Pinned conversations are visited
+sequentially because Cursor mounts only the selected chat.
 
 The shipped CLI is:
 
@@ -17,9 +17,9 @@ caa cycle --on|--off|--once [-w <workspace>]
 caa subagents [--json] [-w <workspace>]
 ```
 
-Automatic cycling starts ON for new `caa launch` and `caa launch-ssh` legacy
-IDE sessions. `caa cycle --off` is the explicit opt-out, and `--on` re-enables
-it. Runtime snapshots are cached and every cycle is bounded by task count and
+Automatic cycling starts ON for new `caa launch` and `caa launch-ssh`
+sessions. `caa cycle --off` is the explicit opt-out, and `--on` re-enables it.
+Runtime snapshots are cached and every cycle is bounded by task count and
 elapsed time. Scan-duration and JavaScript-heap circuit breakers turn the gate
 off if renderer work becomes unsafe.
 
@@ -61,13 +61,14 @@ file was removed after the test.
 - click only an eligible approval inside the exact registered row
 - visit exact running-subagent tray entries when parent-row recovery is
   unavailable, then scope matching to the selected child agent editor
+- visit uniquely titled active pinned top-level agents only while the window is
+  unfocused, then restore the original selected agent
 - verify the approval resolved
 - restore the user's selected tabs, scroll position, and focus
 
 ### Deferred
 
-- Agent Window target selection and its different composer anchors
-- cycling unrelated top-level sidebar conversations
+- cycling unpinned history conversations
 - approving hidden conversations simultaneously
 - invoking private Cursor approval services or replaying internal RPC
 
@@ -87,6 +88,8 @@ file was removed after the test.
    path; cycling is recovery.
 8. **Navigate narrowly**: tray recovery must resolve one exact row title to one
    selected agent tab/resource before relaxing the editor-zone exclusion.
+9. **Background-only top-level navigation**: automatic pinned cycling must not
+   change the selected conversation in a focused Agent Window.
 
 ## Identity Model
 
@@ -274,6 +277,8 @@ Run a recovery cycle when all are true:
 - gate is ON
 - cycling is enabled
 - at least one registered task is active or one exact running-tray entry exists
+- or at least one unselected pinned row has Cursor's active spinner while the
+  window is unfocused
 - no cycle is already active
 - no approval was confirmed for that task during its cooldown
 
@@ -299,9 +304,44 @@ tail, so recovery observes that exact group and waits one to 1.5 seconds for an
 eligible candidate. Within that group, exact approval labels still require a
 nearby dismissal/companion or narrow modal rule. Unrelated modals and covered
 controls block the click. Each prompt gets at most two attempts and is confirmed
-only when the candidate disappears. The cycle then restores every previously
+only when the raw control remains absent across consecutive final checks;
+temporary disabled, hidden, or covered states remain unconfirmed. The cycle then restores every previously
 selected editor tab and focus; Cursor's tab widget requires
 `mousedown`/`mouseup` before `click` for reliable restoration.
+
+### Pinned top-level Agent Window fallback
+
+The bound workbench exposes pinned conversations under the exact `Pinned`
+`.agent-sidebar-section`. Each `.agent-sidebar-cell` has a stable title for the
+current mount, `data-selected`, and an active `.spinning-loader` marker.
+Automatic cycles visit only active unselected rows while
+`document.hasFocus() === false`. Normalized titles duplicated anywhere in the
+currently rendered Agent sidebar are skipped because exact selected-tab
+confirmation would be ambiguous.
+
+Each visit requires one selected editor tab whose title exactly matches the
+sidebar row, the exact pinned row to remain selected, and its group to contain
+`div.conversations`. Candidate matching, raw-control confirmation, and the
+two-attempt cap reuse the tray-scoped policy. Restoration re-resolves the
+captured globally unique title and requires the selected tab's resource key to
+match before restoring transcript scroll, editor selection, and focus.
+Every later pinned entry is re-resolved inside the Pinned section immediately
+before navigation so an earlier remount cannot leave a stale/recycled row.
+Navigation ownership starts before the row click and ends only after selected
+sidebar/resource and tab state are observed restored. While it is active, all
+ordinary-scanner candidates are withheld because body-level portal controls
+cannot be safely attributed to an editor group.
+Pinned navigation has a separate 3.5-second budget with at most two visits per
+round-robin pass, leaving the nested path its full 10-second budget.
+`cycle --once` includes completed pinned rows so navigation/restoration can be
+tested without two live prompts.
+
+If the user focuses or interacts with the window during automatic navigation,
+abort the whole cycle across pinned, tray, and virtual-row paths. Restore only
+if no newer user interaction occurred; otherwise preserve the newer
+sidebar/tab/scroll selection and skip all remaining recovery.
+Virtual-row materialization rolls back only its recorded programmatic scroll
+delta on takeover, preserving relative movement added by the user.
 
 ### User-interaction guard
 
@@ -451,6 +491,9 @@ Add event types:
 - `tray_visit`, `tray_visit_miss`, `tray_no_candidate`
 - `tray_approval_attempted`, `tray_approval_confirmed`,
   `tray_approval_unconfirmed`
+- `pinned_visit`, `pinned_visit_miss`, `pinned_no_candidate`
+- `pinned_approval_attempted`, `pinned_approval_confirmed`,
+  `pinned_approval_unconfirmed`, `pinned_restore`
 - `cycle_finished`
 
 `caa status` should show:
@@ -489,6 +532,8 @@ command contents by default.
 - click confirmation
 - cycle scheduler and interaction guard
 - cycle/subagent status fields and event records
+- pinned-section discovery, exact selected-tab mounting, and original-agent
+  restoration
 
 ### `scripts/launcher.py`
 
@@ -548,14 +593,14 @@ Live validation on Cursor 3.12.17 mounted a child with one conversations
 surface and no input, confirmed a real `Run` approval in 101 ms, and restored
 the previous editor tab across repeated cycles.
 
-### Phase E: Agent Window adapter — deferred
+### Phase E: pinned Agent Window cycling — implemented
 
-- bind the separate Agent Window CDP target explicitly
-- add Agent Window composer anchors
-- optionally cycle top-level sidebar conversations
-
-This phase must remain opt-in until it can restore the original selected agent
-and prove that no user input is lost.
+- discover exact uniquely titled rows under the `Pinned` section
+- visit active unselected rows only when the window is unfocused
+- use exact selected-tab/editor identity and scoped approval policy
+- restore original row, transcript scroll, editor tabs, and focus
+- let explicit `cycle --once` visit one round-robin pass of up to two pinned
+  rows for bounded validation
 
 ## Verification Matrix
 
@@ -576,6 +621,9 @@ Required live cases:
 13. A running tray child has a read-only editor with no composer input.
 14. Multiple tray rows are visited round-robin and the original tabs are
     restored.
+15. Two pinned top-level rows are visited by an explicit cycle and the original
+    selected row is restored.
+16. Automatic pinned cycling skips completed rows and every focused window.
 
 For each case save:
 
@@ -612,7 +660,8 @@ after its row is already unmounted was not deterministically reproduced.
 - No prompt or command text is persisted in the registry.
 - Tray recovery is bounded, confirms disappearance, caps retries, and restores
   the selected editor tabs.
-- Agent Window behavior is not silently treated as legacy IDE behavior.
+- Pinned Agent Window recovery is bounded, background-only when automatic,
+  rejects duplicate titles, and restores the original selected agent.
 
 ## Known Risks
 
@@ -622,6 +671,8 @@ after its row is already unmounted was not deterministically reproduced.
 - A child subagent conversation ID may not be available at parent launch time.
 - Managed policy may create prompts that differ from personal configurations.
 - Hidden or minimized renderers may throttle timers.
+- Pinned-title identity and active-spinner selectors may drift between Cursor
+  versions.
 
 Mitigate with Cursor-version recording, injector hash checks, private-API shape
 validation, real-prompt fixtures, bounded retries, and fail-closed behavior.

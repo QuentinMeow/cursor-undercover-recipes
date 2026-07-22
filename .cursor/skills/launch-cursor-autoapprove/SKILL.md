@@ -25,9 +25,10 @@ description: >-
 # Launch Cursor Auto-Approve
 
 Open a dedicated Cursor window with the DOM auto-accept script injected and the
-gate ON. Two-path bounded subagent recovery also starts ON: registered
-parent-transcript row cycling plus exact navigation through the
-`N subagents running` tray. Simple commands can pause either behavior later.
+gate ON. Bounded agent recovery also starts ON: registered parent-transcript
+rows, exact navigation through the `N subagents running` tray, and sequential
+cycling across active pinned Agent Window conversations. Simple commands can
+pause either behavior later.
 
 This is the supported auto-approval skill in this repo. The older
 `cursor-autoapprove` and `personal-cursor-quickapprove` experiments were
@@ -86,9 +87,10 @@ When the user asks for auto-approval on an **SSH remote** host, run:
 Then tell the user:
 
 > A dedicated Cursor window has opened for this project with auto-approval ON.
-> Two-path subagent recovery is also ON. Move your agent work to that window. Use
-> `caa off` to pause the gate, `caa on` to resume it, `caa cycle --off` to opt
-> out of cycling, and `caa stop` to close the dedicated window when done.
+> Bounded nested and pinned-agent recovery is also ON. Move your agent work to
+> that window. Use `caa off` to pause the gate, `caa on` to resume it,
+> `caa cycle --off` to opt out of cycling, and `caa stop` to close the
+> dedicated window when done.
 
 The agent does NOT need to deactivate at end of task. The user controls the
 lifecycle with `on`/`off`/`stop`.
@@ -97,13 +99,13 @@ lifecycle with `on`/`off`/`stop`.
 
 | Command | What it does |
 |---------|-------------|
-| `launch [-w PATH] [PATH\|ALIAS] [--interval SECONDS]` | Open dedicated Cursor, inject DOM script, and turn the gate and registered nested-subagent cycling ON. Accepts a concrete path, a registered local alias, or a registered SSH folder URI alias. The fallback scan defaults to 0.5 seconds (range: 0.25–60). Auto-registers the workspace slug as an alias. Blocks only if the same workspace is already running. Multiple workspaces can run simultaneously. |
-| `launch-ssh <host> [/absolute/remote/path] [--no-preflight] [--interval SECONDS]` | Open dedicated Cursor connected to an SSH remote host (from `~/.ssh/config`), inject script, and turn the gate and registered nested-subagent cycling ON. Path-specific launches first verify the remote directory with `ssh <host> test -d <path>` so bad host/path pairs fail before creating a profile or alias. |
+| `launch [-w PATH] [PATH\|ALIAS] [--interval SECONDS]` | Open dedicated Cursor, inject DOM script, and turn the gate plus nested/pinned-agent cycling ON. Accepts a concrete path, a registered local alias, or a registered SSH folder URI alias. The fallback scan defaults to 0.5 seconds (range: 0.25–60). Auto-registers the workspace slug as an alias. Blocks only if the same workspace is already running. Multiple workspaces can run simultaneously. |
+| `launch-ssh <host> [/absolute/remote/path] [--no-preflight] [--interval SECONDS]` | Open dedicated Cursor connected to an SSH remote host (from `~/.ssh/config`), inject script, and turn the gate plus nested/pinned-agent cycling ON. Path-specific launches first verify the remote directory with `ssh <host> test -d <path>` so bad host/path pairs fail before creating a profile or alias. |
 | `on [-w PATH\|SLUG] [--interval SECONDS]` | Resume auto-clicking (`startAccept()` via CDP). An interval supplied while already ON takes effect immediately and persists for the session. Reloads stale in-window injector code when hash differs. Auto-detected if only one session, otherwise opens an interactive picker in a TTY. |
 | `off [-w PATH\|SLUG]` | Pause auto-clicking (`stopAccept()` via CDP) while keeping the dedicated window open. Auto-detected if only one session, otherwise opens an interactive picker in a TTY. |
-| `cycle --on\|--off\|--once [-w PATH\|SLUG]` | Control both default-on recovery paths: registered parent-transcript rows and exact entries in the `N subagents running` tray. Use `--off` to opt out, `--on` to re-enable, or `--once` for one bounded pass. Confirms results, caps retries, restores tabs/scroll/focus, pauses automatic navigation while terminal/editor focus is active, and fails closed on drift. |
+| `cycle --on\|--off\|--once [-w PATH\|SLUG]` | Control registered parent-transcript rows, exact `N subagents running` tray entries, and pinned top-level agents. Automatic pinned navigation visits active unselected rows in round-robin passes of up to two while the Agent Window is unfocused. `--once` runs one bounded pass, including completed rows. Confirms results, caps retries, restores the original agent/tabs/scroll/focus, and fails closed on drift. |
 | `subagents [-w PATH\|SLUG] [--json]` | Show the sanitized renderer task registry, row hints, statuses, attempts, and confirmation timestamps. |
-| `status [-w PATH\|SLUG]` | Show session details including last approved command preview. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
+| `status [-w PATH\|SLUG]` | Show session details including last approved command preview plus nested-tray and pinned-agent visit/confirmation totals. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
 | `stop [-w PATH\|SLUG] [--all]` | Pause gate, close dedicated Cursor process, and remove session when shutdown succeeds. Without `-w`, it prefers running sessions when any are alive; if none are running, it falls back to stale entries for cleanup. Use `--all` to stop every session, but do not combine `--all` with `-w` or a positional workspace. |
 | `alias [set\|remove\|list]` | Manage workspace aliases stored in `config.json`. `set <name> <path>` registers a new alias (validates the path exists and the name is not already taken). `remove <name>` deletes one. `list` shows all. |
 | `history [-w SLUG] [-n LIMIT] [--json] [--commands]` | Show durable event log of session/gate/click events. Persisted across sessions. Use `--commands` for a dedicated command-approval view with readable multiline formatting. |
@@ -155,7 +157,7 @@ use `caa --help` (or the full launcher path with `--help`).
 9. If the installed injector changed after the window was launched, `on`
    reloads the in-window script so the running window picks up the latest
    pattern fixes.
-10. Default-on subagent recovery records exact mounted task-row identity and
+10. Default-on nested recovery records exact mounted task-row identity and
     revisits registered unmounted rows through the TanStack virtualizer. As a
     backup, it visits exact running-subagent tray entries, mounts each
     read-only child editor, handles eligible approvals there, and restores the
@@ -164,18 +166,21 @@ use `caa --help` (or the full launcher path with `--help`).
     or another non-composer editor active; focus settling follows newer user
     interaction instead of restoring a stale snapshot. Use `caa cycle --off`
     for the explicit opt-out.
-11. Renderer safety bounds rate-limit mutation scans, cache private
+11. Active pinned Agent Window conversations are visited sequentially because
+    Cursor mounts only the selected conversation. Automatic visits happen only
+    while the window is unfocused, skip the selected row, reject duplicate
+    titles, and restore the original agent and scroll position. Explicit
+    `cycle --once` visits completed pinned rows too for bounded validation.
+12. Renderer safety bounds rate-limit mutation scans, cache private
     virtualizer snapshots, cap cycle duration, and turn the gate OFF after
     repeated slow scans or excessive JavaScript heap use.
 
 Inactive top-level sidebar agents are not mounted chat surfaces in Cursor
-3.12.17. The tray fallback is different: it sequentially selects nested
-children listed under `N subagents running`, confirms approvals in their
-read-only agent editors, and restores the previous editor selection. Pinned and
-unrelated top-level sidebar agents remain unsupported. Separate visible
-dedicated windows can work in parallel even when one is not OS-focused;
-minimized/hidden windows still need direct validation. Agent Window and
-top-level sidebar cycling remain deferred.
+3.12.17, so the injector cycles pinned conversations sequentially rather than
+clicking them simultaneously. The tray fallback remains distinct: it selects
+nested children listed under `N subagents running` and scans their read-only
+editors. Separate visible dedicated windows can also work in parallel even when
+one is not OS-focused; minimized/hidden windows still need direct validation.
 
 **Note on Cursor-specific preferences**: Model selection, agent mode, and
 similar UI state live in `state.vscdb` (a per-profile SQLite database) and
