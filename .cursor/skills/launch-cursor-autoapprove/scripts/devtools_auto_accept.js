@@ -60,7 +60,9 @@
   const CYCLE_MAX_TRAY_ITEMS = 8;
   const CYCLE_MAX_DURATION_MS = 10000;
   const CYCLE_TRAY_MOUNT_TIMEOUT_MS = 800;
-  const CYCLE_TRAY_SETTLE_MS = 150;
+  const CYCLE_TRAY_MIN_CANDIDATE_WAIT_MS = 1000;
+  const CYCLE_TRAY_QUIET_MS = 250;
+  const CYCLE_TRAY_CANDIDATE_TIMEOUT_MS = 1500;
   const CYCLE_TRAY_CONFIRM_DELAYS_MS = [100, 300, 600];
   const CYCLE_TRAY_MAX_ATTEMPTS = 2;
   const FOCUS_SETTLE_DELAY_MS = 300;
@@ -1278,6 +1280,78 @@
     return candidates;
   }
 
+  function _waitForTrayCandidates(target) {
+    return new Promise((resolve) => {
+      const startedAt = performance.now();
+      let lastMutationAt = startedAt;
+      let finished = false;
+      let observer = null;
+      let timer = null;
+
+      const finish = (candidates, reason) => {
+        if (finished) return;
+        finished = true;
+        if (timer) clearTimeout(timer);
+        if (observer) observer.disconnect();
+        resolve({
+          candidates,
+          reason,
+          waitedMs: Math.round(performance.now() - startedAt),
+        });
+      };
+
+      const check = () => {
+        if (finished) return;
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
+        if (
+          !target.group?.isConnected ||
+          !target.tab?.isConnected ||
+          _selectedEditorTab(target.group) !== target.tab
+        ) {
+          finish([], "selected_subagent_changed");
+          return;
+        }
+
+        const candidates = _trayCandidates(target.group, target.targetKey);
+        if (candidates.length > 0) {
+          finish(candidates, null);
+          return;
+        }
+
+        const now = performance.now();
+        const elapsed = now - startedAt;
+        if (elapsed >= CYCLE_TRAY_CANDIDATE_TIMEOUT_MS) {
+          finish([], "candidate_mount_timeout");
+          return;
+        }
+        if (
+          elapsed >= CYCLE_TRAY_MIN_CANDIDATE_WAIT_MS &&
+          now - lastMutationAt >= CYCLE_TRAY_QUIET_MS
+        ) {
+          finish([], "no_eligible_candidate");
+          return;
+        }
+        timer = setTimeout(check, 50);
+      };
+
+      observer = new MutationObserver(() => {
+        lastMutationAt = performance.now();
+        check();
+      });
+      observer.observe(target.group, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: ["class", "disabled", "aria-disabled"],
+      });
+      check();
+    });
+  }
+
   function _sameTrayApprovalStillPresent(group, candidate) {
     if (!group?.isConnected) return false;
     return _trayCandidates(group, candidate.targetKey).some(
@@ -1288,9 +1362,28 @@
   }
 
   async function _attemptTrayApproval(target) {
-    const candidates = _trayCandidates(target.group, target.targetKey);
-    if (candidates.length === 0) return { outcome: "no_candidate" };
-    const candidate = candidates[0];
+    const waitResult = await _waitForTrayCandidates(target);
+    if (waitResult.candidates.length === 0) {
+      const approvalControls = target.group?.isConnected
+        ? _trayApprovalMatches(target.group).length
+        : 0;
+      _queueEvent({
+        type: "tray_no_candidate",
+        targetKey: target.targetKey,
+        title: target.title,
+        reason: waitResult.reason,
+        waitedMs: waitResult.waitedMs,
+        approvalControls,
+      });
+      return {
+        outcome:
+          waitResult.reason === "selected_subagent_changed"
+            ? "miss"
+            : "no_candidate",
+        reason: waitResult.reason,
+      };
+    }
+    const candidate = waitResult.candidates[0];
     candidate.targetKey = target.targetKey;
     const previous = state.trayApprovalAttempts.get(candidate.fingerprint) || {
       attempts: 0,
@@ -1394,7 +1487,6 @@
       });
       return { outcome: "miss", reason: "selected_subagent_not_mounted" };
     }
-    await new Promise((resolve) => setTimeout(resolve, CYCLE_TRAY_SETTLE_MS));
     return _attemptTrayApproval({ ...selected, title: entry.title });
   }
 
