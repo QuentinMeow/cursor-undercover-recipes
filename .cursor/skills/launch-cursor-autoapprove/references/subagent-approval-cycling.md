@@ -294,10 +294,12 @@ Recovery matches the exact `N subagents running` header, visits at most eight
 and requires exactly one selected agent tab with matching title and a mounted
 conversation. The tab's resource UUID becomes the target identity.
 
-Within that one editor group, exact approval labels still require a nearby
-dismissal/companion or narrow modal rule. Unrelated modals and covered controls
-block the click. Each prompt gets at most two attempts and is confirmed only
-when the candidate disappears. The cycle then restores every previously
+The selected editor can appear before a long virtualized transcript mounts its
+tail, so recovery observes that exact group and waits one to 1.5 seconds for an
+eligible candidate. Within that group, exact approval labels still require a
+nearby dismissal/companion or narrow modal rule. Unrelated modals and covered
+controls block the click. Each prompt gets at most two attempts and is confirmed
+only when the candidate disappears. The cycle then restores every previously
 selected editor tab and focus; Cursor's tab widget requires
 `mousedown`/`mouseup` before `click` for reliable restoration.
 
@@ -446,7 +448,7 @@ Add event types:
 - `approval_attempted`
 - `approval_confirmed`
 - `approval_unconfirmed`
-- `tray_visit`, `tray_visit_miss`
+- `tray_visit`, `tray_visit_miss`, `tray_no_candidate`
 - `tray_approval_attempted`, `tray_approval_confirmed`,
   `tray_approval_unconfirmed`
 - `cycle_finished`

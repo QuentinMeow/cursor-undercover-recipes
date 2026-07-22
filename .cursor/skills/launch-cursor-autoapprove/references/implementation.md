@@ -387,19 +387,25 @@ handles those surfaces:
 4. Select one tray row and require exactly one selected agent tab whose title
    matches the row and whose group contains `div.conversations`.
 5. Use the tab's agent resource UUID as approval identity.
-6. Scan only that editor group. The editor workbench exclusion is relaxed only
+6. Wait for the selected child's transcript tail to materialize: observe only
+   that editor group, poll for an eligible candidate for at least one second, finish
+   after 250 ms of DOM quiet, and stop after 1.5 seconds or if tab identity
+   changes.
+7. Scan only that editor group. The editor workbench exclusion is relaxed only
    in this exact scope; exact labels, dismissal/companion evidence, unrelated
    modal blocking, and hit coverage remain required.
-7. Confirm the candidate disappeared and allow at most two attempts for the
+8. Confirm the candidate disappeared and allow at most two attempts for the
    same resource/prompt fingerprint.
-8. Restore the original selected tabs. Cursor's tab widget requires
+9. Restore the original selected tabs. Cursor's tab widget requires
    `mousedown`/`mouseup` before `click`; plain `HTMLElement.click()` did not
    restore selection in live testing.
-9. Settle focus through the shared focus owner described below.
+10. Settle focus through the shared focus owner described below.
 
 Tray attempts emit `tray_visit`, `tray_visit_miss`,
 `tray_approval_attempted`, `tray_approval_confirmed`, and
-`tray_approval_unconfirmed`. The normal mounted-composer scanner remains active
+`tray_approval_unconfirmed`. A visit that mounts the child but finds no eligible
+candidate emits `tray_no_candidate` with its bounded wait reason, duration, and
+raw approval-control count. The normal mounted-composer scanner remains active
 as the fast path.
 
 ### Focus-Safe Recovery

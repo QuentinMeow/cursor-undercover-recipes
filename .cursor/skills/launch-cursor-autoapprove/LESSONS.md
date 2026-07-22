@@ -231,6 +231,18 @@
   prompt changed, cap retries, and retain the interaction guard so redundancy
   does not become unbounded UI churn.
 
+- **Selected editor does not mean transcript tail mounted**: A long read-only
+  child can expose its selected tab and `div.conversations` before the pending
+  approval at the transcript tail mounts. A fixed post-navigation sleep can
+  repeatedly restore the parent too early. Observe mutations in the exact child
+  group, require a minimum candidate wait, finish after DOM quiet, and retain a
+  hard timeout plus selected-tab identity check.
+
+- **A tray visit without a candidate needs explicit telemetry**: Recording only
+  `tray_visit` makes successful navigation indistinguishable from a premature
+  scan. Record the no-candidate reason, wait duration, and count of raw approval
+  controls without persisting prompt content.
+
 ## Focus Preservation During Recovery
 
 - **A start-only interaction guard is not enough**: Even a 150 ms approval

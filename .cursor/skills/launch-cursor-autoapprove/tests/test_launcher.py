@@ -128,6 +128,12 @@ class InjectorSourceTests(unittest.TestCase):
         wait_start = source.index("async function _waitForSelectedSubagentGroup(")
         wait_end = source.index("\n  function ", wait_start)
         wait_for_group = source[wait_start:wait_end]
+        candidate_wait_start = source.index("function _waitForTrayCandidates(")
+        candidate_wait_end = source.index("\n  function ", candidate_wait_start)
+        wait_for_candidate = source[candidate_wait_start:candidate_wait_end]
+        attempt_start = source.index("async function _attemptTrayApproval(")
+        attempt_end = source.index("\n  function ", attempt_start)
+        attempt = source[attempt_start:attempt_end]
         eligibility_start = source.index("function _trayEligibilityReason(")
         eligibility_end = source.index("\n  function ", eligibility_start)
         tray_eligibility = source[eligibility_start:eligibility_end]
@@ -140,6 +146,15 @@ class InjectorSourceTests(unittest.TestCase):
         self.assertIn("CYCLE_MAX_TRAY_ITEMS", tray_discovery)
         self.assertIn('group.querySelector("div.conversations")', wait_for_group)
         self.assertNotIn('group.querySelector("div.full-input-box")', wait_for_group)
+        self.assertIn("new MutationObserver(", wait_for_candidate)
+        self.assertIn("CYCLE_TRAY_MIN_CANDIDATE_WAIT_MS", wait_for_candidate)
+        self.assertIn("CYCLE_TRAY_QUIET_MS", wait_for_candidate)
+        self.assertIn("CYCLE_TRAY_CANDIDATE_TIMEOUT_MS", wait_for_candidate)
+        self.assertIn(
+            "const waitResult = await _waitForTrayCandidates(target);",
+            attempt,
+        )
+        self.assertIn('type: "tray_no_candidate"', attempt)
         self.assertIn("group?.contains(candidate.el)", tray_eligibility)
         self.assertIn(
             "hasNearbyDismissal(candidate.el, { allowExcluded: true })",
