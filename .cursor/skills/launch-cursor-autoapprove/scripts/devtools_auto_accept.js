@@ -33,7 +33,7 @@
   const LOG_PREFIX = "[autoAccept]";
   const SCRIPT_HASH = globalThis.__cursorAutoAcceptScriptHash || "unknown";
   const REPO_SLUG = globalThis.__cursorAutoAcceptRepoSlug || "workspace";
-  const STRATEGY_VERSION = "2026-07-agent-cycle-v4-pinned";
+  const STRATEGY_VERSION = "2026-07-agent-cycle-v5-collapsed-tray";
   const TITLE_SYNC_INTERVAL = 3000;
   /** Faster ping while discreet so Cursor cannot show a fresh native title for long. */
   const TITLE_SYNC_INTERVAL_SHARE_SAFE = 500;
@@ -66,7 +66,12 @@
   const CYCLE_MAX_TRAY_ITEMS = 8;
   const CYCLE_MAX_PINNED_AGENTS = 2;
   const CYCLE_PINNED_MAX_DURATION_MS = 3500;
+  const CYCLE_TRAY_MAX_DURATION_MS = 6000;
   const CYCLE_MAX_DURATION_MS = 10000;
+  const CYCLE_TRAY_EXPAND_TIMEOUT_MS = 800;
+  const CYCLE_TRAY_EXPAND_RETRY_BASE_MS = 2000;
+  const CYCLE_TRAY_EXPAND_RETRY_MAX_MS = 30000;
+  const CYCLE_TRAY_EXPAND_MAX_FAILURES = 5;
   const CYCLE_TRAY_MOUNT_TIMEOUT_MS = 800;
   const CYCLE_PINNED_MOUNT_TIMEOUT_MS = 1500;
   const CYCLE_TRAY_MIN_CANDIDATE_WAIT_MS = 1000;
@@ -190,6 +195,9 @@
     cycleCursor: 0,
     trayCursor: 0,
     pinnedAgentCursor: 0,
+    trayParentIds: new WeakMap(),
+    nextTrayParentId: 1,
+    trayExpansionRetry: null,
     trayApprovalAttempts: new Map(),
     pinnedApprovalAttempts: new Map(),
     totalTrayVisits: 0,
@@ -1230,9 +1238,21 @@
     return rotated.slice(0, CYCLE_MAX_PINNED_AGENTS);
   }
 
-  function _runningSubagentTrayEntries(options = {}) {
-    const entries = [];
-    const seen = new Set();
+  function _subagentTrayHeaderExpanded(header, block) {
+    if (block.querySelector(SUBAGENT_TRAY_ITEM_SELECTOR)) return true;
+    const ariaExpanded = header.getAttribute("aria-expanded");
+    if (ariaExpanded === "true") return true;
+    if (ariaExpanded === "false") return false;
+    const chevron = header.querySelector(".codicon-chevron-right");
+    if (!chevron) return null;
+    const transform = String(chevron?.style?.transform || "").trim();
+    if (/rotate\(\s*(?:90|-270)deg\s*\)/i.test(transform)) return true;
+    if (/rotate\(\s*(?:0|360)deg\s*\)/i.test(transform)) return false;
+    return null;
+  }
+
+  function _runningSubagentTrayHeaders() {
+    const headers = [];
     const labels = document.querySelectorAll(".composer-toolbar-section-header-label");
     for (const label of labels) {
       const headerText = String(label.innerText || label.textContent || "")
@@ -1242,8 +1262,31 @@
       const header = label.closest(".composer-toolbar-section-header");
       const block = header?.parentElement?.parentElement;
       if (!header || !block || !isVisible(header)) continue;
+      headers.push({
+        header,
+        block,
+        headerText,
+        advertised: Number.parseInt(headerText, 10) || 0,
+        mounted: block.querySelectorAll(SUBAGENT_TRAY_ITEM_SELECTOR).length,
+        expanded: _subagentTrayHeaderExpanded(header, block),
+      });
+    }
+    return headers;
+  }
+
+  function _runningSubagentTrayEntries(options = {}) {
+    const entries = [];
+    const seen = new Set();
+    for (const { block, headerText } of _runningSubagentTrayHeaders()) {
       for (const item of block.querySelectorAll(SUBAGENT_TRAY_ITEM_SELECTOR)) {
-        if (seen.has(item) || !item.isConnected || !isClickable(item)) continue;
+        if (
+          seen.has(item) ||
+          !item.isConnected ||
+          !isVisible(item) ||
+          !isClickable(item)
+        ) {
+          continue;
+        }
         const titleNode = item.querySelector(SUBAGENT_TRAY_TITLE_SELECTOR);
         const title = String(titleNode?.innerText || titleNode?.textContent || "")
           .trim()
@@ -1254,13 +1297,342 @@
         entries.push({ item, title, headerText });
       }
     }
-    if (options.bounded === false || entries.length <= CYCLE_MAX_TRAY_ITEMS) {
-      return entries;
-    }
+    return options.bounded === false
+      ? entries
+      : _boundedRunningSubagentTrayEntries(entries);
+  }
+
+  function _boundedRunningSubagentTrayEntries(entries) {
+    if (entries.length === 0) return entries;
     const start = state.trayCursor % entries.length;
     const rotated = entries.slice(start).concat(entries.slice(0, start));
-    state.trayCursor = (start + CYCLE_MAX_TRAY_ITEMS) % entries.length;
     return rotated.slice(0, CYCLE_MAX_TRAY_ITEMS);
+  }
+
+  function _advanceRunningSubagentTrayCursor(entryCount, processedCount) {
+    if (entryCount <= 0 || processedCount <= 0) return;
+    const start = state.trayCursor % entryCount;
+    state.trayCursor =
+      (start + Math.min(processedCount, entryCount)) % entryCount;
+  }
+
+  function _uniquelyTitledRunningSubagentTrayEntries(entries) {
+    const titleCounts = new Map();
+    for (const entry of entries) {
+      const title = normalizeLabel(entry.title);
+      titleCounts.set(title, (titleCounts.get(title) || 0) + 1);
+    }
+    return entries.filter(
+      (entry) => titleCounts.get(normalizeLabel(entry.title)) === 1
+    );
+  }
+
+  function _subagentTrayExpansionSignature(header) {
+    const parentGroup = header.header.closest(".editor-group-container");
+    const parentTab = _selectedEditorTab(parentGroup);
+    let parentIdentity = _editorTabResourceKey(parentTab);
+    if (!parentIdentity && parentTab) {
+      parentIdentity = state.trayParentIds.get(parentTab);
+      if (!parentIdentity) {
+        parentIdentity = `dom-parent-${state.nextTrayParentId++}`;
+        state.trayParentIds.set(parentTab, parentIdentity);
+      }
+    }
+    return [
+      parentIdentity || "unknown-parent",
+      normalizeLabel(header.headerText),
+      header.advertised,
+    ].join("|");
+  }
+
+  function _subagentTrayExpansionBackoff(header) {
+    const retry = state.trayExpansionRetry;
+    const signature = _subagentTrayExpansionSignature(header);
+    if (!retry || retry.signature !== signature) return null;
+    if (retry.failures >= CYCLE_TRAY_EXPAND_MAX_FAILURES) {
+      return { ...retry, exhausted: true, retryAfterMs: 0 };
+    }
+    const retryAfterMs = Math.max(0, retry.nextRetryAt - Date.now());
+    return retryAfterMs > 0
+      ? { ...retry, exhausted: false, retryAfterMs }
+      : null;
+  }
+
+  function _recordSubagentTrayExpansionFailure(header, reason) {
+    const signature = _subagentTrayExpansionSignature(header);
+    const previous =
+      state.trayExpansionRetry?.signature === signature
+        ? state.trayExpansionRetry
+        : null;
+    const failures = (previous?.failures || 0) + 1;
+    const delayMs = Math.min(
+      CYCLE_TRAY_EXPAND_RETRY_MAX_MS,
+      CYCLE_TRAY_EXPAND_RETRY_BASE_MS * 2 ** (failures - 1)
+    );
+    state.trayExpansionRetry = {
+      signature,
+      failures,
+      reason,
+      nextRetryAt: Date.now() + delayMs,
+    };
+    return {
+      delayMs,
+      failures,
+      exhausted: failures >= CYCLE_TRAY_EXPAND_MAX_FAILURES,
+    };
+  }
+
+  function _clearSubagentTrayExpansionFailure() {
+    state.trayExpansionRetry = null;
+  }
+
+  function _subagentTrayEntriesReady(header, entries) {
+    return (
+      header.advertised > 0 &&
+      header.mounted >= header.advertised &&
+      entries.length > 0
+    );
+  }
+
+  function _captureSubagentTrayExpansionContext() {
+    const headers = _runningSubagentTrayHeaders();
+    if (headers.length === 0) {
+      return { ok: true, present: false, expanded: false };
+    }
+    if (headers.length !== 1) {
+      return {
+        ok: false,
+        present: true,
+        expanded: null,
+        reason: "tray_header_ambiguous",
+      };
+    }
+    if (headers[0].expanded === null) {
+      return {
+        ok: false,
+        present: true,
+        expanded: null,
+        reason: "tray_expansion_state_unknown",
+      };
+    }
+    const parentGroup = headers[0].header.closest(".editor-group-container");
+    const parentTab = _selectedEditorTab(parentGroup);
+    if (!parentGroup || !parentTab) {
+      return {
+        ok: false,
+        present: true,
+        expanded: headers[0].expanded,
+        reason: "tray_parent_identity_unknown",
+      };
+    }
+    return {
+      ok: true,
+      present: true,
+      expanded: headers[0].expanded,
+      parentGroup,
+      parentTab,
+      parentResourceKey: _editorTabResourceKey(parentTab),
+      interactionGeneration: state.interactionGeneration,
+    };
+  }
+
+  async function _ensureRunningSubagentTrayExpanded(options = {}) {
+    let headers = _runningSubagentTrayHeaders();
+    if (headers.length === 0) {
+      _clearSubagentTrayExpansionFailure();
+      return { ok: true, entries: [], reason: "tray_header_gone" };
+    }
+    if (headers.length !== 1) {
+      return { ok: false, entries: [], reason: "tray_header_ambiguous" };
+    }
+    if (headers[0].expanded === null) {
+      return { ok: false, entries: [], reason: "tray_expansion_state_unknown" };
+    }
+
+    let entries = _runningSubagentTrayEntries({ bounded: false });
+    if (_subagentTrayEntriesReady(headers[0], entries)) {
+      _clearSubagentTrayExpansionFailure();
+      return { ok: true, entries, expandedByAutomation: false };
+    }
+
+    const backoff = _subagentTrayExpansionBackoff(headers[0]);
+    if (backoff) {
+      return {
+        ok: false,
+        entries: [],
+        reason: backoff.exhausted
+          ? "tray_expand_retry_exhausted"
+          : "tray_expand_backoff",
+        retryAfterMs: backoff.retryAfterMs,
+      };
+    }
+
+    const takeoverReason = _navigationTakeoverReason(options);
+    if (takeoverReason) {
+      return { ok: false, paused: true, entries: [], reason: takeoverReason };
+    }
+    let expandedByAutomation = false;
+    if (!headers[0].expanded) {
+      _activateNavigationElement(headers[0].header);
+      expandedByAutomation = true;
+      _queueEvent({
+        type: "tray_expand",
+        advertised: headers[0].advertised,
+      });
+    }
+
+    const deadline = performance.now() + CYCLE_TRAY_EXPAND_TIMEOUT_MS;
+    while (performance.now() <= deadline) {
+      const pausedReason = _navigationTakeoverReason(options);
+      if (pausedReason) {
+        return {
+          ok: false,
+          paused: true,
+          entries: [],
+          reason: pausedReason,
+          expandedByAutomation,
+        };
+      }
+      headers = _runningSubagentTrayHeaders();
+      if (headers.length === 0) {
+        _clearSubagentTrayExpansionFailure();
+        return {
+          ok: true,
+          entries: [],
+          reason: "tray_header_gone",
+          expandedByAutomation,
+        };
+      }
+      if (headers.length !== 1 || headers[0].expanded === null) {
+        return {
+          ok: false,
+          entries: [],
+          reason:
+            headers.length !== 1
+              ? "tray_header_ambiguous"
+              : "tray_expansion_state_unknown",
+          expandedByAutomation,
+        };
+      }
+      entries = _runningSubagentTrayEntries({ bounded: false });
+      if (_subagentTrayEntriesReady(headers[0], entries)) {
+        _clearSubagentTrayExpansionFailure();
+        return { ok: true, entries, expandedByAutomation };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    const failureReason =
+      headers[0].mounted > 0
+        ? "tray_items_partially_mounted"
+        : "tray_items_not_mounted";
+    const retry = _recordSubagentTrayExpansionFailure(
+      headers[0],
+      failureReason
+    );
+    _queueEvent({
+      type: "tray_expand_miss",
+      reason: failureReason,
+      expandedByAutomation,
+      retryAfterMs: retry.exhausted ? null : retry.delayMs,
+      failures: retry.failures,
+      exhausted: retry.exhausted,
+    });
+    return {
+      ok: false,
+      entries: [],
+      reason: failureReason,
+      expandedByAutomation,
+    };
+  }
+
+  async function _resolveRunningSubagentTrayEntry(entry, options = {}) {
+    const prepared = await _ensureRunningSubagentTrayExpanded(options);
+    if (!prepared.ok) return { ...prepared, entry: null };
+    const wanted = normalizeLabel(entry.title);
+    const matches = prepared.entries.filter(
+      (candidate) => normalizeLabel(candidate.title) === wanted
+    );
+    if (matches.length !== 1) {
+      return {
+        ok: false,
+        entry: null,
+        reason:
+          matches.length === 0
+            ? "tray_item_missing_after_expand"
+            : "tray_item_title_ambiguous",
+      };
+    }
+    return {
+      ok: true,
+      entry: matches[0],
+      expandedByAutomation: prepared.expandedByAutomation,
+    };
+  }
+
+  async function _restoreSubagentTrayExpansionContext(context, options = {}) {
+    if (!context || context.present === false) {
+      return { ok: true, reason: "no_tray_header" };
+    }
+    if (!context.ok) return { ok: false, reason: context.reason };
+    const takeoverReason = _navigationTakeoverReason(options);
+    if (takeoverReason) {
+      return { ok: false, preserved: true, reason: takeoverReason };
+    }
+
+    let headers = _runningSubagentTrayHeaders();
+    if (headers.length === 0) {
+      return { ok: true, reason: "tray_header_gone" };
+    }
+    if (headers.length !== 1 || headers[0].expanded === null) {
+      return { ok: false, reason: "tray_restore_identity_ambiguous" };
+    }
+    const parentGroup = headers[0].header.closest(".editor-group-container");
+    const parentTab = _selectedEditorTab(parentGroup);
+    const parentResourceKey = _editorTabResourceKey(parentTab);
+    if (
+      !parentGroup ||
+      !parentTab ||
+      (context.parentResourceKey &&
+        parentResourceKey !== context.parentResourceKey) ||
+      (!context.parentResourceKey &&
+        (!context.parentTab?.isConnected || parentTab !== context.parentTab))
+    ) {
+      return { ok: false, reason: "tray_restore_parent_changed" };
+    }
+    if (headers[0].expanded === context.expanded) {
+      _queueEvent({
+        type: "tray_restore",
+        ok: true,
+        changed: false,
+        expanded: context.expanded,
+      });
+      return { ok: true, reason: "tray_expansion_already_restored" };
+    }
+
+    _activateNavigationElement(headers[0].header);
+    const deadline = performance.now() + CYCLE_TRAY_EXPAND_TIMEOUT_MS;
+    while (performance.now() <= deadline) {
+      const pausedReason = _navigationTakeoverReason(options);
+      if (pausedReason) {
+        return { ok: false, preserved: true, reason: pausedReason };
+      }
+      headers = _runningSubagentTrayHeaders();
+      if (headers.length === 0) {
+        return { ok: true, reason: "tray_header_gone" };
+      }
+      if (headers.length === 1 && headers[0].expanded === context.expanded) {
+        _queueEvent({
+          type: "tray_restore",
+          ok: true,
+          changed: true,
+          expanded: context.expanded,
+        });
+        return { ok: true, reason: "tray_expansion_restored" };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return { ok: false, reason: "tray_expansion_not_restored" };
   }
 
   function _selectedEditorTab(group) {
@@ -1268,6 +1640,14 @@
     return (
       group.querySelector('[role="tab"][aria-selected="true"]') ||
       group.querySelector('[role="tab"].active.selected')
+    );
+  }
+
+  function _editorTabResourceKey(tab) {
+    return (
+      tab?.getAttribute("data-resource-name") ||
+      tab?.getAttribute("data-resource-id") ||
+      null
     );
   }
 
@@ -1990,27 +2370,38 @@
   }
 
   async function _visitSubagentTrayEntry(entry, options = {}) {
-    if (!entry.item.isConnected) {
-      return { outcome: "miss", reason: "tray_item_disconnected" };
+    const resolved = await _resolveRunningSubagentTrayEntry(entry, options);
+    if (!resolved.ok) {
+      if (resolved.paused) {
+        return { outcome: "paused", reason: resolved.reason };
+      }
+      _queueEvent({
+        type: "tray_visit_miss",
+        title: entry.title,
+        reason: resolved.reason,
+      });
+      return { outcome: "miss", reason: resolved.reason };
     }
+    const currentEntry = resolved.entry;
     const takeoverReason = _navigationTakeoverReason(options);
     if (takeoverReason) {
       return { outcome: "paused", reason: takeoverReason };
     }
     _queueEvent({
       type: "tray_visit",
-      title: entry.title,
-      header: entry.headerText,
+      title: currentEntry.title,
+      header: currentEntry.headerText,
+      expandedByAutomation: resolved.expandedByAutomation === true,
     });
     state.totalTrayVisits++;
     _beginNavigationApprovalScope(
       "tray",
-      entry.item.closest(".editor-group-container") || _singleMountedAgentGroup(),
-      entry.title
+      currentEntry.item.closest(".editor-group-container") || _singleMountedAgentGroup(),
+      currentEntry.title
     );
-    clickEl(entry.item);
+    clickEl(currentEntry.item);
     const selected = await _waitForSelectedSubagentGroup(
-      entry.title,
+      currentEntry.title,
       CYCLE_TRAY_MOUNT_TIMEOUT_MS,
       options
     );
@@ -2021,7 +2412,7 @@
       }
       _queueEvent({
         type: "tray_visit_miss",
-        title: entry.title,
+        title: currentEntry.title,
         reason: "selected_subagent_not_mounted",
       });
       return {
@@ -2031,7 +2422,7 @@
       };
     }
     const result = await _attemptNavigatedApproval(
-      { ...selected, ...options, title: entry.title },
+      { ...selected, ...options, title: currentEntry.title },
       "tray"
     );
     return { ...result, visited: true };
@@ -2144,7 +2535,8 @@
     _getVirtualizerSnapshot(true);
     _discoverSubagentRows(document);
     let records = _activeSubagentRecords();
-    let trayEntries = _runningSubagentTrayEntries();
+    let trayEntries = _runningSubagentTrayEntries({ bounded: false });
+    let trayHeaders = _runningSubagentTrayHeaders();
     let pinnedEntries = _pinnedAgentEntries({
       activeOnly: !explicit,
       includeSelected: explicit,
@@ -2163,6 +2555,7 @@
     if (
       records.length === 0 &&
       trayEntries.length === 0 &&
+      trayHeaders.length === 0 &&
       pinnedEntries.length === 0
     ) {
       const result = {
@@ -2214,12 +2607,22 @@
       explicit,
       taskCount: records.length,
       trayTaskCount: trayEntries.length,
+      trayAdvertisedCount: trayHeaders.reduce(
+        (total, header) => total + header.advertised,
+        0
+      ),
+      trayCollapsedCount: trayHeaders.filter(
+        (header) => header.expanded === false
+      ).length,
       pinnedTaskCount: pinnedEntries.length,
       composerId: records[0]?.parentComposerId || null,
     });
 
     let context = null;
     let editorContext = null;
+    let trayExpansionContext = null;
+    let trayEntryPoolSize = 0;
+    let trayEntriesProcessed = 0;
     let sidebarRestored = pinnedEntries.length === 0;
     let abortAfterPinned = false;
     let preserveUserSelection = false;
@@ -2315,20 +2718,60 @@
         _getVirtualizerSnapshot(true);
         _discoverSubagentRows(document);
         records = _activeSubagentRecords();
-        trayEntries = _runningSubagentTrayEntries();
+        trayEntries = _runningSubagentTrayEntries({ bounded: false });
+        trayHeaders = _runningSubagentTrayHeaders();
         const container = records.length > 0 ? _scrollContainer(records) : null;
         context = container ? _captureScrollContext(container) : null;
         editorContext =
-          trayEntries.length > 0 ? _captureEditorSelectionContext() : null;
-        const nestedStartedPerformance = performance.now();
+          trayHeaders.length > 0 || trayEntries.length > 0
+            ? _captureEditorSelectionContext()
+            : null;
+        const trayStartedPerformance = performance.now();
+        if (trayHeaders.length > 0) {
+          trayExpansionContext = _captureSubagentTrayExpansionContext();
+          if (!trayExpansionContext.ok) {
+            summary.trayMisses++;
+            trayEntries = [];
+            _queueEvent({
+              type: "tray_cycle_miss",
+              reason: trayExpansionContext.reason,
+            });
+            trayExpansionContext = null;
+          } else {
+            const preparedTray = await _ensureRunningSubagentTrayExpanded(
+              navigationOptions
+            );
+            if (preparedTray.paused) {
+              abortAfterPinned = true;
+              preserveUserSelection =
+                preparedTray.reason === "new_user_interaction";
+              summary.abortedReason = preparedTray.reason;
+              trayEntries = [];
+            } else if (!preparedTray.ok) {
+              summary.trayMisses++;
+              trayEntries = [];
+              _queueEvent({
+                type: "tray_cycle_miss",
+                reason: preparedTray.reason,
+              });
+            } else {
+              const eligibleTrayEntries =
+                _uniquelyTitledRunningSubagentTrayEntries(
+                  preparedTray.entries
+                );
+              trayEntryPoolSize = eligibleTrayEntries.length;
+              trayEntries =
+                _boundedRunningSubagentTrayEntries(eligibleTrayEntries);
+            }
+          }
+        }
 
-        // Give the backup navigation path a chance before row confirmation can
-        // consume the nested-path budget. Pinned navigation has a separate
-        // smaller budget, so it cannot starve existing recovery.
+        // Give tray fallback and registered-row recovery separate budgets.
+        // A slow child transcript cannot consume the row path's allowance.
         for (const entry of trayEntries) {
           if (
-            performance.now() - nestedStartedPerformance >
-              CYCLE_MAX_DURATION_MS ||
+            performance.now() - trayStartedPerformance >
+              CYCLE_TRAY_MAX_DURATION_MS ||
             !state.running ||
             generation !== state.cycleGeneration
           ) {
@@ -2346,6 +2789,7 @@
             entry,
             navigationOptions
           );
+          trayEntriesProcessed++;
           if (result.visited) summary.trayVisits++;
           if (result.outcome === "paused") {
             abortAfterPinned = true;
@@ -2356,6 +2800,28 @@
           if (result.outcome === "confirmed") summary.trayConfirmed++;
           if (result.outcome === "failed") summary.trayFailed++;
           if (result.outcome === "miss") summary.trayMisses++;
+          const betweenVisitRestore = await _restoreEditorSelectionContext(
+            editorContext,
+            restorationOptions
+          );
+          if (betweenVisitRestore.preserved) {
+            abortAfterPinned = true;
+            preserveUserSelection = true;
+            summary.abortedReason = betweenVisitRestore.reason;
+            break;
+          }
+          if (!betweenVisitRestore.ok) {
+            abortAfterPinned = true;
+            summary.trayMisses++;
+            summary.abortedReason = betweenVisitRestore.reason;
+            _queueEvent({
+              type: "navigation_restore",
+              ok: false,
+              source: "tray_between_visits",
+              reason: betweenVisitRestore.reason,
+            });
+            break;
+          }
           const afterTrayTakeover = _navigationTakeoverReason(navigationOptions);
           if (afterTrayTakeover) {
             abortAfterPinned = true;
@@ -2366,6 +2832,7 @@
           }
         }
 
+        const rowStartedPerformance = performance.now();
         if (abortAfterPinned) {
           // A focus transition or newer user interaction owns the remainder of
           // this cycle. Do not continue into virtual-row navigation.
@@ -2379,7 +2846,7 @@
         } else if (context) {
           for (const record of records) {
             if (
-              performance.now() - nestedStartedPerformance >
+              performance.now() - rowStartedPerformance >
               CYCLE_MAX_DURATION_MS
             ) {
               summary.misses++;
@@ -2451,6 +2918,10 @@
         }
       }
     } finally {
+      _advanceRunningSubagentTrayCursor(
+        trayEntryPoolSize,
+        trayEntriesProcessed
+      );
       const finalTakeover = _navigationTakeoverReason(navigationOptions);
       if (finalTakeover) {
         summary.abortedReason = finalTakeover;
@@ -2475,6 +2946,23 @@
             type: "navigation_restore",
             ok: false,
             reason: editorRestored.reason,
+          });
+        }
+      }
+      if (!preserveUserSelection) {
+        const trayRestored = await _restoreSubagentTrayExpansionContext(
+          trayExpansionContext,
+          restorationOptions
+        );
+        if (trayRestored.preserved) {
+          preserveUserSelection = true;
+          summary.abortedReason = trayRestored.reason;
+        } else if (!trayRestored.ok) {
+          summary.trayMisses++;
+          _queueEvent({
+            type: "tray_restore",
+            ok: false,
+            reason: trayRestored.reason,
           });
         }
       }
@@ -2559,6 +3047,12 @@
   function exportSubagentRegistry() {
     const tasks = Array.from(state.subagents.values()).map(_sanitizeSubagentRecord);
     const trayEntries = _runningSubagentTrayEntries({ bounded: false });
+    const trayHeaders = _runningSubagentTrayHeaders();
+    const trayExpansionContext = _captureSubagentTrayExpansionContext();
+    const trayEligibleEntries =
+      trayHeaders.length === 1 && trayExpansionContext.ok
+        ? _uniquelyTitledRunningSubagentTrayEntries(trayEntries)
+        : [];
     const trayAttempts = Array.from(state.trayApprovalAttempts.values());
     const pinnedEntries = _pinnedAgentEntries({
       bounded: false,
@@ -2583,7 +3077,22 @@
       cycleActive: state.cycleActive,
       counts,
       tray: {
-        running: trayEntries.length,
+        running: trayEligibleEntries.length,
+        mounted: trayHeaders.reduce(
+          (total, header) => total + header.mounted,
+          0
+        ),
+        advertised: trayHeaders.reduce(
+          (total, header) => total + header.advertised,
+          0
+        ),
+        headers: trayHeaders.length,
+        collapsed: trayHeaders.filter(
+          (header) => header.expanded === false
+        ).length,
+        unknown: trayHeaders.filter(
+          (header) => header.expanded === null
+        ).length,
         visits: state.totalTrayVisits,
         attempts: state.totalTrayApprovalAttempts,
         confirmed: state.totalTrayConfirmedApprovals,

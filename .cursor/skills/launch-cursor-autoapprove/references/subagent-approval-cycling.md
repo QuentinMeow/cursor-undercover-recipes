@@ -59,8 +59,9 @@ file was removed after the test.
 - record task identity while its row is mounted
 - revisit registered running tasks when their rows are unmounted
 - click only an eligible approval inside the exact registered row
-- visit exact running-subagent tray entries when parent-row recovery is
-  unavailable, then scope matching to the selected child agent editor
+- materialize exact collapsed running-subagent trays when parent-row recovery
+  is unavailable, then visit re-resolved entries and scope matching to the
+  selected child agent editor
 - visit uniquely titled active pinned top-level agents only while the window is
   unfocused, then restore the original selected agent
 - verify the approval resolved
@@ -86,8 +87,9 @@ file was removed after the test.
 6. **Restore context**: preserve the selected conversation and scroll position.
 7. **Keep normal scanning**: immediate visible-prompt handling remains the fast
    path; cycling is recovery.
-8. **Navigate narrowly**: tray recovery must resolve one exact row title to one
-   selected agent tab/resource before relaxing the editor-zone exclusion.
+8. **Navigate narrowly**: tray recovery must resolve one exact header, expand
+   it within a fixed bound when collapsed, and resolve one exact row title to
+   one selected agent tab/resource before relaxing the editor-zone exclusion.
 9. **Background-only top-level navigation**: automatic pinned cycling must not
    change the selected conversation in a focused Agent Window.
 
@@ -294,10 +296,18 @@ Avoid a constant full-transcript sweep.
 
 Some selected child agent editors contain `div.conversations` but no
 `div.full-input-box`, so the input-anchored direct path cannot trust them.
-Recovery matches the exact `N subagents running` header, visits at most eight
-`.composer-toolbar-background-job-item-clickable` rows per round-robin pass,
-and requires exactly one selected agent tab with matching title and a mounted
-conversation. The tab's resource UUID becomes the target identity.
+Recovery matches the exact `N subagents running` header even when its child
+rows are unmounted. It reads the exact chevron state, expands a collapsed
+header within 800 ms, and visits at most eight uniquely titled
+`.composer-toolbar-background-job-item-clickable` rows per round-robin pass.
+Preliminary discovery does not advance the rotation cursor; a pass advances
+only by rows actually processed before its deadline.
+Because selecting one child remounts and collapses the parent tray, the parent
+editor is restored and the next unique row title is re-resolved before every
+visit. Each child requires exactly one selected agent tab with matching title
+and a mounted conversation. The tab's resource UUID becomes the target
+identity. The original tray expansion state is restored unless newer user
+interaction takes ownership.
 
 The selected editor can appear before a long virtualized transcript mounts its
 tail, so recovery observes that exact group and waits one to 1.5 seconds for an
@@ -332,7 +342,8 @@ sidebar/resource and tab state are observed restored. While it is active, all
 ordinary-scanner candidates are withheld because body-level portal controls
 cannot be safely attributed to an editor group.
 Pinned navigation has a separate 3.5-second budget with at most two visits per
-round-robin pass, leaving the nested path its full 10-second budget.
+round-robin pass. Tray navigation then receives six seconds, and registered-row
+recovery receives a separate 10-second budget.
 `cycle --once` includes completed pinned rows so navigation/restoration can be
 tested without two live prompts.
 
@@ -488,6 +499,7 @@ Add event types:
 - `approval_attempted`
 - `approval_confirmed`
 - `approval_unconfirmed`
+- `tray_expand`, `tray_expand_miss`, `tray_restore`
 - `tray_visit`, `tray_visit_miss`, `tray_no_candidate`
 - `tray_approval_attempted`, `tray_approval_confirmed`,
   `tray_approval_unconfirmed`
@@ -585,6 +597,8 @@ labels all progress without cooldown collisions or false clicks.
 ### Phase D: running-subagent tray fallback — implemented
 
 - exact running-tray discovery and round-robin bounds
+- bounded collapsed-header expansion and expansion-state restoration
+- fresh child-row resolution after each parent-editor restoration
 - selected child tab/resource identity
 - read-only child editor approval scope
 - confirmation, two-attempt cap, and tab/focus restoration
@@ -621,9 +635,11 @@ Required live cases:
 13. A running tray child has a read-only editor with no composer input.
 14. Multiple tray rows are visited round-robin and the original tabs are
     restored.
-15. Two pinned top-level rows are visited by an explicit cycle and the original
+15. A collapsed exact running tray is expanded, each child row is re-resolved
+    after parent restoration, and the original expansion state is restored.
+16. Two pinned top-level rows are visited by an explicit cycle and the original
     selected row is restored.
-16. Automatic pinned cycling skips completed rows and every focused window.
+17. Automatic pinned cycling skips completed rows and every focused window.
 
 For each case save:
 

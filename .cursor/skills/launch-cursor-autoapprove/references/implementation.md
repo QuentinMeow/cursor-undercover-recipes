@@ -33,11 +33,13 @@ The injector uses a three-layer architecture:
 4. **Subagent Recovery**: The default-on bounded cycle has two paths. It
    rematerializes registered `task-subagent` rows by exact
    workspace/target/composer/tool identity. It also visits exact entries under
-   the `N subagents running` composer tray, mounts each read-only child agent
-   editor, scans that selected editor, and restores the prior tabs/focus.
-   Tray visits run before row confirmation so the backup cannot be starved by
-   the shared cycle budget. `cycle --off` disables both nested paths plus
-   pinned-agent recovery below.
+   the `N subagents running` composer tray, expanding a collapsed exact header
+   when its child rows are unmounted. It mounts each read-only child agent
+   editor, scans that selected editor, restores the parent between visits, and
+   restores the prior tray expansion/tabs/focus state.
+   Tray visits run before row confirmation with separate six- and ten-second
+   budgets, so either nested path can make progress. `cycle --off` disables
+   both nested paths plus pinned-agent recovery below.
 5. **Pinned Agent Recovery**: Active pinned top-level Agent Window rows are
    visited sequentially because Cursor mounts only the selected conversation.
    Automatic navigation runs only while the window is unfocused. Explicit
@@ -356,8 +358,10 @@ run simultaneously.
 - Per-task registry (`state.subagents`) mirrored to namespaced `localStorage`
 - Nested-subagent recovery starts with `state.cycleEnabled: true`; `cycle --off`
   disables it explicitly and `cycle --on` re-enables it
-- Running-subagent tray visits are round-robin bounded to eight entries and the
-  nested recovery phase remains capped at 10 seconds
+- Running-subagent tray visits are round-robin bounded to eight entries, exact
+  collapsed headers receive an 800 ms materialization bound, tray navigation
+  is capped at six seconds, and registered-row recovery receives a separate
+  10-second budget
 - Pinned-agent visits have a separate 3.5-second budget and are round-robin
   bounded to two active, unselected rows per automatic cycle, so top-level
   navigation cannot consume the nested recovery budget; focused windows never
@@ -391,32 +395,48 @@ only the first `div.full-input-box`. Some child agent editors are read-only,
 however, and contain `div.conversations` with no input. The tray fallback
 handles those surfaces:
 
-1. Match an exact header such as `1 subagent running`.
-2. Collect only `.composer-toolbar-background-job-item-clickable` descendants
-   of that header's section, up to eight per round-robin pass.
-3. Save selected tabs, focused element, and the existing scroll context.
-4. Select one tray row and require exactly one selected agent tab whose title
+1. Match an exact visible header such as `1 subagent running` independently of
+   whether its child rows are mounted.
+2. Read the chevron expansion state. If collapsed, activate only that exact
+   header and wait up to 800 ms for the advertised rows; partial mounts fail
+   the pass and repeated misses use capped exponential backoff before
+   exhausting after five failures for the same parent/count identity.
+   Ambiguous headers or unknown expansion state fail closed.
+3. Collect only uniquely titled, clickable
+   `.composer-toolbar-background-job-item-clickable` descendants of that
+   header's section, up to eight per round-robin pass. Preliminary discovery
+   does not advance the cursor; each pass advances only by rows actually
+   processed before its deadline.
+4. Save selected tabs, focused element, the existing scroll context, the
+   parent tab resource identity, and the tray's original expansion state.
+5. Re-resolve one unique child title immediately before each visit because a
+   previous selection remounts and collapses the parent tray.
+6. Select one tray row and require exactly one selected agent tab whose title
    matches the row and whose group contains `div.conversations`.
-5. Use the tab's agent resource UUID as approval identity.
-6. Wait for the selected child's transcript tail to materialize: observe only
+7. Use the tab's agent resource UUID as approval identity.
+8. Wait for the selected child's transcript tail to materialize: observe only
    that editor group, poll for an eligible candidate for at least one second, finish
    after 250 ms of DOM quiet, and stop after 1.5 seconds or if tab identity
    changes.
-7. Scan only that editor group. The editor workbench exclusion is relaxed only
+9. Scan only that editor group. The editor workbench exclusion is relaxed only
    in this exact scope; exact labels, dismissal/companion evidence, unrelated
    modal blocking, and hit coverage remain required.
-8. Confirm the raw control is absent across the final consecutive checks and
+10. Confirm the raw control is absent across the final consecutive checks and
    allow at most two attempts for the same resource/prompt fingerprint.
    Disabled, hidden, covered, or temporarily context-less controls remain
    present and therefore do not produce false confirmations. Connected nodes
    are checked for their current label/prompt identity so a node reused for a
    completed state does not remain falsely pending.
-9. Restore the original selected tabs. Cursor's tab widget requires
+11. Restore the original parent tab before resolving the next child. Cursor's
+   tab widget requires
    `mousedown`/`mouseup` before `click`; plain `HTMLElement.click()` did not
    restore selection in live testing.
-10. Settle focus through the shared focus owner described below.
+12. Restore the tray's original collapsed/expanded state unless newer user
+    interaction took ownership, then settle focus through the shared focus
+    owner described below.
 
-Tray attempts emit `tray_visit`, `tray_visit_miss`,
+Tray materialization emits `tray_expand`, `tray_expand_miss`, and
+`tray_restore`. Attempts emit `tray_visit`, `tray_visit_miss`,
 `tray_approval_attempted`, `tray_approval_confirmed`, and
 `tray_approval_unconfirmed`. A visit that mounts the child but finds no eligible
 candidate emits `tray_no_candidate` with its bounded wait reason, duration, and
@@ -525,8 +545,9 @@ The injector fails closed when its own renderer work becomes pathological:
 
 - delete-file fallback scans mounted virtual rows plus at most 100 deduplicated
   `.composer-tool-former-message` roots, never `document.body`
-- pinned visits stop after 3.5 seconds; nested recovery then receives its own
-  10-second budget and visits at most 20 registered tasks
+- pinned visits stop after 3.5 seconds; tray navigation receives six seconds,
+  then registered-row recovery receives a separate 10-second budget and visits
+  at most 20 tasks
 - an unconfirmed subagent click is retried once, then remains `failed` while
   the same approval card is visible; mutation discovery cannot reactivate it,
   and normal status derivation resumes after the approval clears so changed
@@ -750,8 +771,8 @@ settings remain there until manually removed.
 - last approved command preview (first line + line count) when available
 - click attempts versus confirmed cycle approvals
 - cycle toggle/activity, task counts, and last-cycle outcome
-- running-subagent tray count plus tray visits, attempts, confirmations, and
-  failed retry states
+- running-subagent tray advertised/mounted/collapsed counts plus visits,
+  attempts, confirmations, and failed retry states
 - pinned-agent total/active/ambiguous count, visits, attempts, confirmations,
   failures, last restoration result, and any cycle-abort reason
 - active focus kind, any focus reason pausing automatic cycles, and the last

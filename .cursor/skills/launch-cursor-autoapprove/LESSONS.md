@@ -225,9 +225,10 @@
   guard while mounting, confirming, and restoring every path. A focus-only
   transition may restore automation-owned state, but must still end that cycle.
 
-- **Give navigation paths independent budgets**: A slow pinned visit must not
-  consume the time reserved for tray or virtual-row recovery. Bound pinned
-  work separately and rotate its cursor across cycles.
+- **Give navigation paths independent budgets**: Slow pinned or tray visits
+  must not consume the time reserved for registered virtual-row recovery.
+  Bound each path separately, and advance a round-robin cursor only for the
+  actual visit batch.
 
 ## Running-Subagent Tray Recovery
 
@@ -282,6 +283,18 @@
   race or retry concurrently. Body-level portal controls have no editor-group
   ancestor, so fail closed by withholding every ordinary-scanner candidate
   while navigation ownership is active.
+
+- **A collapsed tray header is still a live recovery index**: Cursor keeps the
+  exact `N subagents running` header mounted but removes every child row when
+  the tray is collapsed. Discover the header independently, materialize its
+  rows with a bounded expansion, and report advertised, mounted, and collapsed
+  counts separately so status does not confuse "hidden" with "absent."
+
+- **Tray rows must be re-resolved after every child visit**: Selecting a child
+  remounts the editor and collapses the parent tray, disconnecting all sibling
+  row nodes captured before navigation. Restore the parent editor between
+  visits, re-expand if needed, and resolve one unique title again before the
+  next click.
 
 ## Focus Preservation During Recovery
 

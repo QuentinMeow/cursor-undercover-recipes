@@ -646,7 +646,10 @@ re-enable cycling after an explicit `cycle --off`.
 /usr/bin/python3 "$LAUNCHER" status
 ```
 
-4. Trigger a real approval in a child listed under `N subagents running`.
+4. Collapse the exact `N subagents running` tray so its child rows disappear.
+   Run `status` and verify it reports the advertised count, zero mounted rows,
+   and one collapsed header. Leave the tray collapsed for the next step.
+5. Trigger a real approval in a child listed under `N subagents running`.
    Before the cycle, note the selected editor tab. After one automatic or
    explicit pass, inspect status/history:
 
@@ -655,7 +658,7 @@ re-enable cycling after an explicit `cycle --off`.
 /usr/bin/python3 "$LAUNCHER" history -n 30 --json
 ```
 
-5. While recovery work remains, focus the integrated terminal and type. Pause
+6. While recovery work remains, focus the integrated terminal and type. Pause
    for more than two seconds, then run `status` from another shell/window if
    possible. Also try moving into the terminal immediately after a cycle starts.
 
@@ -668,7 +671,7 @@ Expected focus result:
 - if the user changes focus during a cycle, `FocusLast` targets the newer
   terminal/editor choice instead of the stale cycle-start element
 
-6. Verify the explicit opt-out and re-enable controls:
+7. Verify the explicit opt-out and re-enable controls:
 
 ```bash
 /usr/bin/python3 "$LAUNCHER" cycle --off
@@ -680,13 +683,19 @@ Expected result:
 
 - a new session reports `Cycle: ON`; `cycle --off` reports `Cycle: OFF`, and
   `cycle --on` restores it
+- a collapsed tray records `tray_expand`, mounts its exact advertised rows,
+  visits the blocked child, and restores the tray's prior expansion state
+- multiple children are re-resolved after each parent-editor restoration;
+  later visits do not fail because a previously captured row disconnected
 - every task has a distinct task/row identity even when labels are identical
 - unmounted registered rows are revisited without permanently expanding the list
 - `approval_attempted` is followed by `approval_confirmed` only after the card
   resolves
 - tray recovery records `tray_visit`, then
   `tray_approval_attempted`/`tray_approval_confirmed` for a real child approval
-- the tray line reports running rows plus visit/attempt/confirmation totals
+- the tray line reports eligible rows plus visit/attempt/confirmation totals
+- the tray line distinguishes advertised children, raw mounted children,
+  eligible rows, collapsed/total exact headers, and unknown expansion states
 - the pinned line reports active/total rows plus visit/attempt/confirmation
   totals
 - the editor tab selected before tray recovery is selected again afterward;
@@ -779,6 +788,7 @@ The injector's DOM selectors are coupled to specific Cursor versions. Always rec
 | 3.0.8 | Chrome/142.0.7444.265 | 7e641c1041dd | OK | OK | Not tested | 2026-04-03 |
 | 3.12.17 | Chrome/144.0.7559.236 | 460391c03c13 | OK (real Run) | OK (4 concurrent real Allow prompts; 60s tasks) | Not tested | 2026-07-21 |
 | 3.12.17 | Chrome/144.0.7559.236 | 538f6927c92e | OK (real Run) | Not rerun | OK (2 rows; confirm, transient-control, user-selection, and restoration probes) | 2026-07-22 |
+| 3.12.17 | Chrome/144.0.7559.236 | 8643e4bfc524 | OK (real Run) | OK (collapsed tray auto-expanded; two real Run prompts confirmed; parent identity/restoration confirmed) | Not rerun | 2026-07-22 |
 
 ### Version Upgrade Checklist
 
