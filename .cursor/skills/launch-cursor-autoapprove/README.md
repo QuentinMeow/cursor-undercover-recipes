@@ -4,7 +4,8 @@
 
 `launch-cursor-autoapprove` is the supported auto-approval workflow in this
 repo. It launches a dedicated Cursor process, injects a DOM auto-accept script
-via CDP, and lets you toggle the gate with simple `on` / `off` commands.
+via CDP, and starts with both the approval gate and bounded nested-subagent
+cycling ON. Simple commands can pause either behavior later.
 
 The dedicated window is isolated at process level, so auto-clicking does not
 spill into your normal Cursor windows.
@@ -55,7 +56,6 @@ caa launch ~/code/my-project
 caa launch ~/code/my-project --interval 5
 caa launch-ssh my-devbox /home/user/code/project
 caa on --interval 0.5
-caa cycle --on
 caa subagents
 caa off
 caa status
@@ -72,11 +72,11 @@ built-in usage summary, `caa help` for examples and doc paths, or
 
 | Command | Behavior |
 |---|---|
-| `launch [--workspace PATH] [PATH] [--interval SECONDS]` | Start dedicated Cursor process for a local workspace, inject script, gate ON. The fallback scan defaults to 0.5 seconds; supported range is 0.25–60 seconds. Blocks only if the same workspace is already running; other workspaces can run in parallel. |
-| `launch-ssh <host> [/absolute/remote/path] [--no-preflight] [--interval SECONDS]` | Start dedicated Cursor connected to an SSH remote host from `~/.ssh/config`, inject script, gate ON. Path-specific launches verify the remote directory with `ssh <host> test -d <path>` before creating a profile or alias. |
+| `launch [--workspace PATH] [PATH] [--interval SECONDS]` | Start dedicated Cursor process for a local workspace, inject script, and turn the gate and nested-subagent cycling ON. The fallback scan defaults to 0.5 seconds; supported range is 0.25–60 seconds. Blocks only if the same workspace is already running; other workspaces can run in parallel. |
+| `launch-ssh <host> [/absolute/remote/path] [--no-preflight] [--interval SECONDS]` | Start dedicated Cursor connected to an SSH remote host from `~/.ssh/config`, inject script, and turn the gate and nested-subagent cycling ON. Path-specific launches verify the remote directory with `ssh <host> test -d <path>` before creating a profile or alias. |
 | `on [--interval SECONDS]` | Turn gate ON and optionally change/persist the session's fallback scan interval. Reloads injector code when in-window hash differs from the current injector file. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
 | `off` | Turn gate OFF without closing the dedicated window. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
-| `cycle --on\|--off\|--once` | Opt-in recovery for registered nested-subagent approval rows that were virtualized out of the DOM. |
+| `cycle --on\|--off\|--once` | Control recovery for registered nested-subagent approval rows that were virtualized out of the DOM. It starts ON; use `--off` to opt out, `--on` to re-enable, or `--once` for one explicit bounded pass. |
 | `subagents [--json]` | Show the sanitized task registry, row hints, attempts, and confirmations. |
 | `status` | Show PID, CDP port, workspace, gate state, click count, injector hash, current title, recent clicks, and last approved command preview. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
 | `stop` | Turn gate OFF, close the dedicated Cursor process, and clear local session state when shutdown succeeds. Without `-w`, it prefers running sessions when any are alive; if none are running, it falls back to stale entries for cleanup. Use `--all` to stop every session, and do not combine `--all` with `-w` or a positional workspace. |
@@ -95,10 +95,13 @@ built-in usage summary, `caa help` for examples and doc paths, or
 - There is no `inject --restart` command in this supported launcher.
 - The observer reacts to DOM changes after a 300ms debounce. `--interval`
   controls the fallback scan, defaults to 0.5 seconds, and can be changed while
-  the gate is already ON. A scan clicks at most one eligible candidate, and the
-  fingerprint cooldown still prevents repeated clicks on one unresolved card.
-- Subagent cycling is OFF by default. It targets only exact task rows inside the
-  selected parent conversation and restores the original scroll/focus state.
+  the gate is already ON. Each scan clicks at most one candidate: distinct
+  eligible prompts can be clicked on consecutive scans, while the same
+  unresolved prompt remains deduped for eight seconds.
+- Subagent cycling is ON by default for new `launch` and `launch-ssh` sessions.
+  It targets only exact registered task rows inside the selected parent
+  conversation, uses bounded cycles and interaction guards, and restores the
+  original scroll/focus state. Use `caa cycle --off` to opt out.
 - `stop` ends the session and closes the dedicated process; the dedicated profile
   folder persists for reuse on the next `launch`.
 - If two sessions share the same folder name, use `-w <full-path>` instead of a
@@ -122,6 +125,8 @@ built-in usage summary, `caa help` for examples and doc paths, or
 - Inactive sidebar conversations are not mounted in the workbench DOM. The
   injector can approve the selected conversation, but cannot directly click
   prompts in every pinned/sidebar agent at the same time.
+- Agent Window and top-level sidebar-conversation cycling remain deferred and
+  would require a separate opt-in implementation.
 
 ## Migration Note (Retired Approach Cleanup)
 

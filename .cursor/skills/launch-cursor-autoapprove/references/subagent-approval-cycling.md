@@ -16,9 +16,11 @@ caa cycle --on|--off|--once [-w <workspace>]
 caa subagents [--json] [-w <workspace>]
 ```
 
-Automatic cycling remains opt-in. Runtime snapshots are cached and every cycle
-is bounded by task count and elapsed time. Scan-duration and JavaScript-heap
-circuit breakers turn the gate off if renderer work becomes unsafe.
+Automatic cycling starts ON for new `caa launch` and `caa launch-ssh` legacy
+IDE sessions. `caa cycle --off` is the explicit opt-out, and `--on` re-enables
+it. Runtime snapshots are cached and every cycle is bounded by task count and
+elapsed time. Scan-duration and JavaScript-heap circuit breakers turn the gate
+off if renderer work becomes unsafe.
 
 ## Why This Is Needed
 
@@ -249,11 +251,11 @@ not be required for basic cycling.
 
 ## Cycle Scheduler
 
-Cycling is initially opt-in:
+Cycling is enabled by default for new launch sessions:
 
 ```text
-caa cycle --on -w <workspace>
 caa cycle --off -w <workspace>
+caa cycle --on -w <workspace>   # re-enable after opting out
 caa cycle --once -w <workspace>
 ```
 
@@ -361,6 +363,14 @@ candidate is cooling down, continue evaluating other tasks.
 
 ## Click and Confirmation
 
+Registered subagent approvals have one click owner. While cycling is enabled,
+an eligible candidate tied to an exact registry row is `cycleOwned`; the
+ordinary fallback scanner excludes it from clicks and blocked/unknown telemetry.
+The confirmation-aware cycle path alone may click it and consume its retry
+budget. Debug snapshots expose the flag and exclude owned candidates from
+`eligible`. With cycling OFF or no registered task identity, ordinary visible
+card handling remains available.
+
 1. Bring the exact button inside the scroll viewport.
 2. Re-query after scrolling to avoid a recycled element.
 3. Capture pre-click task status and row identity.
@@ -379,7 +389,10 @@ If the first attempt is unconfirmed:
 - retry once
 - then mark the task `failed` with `unconfirmed_click`
 
-Do not retry forever at the fingerprint cooldown cadence.
+While that approval remains visible, mutation discovery must preserve the
+`failed` status rather than returning the task to `approval_pending`. Normal
+status derivation may resume after the approval clears, allowing changed row
+state to be observed. Do not retry forever at the fingerprint cooldown cadence.
 
 ## Scroll Restoration
 
@@ -420,8 +433,8 @@ Add:
 caa subagents
 caa subagents --json
 caa cycle --once
-caa cycle --on
 caa cycle --off
+caa cycle --on  # re-enable after opting out
 ```
 
 `caa subagents` should report IDs, short titles, status, row hints, attempts,
