@@ -6,8 +6,10 @@
 repo. It launches a dedicated Cursor process, injects a DOM auto-accept script
 via CDP, and starts with both the approval gate and bounded agent recovery ON:
 direct mounted-composer scanning, nested-subagent recovery, and sequential
-cycling across active pinned Agent Window conversations. Simple commands can
-pause either behavior later.
+cycling across active pinned Agent Window conversations. It verifies the target
+is a full IDE workbench before enabling anything by forcing classic mode and
+checking the loaded desktop workbench bundle. Simple commands can pause either
+behavior later.
 
 The dedicated window is isolated at process level, so auto-clicking does not
 spill into your normal Cursor windows.
@@ -80,7 +82,7 @@ built-in usage summary, `caa help` for examples and doc paths, or
 | `off` | Turn gate OFF without closing the dedicated window. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
 | `cycle --on\|--off\|--once` | Control registered parent-transcript rows, exact entries in the `N subagents running` tray, and pinned top-level agents. It starts ON; automatic pinned navigation visits active unselected rows in round-robin passes of up to two while the window is unfocused. `--once` explicitly visits one bounded pass, including completed rows, then restores the original agent. |
 | `subagents [--json]` | Show the sanitized task registry, row hints, attempts, and confirmations. |
-| `status` | Show PID, CDP port, workspace, gate state, click count, injector hash, current title, tray advertised/mounted/collapsed state, recent clicks, and last approved command preview. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
+| `status` | Show verified IDE mode, PID, CDP port, workspace, gate state, click count, injector hash, current title, tray advertised/mounted/collapsed state, recent clicks, and last approved command preview. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
 | `stop` | Turn gate OFF, close the dedicated Cursor process, and clear local session state when shutdown succeeds. Without `-w`, it prefers running sessions when any are alive; if none are running, it falls back to stale entries for cleanup. Use `--all` to stop every session, and do not combine `--all` with `-w` or a positional workspace. |
 | `history [-w SLUG] [-n N] [--json] [--commands]` | Show durable event log (session/gate/click events). Use `--commands` to show only approved commands with readable multiline formatting from the dedicated command ledger. |
 | `alias [set\|remove\|list]` | Manage workspace aliases stored in `config.json`. Auto-registered on launch. |
@@ -110,6 +112,9 @@ built-in usage summary, `caa help` for examples and doc paths, or
   explicit focused-window test path. Cycles are bounded, approvals are
   confirmed with capped retries, and the original agent, tabs, scroll, and
   focus are restored. Use `caa cycle --off` to opt out.
+- Mounted parent `Allow` cards remain eligible to direct scanning while
+  registered-row and individual-child navigation remain bounded backups. The
+  paths share task-scoped dedupe state.
 - `stop` ends the session and closes the dedicated process; the dedicated profile
   folder persists for reuse on the next `launch`.
 - If two sessions share the same folder name, use `-w <full-path>` instead of a
@@ -134,7 +139,8 @@ built-in usage summary, `caa help` for examples and doc paths, or
   may still be throttled, so verify with `status` for unattended workflows.
 - Inactive sidebar conversations are not mounted in the workbench DOM, so
   pinned-agent support is sequential rather than truly simultaneous. Duplicate
-  pinned titles fail closed because title identity would be ambiguous.
+  titles inside Pinned fail closed; the same conversation repeated in history
+  is expected and does not block cycling.
 - Automatic pinned cycling considers only rows with Cursor's active spinner and
   never changes the selected top-level agent while the window is focused.
   `cycle --once` intentionally visits completed pinned rows too, making it

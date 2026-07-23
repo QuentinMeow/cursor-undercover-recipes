@@ -51,6 +51,9 @@ from pathlib import Path
 
 CURSOR_APP_PATH = Path("/Applications/Cursor.app")
 CURSOR_EXECUTABLE = CURSOR_APP_PATH / "Contents" / "MacOS" / "Cursor"
+CURSOR_CLI = CURSOR_APP_PATH / "Contents" / "Resources" / "app" / "bin" / "cursor"
+CURSOR_CLASSIC_MODE_ARG = "--classic"
+CURSOR_IDE_WINDOW_ARG = "--new-window"
 
 RUNTIME_DIR = Path.home() / ".cursor" / "launch-autoapprove"
 STATE_PATH = RUNTIME_DIR / "state.json"
@@ -1393,18 +1396,176 @@ def _is_workbench(t: dict) -> bool:
     return "workbench" in url or "workbench" in title
 
 
+_CDP_SURFACE_MODE_EXPR = r"""(() => {
+  const loaded = [
+    ...Array.from(document.querySelectorAll('link[href], script[src]')).map(
+      (node) => node.href || node.src || ""
+    ),
+    ...performance.getEntriesByType("resource").map((entry) => entry.name || ""),
+  ];
+  const desktopBundles = loaded.filter((url) =>
+    /\/vs\/workbench\/workbench\.desktop\.main\.(css|js)(?:$|[?#])/.test(url)
+  );
+  const glassBundles = loaded.filter((url) =>
+    /\/vs\/workbench\/workbench\.glass\.main\.(css|js)(?:$|[?#])/.test(url)
+  );
+  const has = (id) => !!document.querySelector(`[id="${id}"]`);
+  const editor = document.querySelector('[id="workbench.parts.editor"]');
+  const rect = editor?.getBoundingClientRect();
+  const hasEditor = !!editor && !!rect && rect.width > 0 && rect.height > 0;
+  const hasStatusbar = has("workbench.parts.statusbar");
+  const hasPanel = has("workbench.parts.panel");
+  const hasNavigation =
+    has("workbench.parts.sidebar") ||
+    has("workbench.parts.activitybar") ||
+    has("workbench.parts.unifiedsidebar");
+  const structuralIdeEvidence =
+    hasEditor && hasStatusbar && hasPanel && hasNavigation;
+  const desktopLoaded = desktopBundles.length > 0;
+  const glassLoaded = glassBundles.length > 0;
+  const mode =
+    desktopLoaded && !glassLoaded
+      ? "ide"
+      : glassLoaded
+        ? "agents"
+        : "unknown";
+  return {
+    mode,
+    modeEvidence:
+      mode === "ide"
+        ? "desktop_bundle"
+        : mode === "agents"
+          ? "glass_bundle"
+          : "bundle_unknown",
+    desktopBundles: desktopBundles.slice(0, 4),
+    glassBundles: glassBundles.slice(0, 4),
+    structuralIdeEvidence,
+    hasEditor,
+    hasStatusbar,
+    hasPanel,
+    hasNavigation,
+    bodyClasses: String(document.body?.className || "").slice(0, 500),
+    href: String(location.href || "").slice(0, 500),
+  };
+})()"""
+
+
+def _cdp_target_surface(target: dict, timeout: float = 5.0) -> dict:
+    """Classify IDE vs Agents from the target's loaded workbench bundle."""
+    ws_url = target.get("webSocketDebuggerUrl")
+    if not ws_url:
+        return {"mode": "unknown", "reason": "missing_websocket"}
+    try:
+        payload = _cdp_evaluate_ws(
+            ws_url, _CDP_SURFACE_MODE_EXPR, timeout=timeout,
+        )
+        value = payload.get("result", {}).get("result", {}).get("value")
+        return value if isinstance(value, dict) else {
+            "mode": "unknown",
+            "reason": "invalid_surface_probe",
+        }
+    except (ConnectionRefusedError, OSError, RuntimeError) as exc:
+        return {"mode": "unknown", "reason": str(exc)}
+
+
+def _cdp_ide_targets(page_targets: list[dict], timeout: float = 5.0) -> list[dict]:
+    """Return only targets loading Cursor's desktop IDE workbench bundle."""
+    candidates = [target for target in page_targets if _is_workbench(target)]
+    return [
+        target for target in candidates
+        if _cdp_target_surface(target, timeout=timeout).get("mode") == "ide"
+    ]
+
+
+def _cdp_bound_target_surface(port: int, target_id: str | None,
+                              timeout: float = 5.0) -> dict:
+    """Inspect the bound target without falling back to another page."""
+    if not target_id:
+        return {"mode": "unknown", "reason": "unbound_target"}
+    try:
+        page_targets = _cdp_list_page_targets(port, timeout=timeout)
+    except (ConnectionRefusedError, OSError, RuntimeError) as exc:
+        return {"mode": "unknown", "reason": str(exc)}
+    matches = [target for target in page_targets if target.get("id") == target_id]
+    if len(matches) != 1:
+        return {"mode": "unknown", "reason": "bound_target_missing_or_ambiguous"}
+    return _cdp_target_surface(matches[0], timeout=timeout)
+
+
+def _cursor_ide_launch_args(cdp_port: int, profile: Path, *,
+                            workspace: str | None = None,
+                            folder_uri: str | None = None) -> list[str]:
+    """Build explicit full-IDE launch args; standalone `--chat` is forbidden."""
+    if (workspace is None) == (folder_uri is None):
+        raise ValueError("exactly one of workspace or folder_uri is required")
+    args = [
+        f"--remote-debugging-port={cdp_port}",
+        "--user-data-dir", str(profile),
+        CURSOR_CLASSIC_MODE_ARG,
+        CURSOR_IDE_WINDOW_ARG,
+    ]
+    if workspace is not None:
+        args.append(workspace)
+    else:
+        args.extend(["--folder-uri", str(folder_uri)])
+    return args
+
+
+def _cursor_classic_mode_support(timeout: float = 5.0) -> tuple[bool, str]:
+    """Require Cursor's version-coupled full-IDE forcing flag before launch."""
+    if not CURSOR_CLI.is_file():
+        return False, f"Cursor CLI not found at {CURSOR_CLI}"
+    try:
+        completed = subprocess.run(
+            [str(CURSOR_CLI), "--help"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"could not inspect Cursor CLI help: {exc}"
+    help_text = completed.stdout or ""
+    if completed.returncode != 0:
+        return False, f"Cursor CLI help exited {completed.returncode}"
+    if CURSOR_CLASSIC_MODE_ARG not in help_text:
+        return False, (
+            f"Cursor CLI no longer advertises {CURSOR_CLASSIC_MODE_ARG}; "
+            "refusing to guess the IDE-mode launch contract"
+        )
+    return True, "classic_mode_supported"
+
+
 def _cdp_select_workbench_target(port: int, timeout: float = 10.0) -> dict:
-    """Select the best workbench target and return its /json metadata.
+    """Select exactly one full IDE target and return its /json metadata.
 
     Used at launch time to pick the initial target for pinning.
     """
     page_targets = _cdp_list_page_targets(port, timeout=timeout)
     if not page_targets:
         raise RuntimeError(f"No page target found on CDP port {port}")
-    preferred = [t for t in page_targets if _is_workbench(t)]
-    if preferred:
-        return preferred[0]
-    return page_targets[0]
+    ide_targets = _cdp_ide_targets(page_targets, timeout=min(timeout, 5.0))
+    if len(ide_targets) == 1:
+        return ide_targets[0]
+    if len(ide_targets) > 1:
+        raise RuntimeError(
+            f"Found {len(ide_targets)} IDE targets on CDP port {port}; "
+            "refusing to bind ambiguously"
+        )
+    modes = [
+        {
+            "id": target.get("id"),
+            **_cdp_target_surface(target, timeout=min(timeout, 5.0)),
+        }
+        for target in page_targets
+        if _is_workbench(target)
+    ]
+    raise RuntimeError(
+        "No full IDE target found; Cursor may have opened an Agents window "
+        f"instead. Surface probes: {modes}"
+    )
 
 
 def _cdp_evaluate(port: int, expression: str, timeout: float = 10.0,
@@ -1481,6 +1642,12 @@ def _cdp_inject(port: int, auto_start: bool = True, force_reload: bool = False,
             if not pinned_id:
                 chosen = _cdp_select_workbench_target(port, timeout=10.0)
                 pinned_id = chosen.get("id")
+            surface = _cdp_bound_target_surface(port, pinned_id, timeout=5.0)
+            if surface.get("mode") != "ide":
+                raise RuntimeError(
+                    "Refusing to inject outside a verified IDE workbench "
+                    f"(target={pinned_id}, surface={surface})"
+                )
             preamble = (
                 f"globalThis.__cursorAutoAcceptRepoSlug = {json.dumps(repo_slug)};\n"
                 f"globalThis.__cursorAutoAcceptWorkspace = "
@@ -1499,10 +1666,11 @@ def _cdp_inject(port: int, auto_start: bool = True, force_reload: bool = False,
                 return False, pinned_id
             print(f"Injected script from {script_path}")
             return True, pinned_id
-        except (ConnectionRefusedError, OSError, RuntimeError):
+        except (ConnectionRefusedError, OSError, RuntimeError) as exc:
             if attempt < CDP_INJECT_RETRIES - 1:
                 time.sleep(2 * (attempt + 1))
             else:
+                print(f"CDP injection target check failed: {exc}", file=sys.stderr)
                 return False, pinned_id
     return False, pinned_id
 
@@ -1582,7 +1750,7 @@ def _cdp_gate(port: int, action: str, title: str | None = None,
 
 
 def _rebind_session_target_if_unique(session: dict) -> tuple[str | None, bool]:
-    """Rebind a lost renderer target only when one workbench target exists."""
+    """Rebind a lost renderer target only when one verified IDE target exists."""
     port = session.get("cdp_port")
     bound_target = session.get("cdp_target_id")
     if not port:
@@ -1593,10 +1761,10 @@ def _rebind_session_target_if_unique(session: dict) -> tuple[str | None, bool]:
         return bound_target, False
     if bound_target and any(target.get("id") == bound_target for target in page_targets):
         return bound_target, False
-    workbenches = [target for target in page_targets if _is_workbench(target)]
-    if len(workbenches) != 1:
+    ide_targets = _cdp_ide_targets(page_targets)
+    if len(ide_targets) != 1:
         return bound_target, False
-    replacement = workbenches[0].get("id")
+    replacement = ide_targets[0].get("id")
     if not replacement:
         return bound_target, False
 
@@ -1923,6 +2091,7 @@ def _print_session_status(session: dict) -> None:
     if alive and port:
         target_count = 0
         target_warning = ""
+        target_surface: dict = {"mode": "unknown"}
         try:
             page_targets = _cdp_list_page_targets(port, timeout=5.0)
             target_count = len(page_targets)
@@ -1933,17 +2102,30 @@ def _print_session_status(session: dict) -> None:
                     "Extra windows in this dedicated process may receive wrong signals."
                 )
             if bound_target:
-                found = any(t.get("id") == bound_target for t in page_targets)
-                if not found:
+                matches = [
+                    target for target in page_targets
+                    if target.get("id") == bound_target
+                ]
+                if len(matches) != 1:
                     target_warning = (
                         f"  WARNING: Bound target {bound_target} not found among "
                         f"{target_count} page target(s). Session needs rebinding (run 'on')."
                     )
+                else:
+                    target_surface = _cdp_target_surface(matches[0], timeout=5.0)
+                    if target_surface.get("mode") != "ide":
+                        target_warning = (
+                            "  WARNING: Bound target is not a verified full IDE "
+                            f"surface ({target_surface.get('mode', 'unknown')}). "
+                            "Keep the gate OFF and relaunch the workspace."
+                        )
         except (ConnectionRefusedError, OSError, RuntimeError):
             pass
 
         if target_count:
             print(f"Targets:   {target_count} page target(s) on port")
+        mode = target_surface.get("mode", "unknown")
+        print(f"Mode:      {'IDE (verified)' if mode == 'ide' else mode}")
 
         drained = _drain_injector_events(port, bound_target, workspace, slug)
         registry = _sync_subagent_registry(port, bound_target, workspace, slug)
@@ -1961,6 +2143,11 @@ def _print_session_status(session: dict) -> None:
             print(f"Clicks:    {clicks}")
             if isinstance(gate.get("totalClickAttempts"), int):
                 print(f"Attempts:  {gate['totalClickAttempts']}")
+            if isinstance(gate.get("directRegisteredAttempts"), int):
+                print(
+                    "DirectCaps:"
+                    f" {gate['directRegisteredAttempts']} registered prompt(s)"
+                )
             if isinstance(gate.get("totalConfirmedApprovals"), int):
                 print(f"Confirmed: {gate['totalConfirmedApprovals']}")
             if isinstance(gate.get("lastScanDurationMs"), (int, float)):
@@ -2214,6 +2401,14 @@ def cmd_launch(args: argparse.Namespace) -> int:
             interval=interval_seconds,
         ))
 
+    classic_supported, classic_reason = _cursor_classic_mode_support()
+    if not classic_supported:
+        print(
+            f"Cannot launch a verified IDE window: {classic_reason}",
+            file=sys.stderr,
+        )
+        return 1
+
     ws_key = str(workspace)
     slug = _repo_slug(workspace)
     enabled_title = _window_title(workspace, gate_on=True)
@@ -2251,13 +2446,15 @@ def cmd_launch(args: argparse.Namespace) -> int:
         f"--remote-debugging-port={cdp_port}",
         "--user-data-dir",
         str(profile),
+        CURSOR_CLASSIC_MODE_ARG,
     ]
+    ide_args = _cursor_ide_launch_args(
+        cdp_port, profile, workspace=str(workspace),
+    )
 
     command = [
         "open", "-na", str(CURSOR_APP_PATH), "--args",
-        f"--remote-debugging-port={cdp_port}",
-        "--user-data-dir", str(profile),
-        str(workspace),
+        *ide_args,
     ]
     subprocess.Popen(
         command,
@@ -2274,10 +2471,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
     except RuntimeError:
         print("Falling back to direct executable launch...")
         subprocess.Popen(
-            [str(CURSOR_EXECUTABLE),
-             f"--remote-debugging-port={cdp_port}",
-             "--user-data-dir", str(profile),
-             str(workspace)],
+            [str(CURSOR_EXECUTABLE), *ide_args],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -2322,6 +2516,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
                            target_id=pinned_target,
                            interval_seconds=interval_seconds)
         print("\nAuto-approve ON.")
+        print("Mode: IDE (verified)")
         print(f"Fallback poll interval: {interval_seconds:g}s")
         print(f"Window title target: {enabled_title}")
         if pinned_target:
@@ -2332,6 +2527,21 @@ def cmd_launch(args: argparse.Namespace) -> int:
                    cdp_target_id=pinned_target,
                    poll_interval_seconds=interval_seconds)
     else:
+        surface = (
+            _cdp_bound_target_surface(cdp_port, pinned_target, timeout=5.0)
+            if pinned_target
+            else {"mode": "unknown"}
+        )
+        if surface.get("mode") != "ide":
+            _terminate_pid(pid)
+            _remove_session(ws_key)
+            print(
+                "\nCursor did not open a verified IDE workbench. The dedicated "
+                "process was closed instead of enabling auto-approve in an "
+                f"Agents/incomplete window (surface={surface}).",
+                file=sys.stderr,
+            )
+            return 1
         print(
             "\nCDP injection failed. Retry by running this launcher with 'on' "
             "(for example: caa on).",
@@ -2374,6 +2584,13 @@ def cmd_launch_ssh(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
+    classic_supported, classic_reason = _cursor_classic_mode_support()
+    if not classic_supported:
+        print(
+            f"Cannot launch a verified IDE window: {classic_reason}",
+            file=sys.stderr,
+        )
+        return 1
     folder_uri = _ssh_folder_uri(host, remote_path)
     ws_key = folder_uri
     slug = _ssh_slug(host, remote_path)
@@ -2411,13 +2628,15 @@ def cmd_launch_ssh(args: argparse.Namespace) -> int:
         f"--remote-debugging-port={cdp_port}",
         "--user-data-dir",
         str(profile),
+        CURSOR_CLASSIC_MODE_ARG,
     ]
+    ide_args = _cursor_ide_launch_args(
+        cdp_port, profile, folder_uri=folder_uri,
+    )
 
     command = [
         "open", "-na", str(CURSOR_APP_PATH), "--args",
-        f"--remote-debugging-port={cdp_port}",
-        "--user-data-dir", str(profile),
-        "--folder-uri", folder_uri,
+        *ide_args,
     ]
     subprocess.Popen(
         command,
@@ -2435,10 +2654,7 @@ def cmd_launch_ssh(args: argparse.Namespace) -> int:
     except RuntimeError:
         print("Falling back to direct executable launch...")
         subprocess.Popen(
-            [str(CURSOR_EXECUTABLE),
-             f"--remote-debugging-port={cdp_port}",
-             "--user-data-dir", str(profile),
-             "--folder-uri", folder_uri],
+            [str(CURSOR_EXECUTABLE), *ide_args],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -2487,6 +2703,7 @@ def cmd_launch_ssh(args: argparse.Namespace) -> int:
                            target_id=pinned_target,
                            interval_seconds=interval_seconds)
         print("\nAuto-approve ON.")
+        print("Mode: IDE (verified)")
         print(f"Fallback poll interval: {interval_seconds:g}s")
         print(f"Window title target: {enabled_title}")
         if pinned_target:
@@ -2497,6 +2714,21 @@ def cmd_launch_ssh(args: argparse.Namespace) -> int:
                    cdp_target_id=pinned_target,
                    poll_interval_seconds=interval_seconds)
     else:
+        surface = (
+            _cdp_bound_target_surface(cdp_port, pinned_target, timeout=5.0)
+            if pinned_target
+            else {"mode": "unknown"}
+        )
+        if surface.get("mode") != "ide":
+            _terminate_pid(pid)
+            _remove_session(ws_key)
+            print(
+                "\nCursor did not open a verified IDE workbench. The dedicated "
+                "process was closed instead of enabling auto-approve in an "
+                f"Agents/incomplete window (surface={surface}).",
+                file=sys.stderr,
+            )
+            return 1
         print(
             "\nCDP injection failed. Retry by running this launcher with 'on' "
             "(for example: caa on).",
@@ -2533,6 +2765,18 @@ def cmd_on(args: argparse.Namespace) -> int:
         return 1
 
     bound_target, _ = _rebind_session_target_if_unique(session)
+    try:
+        surface = _cdp_bound_target_surface(port, bound_target, timeout=5.0)
+    except (ConnectionRefusedError, OSError, RuntimeError) as exc:
+        print(f"Could not verify IDE mode: {exc}", file=sys.stderr)
+        return 1
+    if surface.get("mode") != "ide":
+        print(
+            "Refusing to enable auto-approve outside a verified IDE workbench "
+            f"(surface={surface}). Relaunch the workspace with 'caa launch'.",
+            file=sys.stderr,
+        )
+        return 1
     check = _cdp_gate(port, "status", target_id=bound_target)
     expected_hash: str | None = None
     expected_path: Path | None = None
@@ -2583,6 +2827,7 @@ def cmd_on(args: argparse.Namespace) -> int:
     )
     if result:
         print(f"Auto-approve ON (total clicks so far: {result.get('totalClicks', 0)})")
+        print("Mode: IDE (verified)")
         print(f"Fallback poll interval: {interval_seconds:g}s")
         if share_safe:
             print("Window title: discreet (screen-share safe; captured at inject time)")
@@ -2686,6 +2931,18 @@ def cmd_cycle(args: argparse.Namespace) -> int:
     slug = session.get("slug", _repo_slug(workspace))
     target, _ = _rebind_session_target_if_unique(session)
     mode = args.cycle_mode
+    try:
+        surface = _cdp_bound_target_surface(port, target, timeout=5.0)
+    except (ConnectionRefusedError, OSError, RuntimeError) as exc:
+        print(f"Could not verify IDE mode: {exc}", file=sys.stderr)
+        return 1
+    if surface.get("mode") != "ide":
+        print(
+            "Refusing to cycle outside a verified IDE workbench "
+            f"(surface={surface}). Relaunch the workspace with 'caa launch'.",
+            file=sys.stderr,
+        )
+        return 1
 
     if mode == "once":
         expression = (
