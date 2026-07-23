@@ -50,3 +50,10 @@ clicks.
 Redundant recovery mechanisms should share dedupe state, cap each path, and
 lease ownership only during an active attempt. Permanent ownership silently
 disables the supposed fast path; an uncapped backup bypasses retry safety.
+
+## Follow-up
+
+Issue 031 found that Cursor can render the same exact registered parent task
+with a singleton `Allow` and no `Stop`. The direct and row paths now accept that
+narrow layout through exact row identity, viewport, modal, and hit-target
+checks rather than requiring companion evidence.

@@ -3925,6 +3925,7 @@
     if (btn.kind === "resume") return "resume";
     if (hasNearbyDismissal(btn.el)) return "dismiss";
     if (hasNearbyCompanion(btn.el)) return "companion";
+    if (_isRegisteredSubagentSingletonAllow(btn)) return "registered_task";
     if (isModalSingleActionApprove(btn)) return "modal";
     return null;
   }
@@ -3951,6 +3952,27 @@
   function _registeredTaskForCandidate(btn) {
     if (!btn?.el) return null;
     return _taskForRow(btn.el.closest(SUBAGENT_ROW_SELECTOR));
+  }
+
+  function _isRegisteredSubagentSingletonAllow(btn) {
+    if (!btn?.el || btn.kind !== "approval" || btn.id !== "allow") return false;
+    const row = btn.el.closest(SUBAGENT_ROW_SELECTOR);
+    const task = _taskForRow(row);
+    if (
+      !row ||
+      !task ||
+      !ACTIVE_SUBAGENT_STATUSES.has(task.status) ||
+      row.getAttribute("data-find-row-key") !== task.rowKey ||
+      _hasUnrelatedVisibleModal(row)
+    ) {
+      return false;
+    }
+    const container = row.closest(SCROLL_CONTAINER_SELECTOR);
+    return (
+      !!container &&
+      _rowInsideViewport(btn.el, container) &&
+      _notCoveredByUnrelatedElement(btn.el)
+    );
   }
 
   function _debugSurface(el) {

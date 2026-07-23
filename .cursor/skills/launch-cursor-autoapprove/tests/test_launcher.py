@@ -56,6 +56,37 @@ class InjectorSourceTests(unittest.TestCase):
             active_records,
         )
 
+    def test_registered_subagent_singleton_allow_has_exact_row_context(self) -> None:
+        source = INJECTOR_PATH.read_text()
+        helper_start = source.index(
+            "function _isRegisteredSubagentSingletonAllow("
+        )
+        helper_end = source.index("\n  function ", helper_start)
+        helper = source[helper_start:helper_end]
+        eligibility_start = source.index("function _eligibilityReason(")
+        eligibility_end = source.index("\n  function ", eligibility_start)
+        eligibility = source[eligibility_start:eligibility_end]
+
+        self.assertIn('btn.id !== "allow"', helper)
+        self.assertIn("const row = btn.el.closest(SUBAGENT_ROW_SELECTOR);", helper)
+        self.assertIn("const task = _taskForRow(row);", helper)
+        self.assertIn("ACTIVE_SUBAGENT_STATUSES.has(task.status)", helper)
+        self.assertIn(
+            'row.getAttribute("data-find-row-key") !== task.rowKey',
+            helper,
+        )
+        self.assertIn("_hasUnrelatedVisibleModal(row)", helper)
+        self.assertIn("_rowInsideViewport(btn.el, container)", helper)
+        self.assertIn("_notCoveredByUnrelatedElement(btn.el)", helper)
+        self.assertIn(
+            'if (_isRegisteredSubagentSingletonAllow(btn)) return "registered_task";',
+            eligibility,
+        )
+        self.assertLess(
+            eligibility.index("hasNearbyCompanion(btn.el)"),
+            eligibility.index("_isRegisteredSubagentSingletonAllow(btn)"),
+        )
+
     def test_direct_and_cycle_paths_share_bounded_candidate_ownership(self) -> None:
         source = INJECTOR_PATH.read_text()
 
@@ -333,6 +364,24 @@ class InjectorSourceTests(unittest.TestCase):
         self.assertIn("maxJSHeapBytes: MAX_JS_HEAP_BYTES", source)
         self.assertIn('"maxJSHeapBytes"', launcher_source)
         self.assertIn("MiB limit", launcher_source)
+
+    def test_diagnose_covers_registered_singleton_allow(self) -> None:
+        launcher_source = LAUNCHER_PATH.read_text()
+        diagnose_start = launcher_source.index("def cmd_diagnose(")
+        diagnose_end = launcher_source.index("\ndef ", diagnose_start)
+        diagnose = launcher_source[diagnose_start:diagnose_end]
+
+        self.assertIn("__aa_diagnose_registered_probe", diagnose)
+        self.assertIn("virtualized-composer-messages-row", diagnose)
+        self.assertIn("subagent-task-card", diagnose)
+        self.assertIn("state.subagents.set(taskKey", diagnose)
+        self.assertIn("'approval_pending'", diagnose)
+        self.assertIn("registered_singleton_probe", diagnose)
+        self.assertIn("registered_passed", diagnose)
+        self.assertIn("state?.subagents?.delete(taskKey)", diagnose)
+        self.assertIn("state.directRegisteredApprovalAttempts.delete(key)", diagnose)
+        self.assertIn("state.fingerprintCooldowns.delete(key)", diagnose)
+        self.assertIn("allow.remove();", diagnose)
 
     def test_collapsed_tray_is_expanded_and_entries_are_reresolved(self) -> None:
         source = INJECTOR_PATH.read_text()

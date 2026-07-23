@@ -3574,7 +3574,7 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
     except (ConnectionRefusedError, OSError, RuntimeError) as exc:
         print(f"[2/4] DOM snapshot failed: {exc}")
 
-    # Step 3: Synthetic probe (View + Allow in dialog)
+    # Step 3: Synthetic probes for companion and exact registered-row contexts.
     gate_before = _cdp_gate(port, "status", target_id=target) or {}
     clicks_before = gate_before.get("totalClicks", 0)
     probe_js = r"""(() => {
@@ -3589,7 +3589,10 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
       b1.textContent = 'View';
       const b2 = document.createElement('button');
       b2.textContent = 'Allow';
-      b2.onclick = () => d.setAttribute('data-clicked', 'allow');
+      b2.onclick = () => {
+        d.setAttribute('data-clicked', 'allow');
+        b2.remove();
+      };
       d.appendChild(b1);
       d.appendChild(b2);
       document.body.appendChild(d);
@@ -3608,19 +3611,143 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
         _cdp_evaluate(port,
             "(() => { document.getElementById('__aa_diagnose_probe')?.remove(); return true; })()",
             target_id=target)
-        delta = clicks_after - clicks_before
-        recent = (gate_after.get("recentClicks") or [])[-3:]
+        companion_delta = clicks_after - clicks_before
+        print(
+            "[3/4] Companion probe result: "
+            f"{'PASS' if companion_delta > 0 and probe_clicked != 'no' else 'FAIL'} "
+            f"(clicks +{companion_delta}, probe={probe_clicked})"
+        )
+
+        registered_probe_js = r"""(() => {
+          const state = globalThis.__cursorAutoAccept?.state;
+          if (!state?.subagents) return false;
+          const taskKey = '__aa_diagnose_registered_task';
+          const old = document.getElementById('__aa_diagnose_registered_probe');
+          old?.remove();
+          state.subagents.delete(taskKey);
+          for (const key of state.directRegisteredApprovalAttempts?.keys?.() || []) {
+            if (key.startsWith(taskKey + '|')) {
+              state.directRegisteredApprovalAttempts.delete(key);
+            }
+          }
+          for (const key of state.fingerprintCooldowns?.keys?.() || []) {
+            if (key.startsWith(taskKey + '|')) {
+              state.fingerprintCooldowns.delete(key);
+            }
+          }
+          const rowKey = 'tool-placeholder:__aa_diagnose__:tool:call_diagnose_singleton';
+          const container = document.createElement('div');
+          container.id = '__aa_diagnose_registered_probe';
+          container.className = 'virtualized-composer-messages-scroll-container';
+          container.setAttribute('data-task-key', taskKey);
+          container.style.cssText = 'position:fixed;right:16px;top:20px;z-index:2147483647;background:#222;padding:10px;width:320px;height:96px;overflow:auto';
+          const row = document.createElement('div');
+          row.className = 'virtualized-composer-messages-row';
+          row.setAttribute('data-find-row-key', rowKey);
+          row.style.cssText = 'min-height:56px;display:flex;align-items:center';
+          const surface = document.createElement('div');
+          surface.className = 'subagent-task-card';
+          surface.textContent = 'Synthetic registered subagent ';
+          const allow = document.createElement('button');
+          allow.textContent = 'Allow';
+          allow.onclick = () => {
+            container.setAttribute('data-clicked', 'allow');
+            allow.remove();
+          };
+          surface.appendChild(allow);
+          row.appendChild(surface);
+          const input = document.createElement('div');
+          input.className = 'full-input-box';
+          input.style.cssText = 'height:1px';
+          container.appendChild(row);
+          container.appendChild(input);
+          state.subagents.set(taskKey, {
+            taskKey,
+            rowKey,
+            parentComposerId: '__aa_diagnose_composer',
+            status: 'approval_pending',
+          });
+          document.body.appendChild(container);
+          return true;
+        })()"""
+        registered_before = clicks_after
+        registered_injected = _cdp_evaluate(
+            port, registered_probe_js, target_id=target)
+        injected_value = (
+            registered_injected.get("result", {}).get("result", {}).get("value")
+        )
+        print("[3/4] Synthetic registered singleton Allow probe injected, waiting 4s...")
+        time.sleep(4.0)
+        registered_gate = _cdp_gate(port, "status", target_id=target) or {}
+        registered_after = registered_gate.get("totalClicks", 0)
+        registered_clicked_result = _cdp_evaluate(
+            port,
+            "(() => document.getElementById('__aa_diagnose_registered_probe')?.getAttribute('data-clicked') || 'no')()",
+            target_id=target,
+        )
+        registered_clicked = (
+            registered_clicked_result.get("result", {})
+            .get("result", {})
+            .get("value", "unknown")
+        )
+        _cdp_evaluate(
+            port,
+            """(() => {
+              const probe = document.getElementById('__aa_diagnose_registered_probe');
+              const taskKey = probe?.getAttribute('data-task-key');
+              const state = globalThis.__cursorAutoAccept?.state;
+              if (taskKey) {
+                state?.subagents?.delete(taskKey);
+                for (const key of state?.directRegisteredApprovalAttempts?.keys?.() || []) {
+                  if (key.startsWith(taskKey + '|')) {
+                    state.directRegisteredApprovalAttempts.delete(key);
+                  }
+                }
+                for (const key of state?.fingerprintCooldowns?.keys?.() || []) {
+                  if (key.startsWith(taskKey + '|')) {
+                    state.fingerprintCooldowns.delete(key);
+                  }
+                }
+              }
+              probe?.remove();
+              return true;
+            })()""",
+            target_id=target,
+        )
+        registered_delta = registered_after - registered_before
+        registered_passed = (
+            injected_value is True
+            and registered_delta > 0
+            and registered_clicked != "no"
+        )
+        print(
+            "[3/4] Registered singleton probe result: "
+            f"{'PASS' if registered_passed else 'FAIL'} "
+            f"(clicks +{registered_delta}, probe={registered_clicked})"
+        )
+        recent = (registered_gate.get("recentClicks") or [])[-5:]
         result_data = {
             "clicks_before": clicks_before,
-            "clicks_after": clicks_after,
-            "delta": delta,
-            "probe_clicked": probe_clicked,
+            "clicks_after": registered_after,
+            "delta": registered_after - clicks_before,
+            "companion_probe": {
+                "delta": companion_delta,
+                "clicked": probe_clicked,
+            },
+            "registered_singleton_probe": {
+                "injected": injected_value,
+                "delta": registered_delta,
+                "clicked": registered_clicked,
+            },
             "recent": recent,
         }
         (out_dir / "probe-result.json").write_text(
             json.dumps(result_data, indent=2), encoding="utf-8")
-        verdict = "PASS" if delta > 0 and probe_clicked != "no" else "FAIL"
-        print(f"[3/4] Probe result: {verdict} (clicks +{delta}, probe={probe_clicked})")
+        verdict = (
+            "PASS"
+            if companion_delta > 0 and probe_clicked != "no" and registered_passed
+            else "FAIL"
+        )
     except (ConnectionRefusedError, OSError, RuntimeError) as exc:
         print(f"[3/4] Probe failed: {exc}")
         verdict = "ERROR"

@@ -116,7 +116,9 @@ built-in usage summary, `caa help` for examples and doc paths, or
   tabs, scroll, and focus are restored. Use `caa cycle --off` to opt out.
 - Mounted parent `Allow` cards remain eligible to direct scanning while
   registered-row and individual-child navigation remain bounded backups. The
-  paths share task-scoped dedupe state.
+  paths share task-scoped dedupe state. An exact registered task row can also
+  authorize Cursor's singleton `Allow` layout when no `Stop` companion exists;
+  arbitrary singleton controls remain blocked.
 - `stop` ends the session and closes the dedicated process; the dedicated profile
   folder persists for reuse on the next `launch`.
 - If two sessions share the same folder name, use `-w <full-path>` instead of a

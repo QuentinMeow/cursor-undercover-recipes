@@ -404,6 +404,12 @@ task-scoped prompt fingerprint. Registered-row recovery leases ownership only
 after it has materialized the exact row and selected one exact candidate; the
 lease is released in `finally`.
 
+Cursor may render an exact registered parent task with a singleton `Allow` and
+no nearby `Stop` or other companion. That narrow fallback requires an active
+task record, exact row-key identity, one scroll container, viewport
+intersection, no unrelated modal, and an uncovered hit target. Arbitrary
+singleton `Allow` controls elsewhere on a composer surface remain blocked.
+
 Both paths use `_promptFingerprint()` for the same task-scoped eight-second
 cooldown. A click by either path therefore suppresses an immediate duplicate
 from the other while still allowing the other mechanism to recover a prompt
