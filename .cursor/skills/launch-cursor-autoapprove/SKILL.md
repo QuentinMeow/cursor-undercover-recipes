@@ -190,10 +190,11 @@ use `caa --help` (or the full launcher path with `--help`).
     exhausted prompts then receive bounded probe backoff instead of being
     remounted every cycle.
     Mounted parent `Allow` cards remain eligible to the ordinary direct scanner;
-    that path gets one attempt per task-scoped fingerprint. Registered-row
-    recovery leases only the exact task it is actively confirming. Both paths
-    share a task-scoped cooldown, while tray navigation remains an independent
-    child-editor backup.
+    exact registered row identity also authorizes Cursor's singleton `Allow`
+    layout when no `Stop` companion exists. That path gets one attempt per
+    task-scoped fingerprint. Registered-row recovery leases only the exact task
+    it is actively confirming. Both paths share a task-scoped cooldown, while
+    tray navigation remains an independent child-editor backup.
 12. Active pinned Agent Window conversations are visited sequentially because
     Cursor mounts only the selected conversation. Automatic visits happen only
     while the window is unfocused, skip the selected row, reject duplicate

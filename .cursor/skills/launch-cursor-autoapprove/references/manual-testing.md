@@ -708,6 +708,9 @@ Expected result:
 - registered parent-row recovery targets only records whose parent composer
   matches the currently mounted virtualizer; retained records from other
   parents do not emit `composer_identity_changed` every two seconds
+- an exact registered parent row containing one visible `Allow` and no `Stop`
+  is eligible only while its task is active, its row key matches, it is inside
+  the viewport, no unrelated modal is visible, and its hit target is uncovered
 - unmounted registered rows are revisited without permanently expanding the list
 - `approval_attempted` is followed by `approval_confirmed` only after the card
   resolves

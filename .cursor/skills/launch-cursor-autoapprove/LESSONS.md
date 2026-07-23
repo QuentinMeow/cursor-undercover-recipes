@@ -530,6 +530,12 @@
   attempt per task-scoped fingerprint, share its cooldown with row recovery,
   and lease exclusive ownership only during an active bounded attempt.
 
+- **Exact registered task identity can safely replace missing companion
+  evidence**: Cursor can render a running parent subagent row with one
+  standalone `Allow` and no `Stop`. Do not broaden singleton approval matching
+  across the composer. Require one exact registry row, active task state,
+  viewport intersection, no unrelated modal, and an uncovered hit target.
+
 - **A click retry cap must also cap navigation**: Marking a prompt exhausted is
   ineffective if every scheduler pass still opens its child transcript merely
   to rediscover the same terminal retry record. Store the exact child title and
