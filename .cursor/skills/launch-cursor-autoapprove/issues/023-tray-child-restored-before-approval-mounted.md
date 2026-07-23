@@ -44,3 +44,10 @@ screenshot.
 Mounting a child editor and mounting the end of its virtualized transcript are
 separate asynchronous steps. Navigation recovery must wait for candidate
 materialization, not merely for the editor tab and conversation container.
+
+## Follow-up
+
+Issue 029 found that the one-to-1.5-second window and DOM-quiet predicate still
+accepted partial virtual-list mounts. The current implementation actively
+materializes the exact transcript tail for up to five seconds and backs off
+empty children.

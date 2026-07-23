@@ -43,6 +43,19 @@ class InjectorSourceTests(unittest.TestCase):
             derive_status,
         )
 
+    def test_registered_row_recovery_targets_only_current_composer(self) -> None:
+        source = INJECTOR_PATH.read_text()
+        active_start = source.index("function _activeSubagentRecords(")
+        active_end = source.index("\n  function ", active_start)
+        active_records = source[active_start:active_end]
+
+        self.assertIn("const virtualizer = _getVirtualizerSnapshot();", active_records)
+        self.assertIn("virtualizer.snapshot.composerId", active_records)
+        self.assertIn(
+            "record.parentComposerId === currentComposerId",
+            active_records,
+        )
+
     def test_direct_and_cycle_paths_share_bounded_candidate_ownership(self) -> None:
         source = INJECTOR_PATH.read_text()
 
@@ -176,6 +189,9 @@ class InjectorSourceTests(unittest.TestCase):
         candidate_wait_start = source.index("function _waitForTrayCandidates(")
         candidate_wait_end = source.index("\n  function ", candidate_wait_start)
         wait_for_candidate = source[candidate_wait_start:candidate_wait_end]
+        tail_start = source.index("function _materializeNavigatedTranscriptTail(")
+        tail_end = source.index("\n  function ", tail_start)
+        materialize_tail = source[tail_start:tail_end]
         attempt_start = source.index("async function _attemptNavigatedApprovalImpl(")
         attempt_end = source.index("\n  function ", attempt_start)
         attempt = source[attempt_start:attempt_end]
@@ -199,6 +215,17 @@ class InjectorSourceTests(unittest.TestCase):
         self.assertIn("CYCLE_TRAY_MIN_CANDIDATE_WAIT_MS", wait_for_candidate)
         self.assertIn("CYCLE_TRAY_QUIET_MS", wait_for_candidate)
         self.assertIn("CYCLE_TRAY_CANDIDATE_TIMEOUT_MS", wait_for_candidate)
+        self.assertIn(
+            "_materializeNavigatedTranscriptTail(target, readiness)",
+            wait_for_candidate,
+        )
+        self.assertIn("SCROLL_CONTAINER_SELECTOR", materialize_tail)
+        self.assertIn("_setProgrammaticScroll(container, bottom)", materialize_tail)
+        self.assertIn(
+            '"transcript_tail_stable_without_candidate"',
+            wait_for_candidate,
+        )
+        self.assertIn("tailPulses: readiness.tailPulses", wait_for_candidate)
         self.assertIn(
             "const waitResult = await _waitForTrayCandidates(target);",
             attempt,
@@ -234,15 +261,78 @@ class InjectorSourceTests(unittest.TestCase):
         attempt_start = source.index("async function _attemptNavigatedApprovalImpl(")
         attempt_end = source.index("\n  function ", attempt_start)
         attempt = source[attempt_start:attempt_end]
+        exhaust_start = source.index("function _markNavigatedAttemptExhausted(")
+        exhaust_end = source.index("\n  function ", exhaust_start)
+        exhaust = source[exhaust_start:exhaust_end]
+        filter_start = source.index("function _filterNavigationBackoff(")
+        filter_end = source.index("\n  function ", filter_start)
+        backoff_filter = source[filter_start:filter_end]
+        cycle_start = source.index("async function runSubagentCycle(")
+        cycle_end = source.index("\n  function ", cycle_start)
+        cycle = source[cycle_start:cycle_end]
 
         self.assertIn(
             "previous.attempts >= CYCLE_TRAY_MAX_ATTEMPTS",
             attempt,
         )
-        self.assertIn("previous.failed = true;", attempt)
+        self.assertIn("previous.failed = true;", exhaust)
         self.assertIn("reason: `${source}_retry_exhausted`", attempt)
-        self.assertIn("state.pinnedApprovalAttempts", attempt)
-        self.assertIn("state.trayApprovalAttempts", attempt)
+        self.assertIn("_navigatedApprovalAttempts(source)", attempt)
+        self.assertIn("CYCLE_EXHAUSTED_PROBE_BASE_MS", exhaust)
+        self.assertIn("CYCLE_EXHAUSTED_PROBE_MAX_MS", exhaust)
+        self.assertIn("nextProbeAt", backoff_filter)
+        self.assertIn(
+            "_filterNavigationBackoff(eligibleTrayEntries, \"tray\")",
+            cycle,
+        )
+        self.assertIn(
+            "_filterNavigationBackoff(pinnedEntries, \"pinned\")",
+            cycle,
+        )
+        self.assertIn('result.outcome === "deferred"', cycle)
+        self.assertIn("onlyDeferredNavigation", cycle)
+        self.assertNotIn(
+            "summary.trayDeferred > 0 ||",
+            cycle[cycle.index("const needsSoonerRetry ="):],
+        )
+
+    def test_empty_child_mounts_are_backed_off_after_tail_readiness_wait(self) -> None:
+        source = INJECTOR_PATH.read_text()
+        record_start = source.index("function _recordNavigatedEmptyBackoff(")
+        record_end = source.index("\n  function ", record_start)
+        record = source[record_start:record_end]
+        attempt_start = source.index("async function _attemptNavigatedApprovalImpl(")
+        attempt_end = source.index("\n  function ", attempt_start)
+        attempt = source[attempt_start:attempt_end]
+
+        self.assertIn("CYCLE_EMPTY_PROBE_BASE_MS", record)
+        self.assertIn("CYCLE_EMPTY_PROBE_MAX_MS", record)
+        self.assertIn("noCandidate: true", record)
+        self.assertIn("_clearNavigatedAttemptsForTarget(", record)
+        self.assertIn(
+            "_recordNavigatedEmptyBackoff(attemptsMap, target)",
+            attempt,
+        )
+        self.assertIn('outcome: paused ? "paused" : missed ? "miss" : "deferred"', attempt)
+        self.assertIn("conversationMounted: waitResult.conversationMounted", attempt)
+        self.assertIn("tailContainerCount: waitResult.tailContainerCount", attempt)
+        self.assertIn("tailPulses: waitResult.tailPulses", attempt)
+
+    def test_renderer_heap_safety_limit_is_four_gib(self) -> None:
+        source = INJECTOR_PATH.read_text()
+        launcher_source = LAUNCHER_PATH.read_text()
+
+        self.assertIn(
+            "const MAX_JS_HEAP_BYTES = 4 * 1024 * 1024 * 1024;",
+            source,
+        )
+        self.assertNotIn(
+            "const MAX_JS_HEAP_BYTES = 768 * 1024 * 1024;",
+            source,
+        )
+        self.assertIn("maxJSHeapBytes: MAX_JS_HEAP_BYTES", source)
+        self.assertIn('"maxJSHeapBytes"', launcher_source)
+        self.assertIn("MiB limit", launcher_source)
 
     def test_collapsed_tray_is_expanded_and_entries_are_reresolved(self) -> None:
         source = INJECTOR_PATH.read_text()
@@ -310,7 +400,11 @@ class InjectorSourceTests(unittest.TestCase):
             cycle,
         )
         self.assertIn("if (!trayExpansionContext.ok) {", cycle)
-        self.assertIn("_boundedRunningSubagentTrayEntries(eligibleTrayEntries)", cycle)
+        self.assertIn(
+            "_boundedRunningSubagentTrayEntries(\n"
+            "                  filteredTrayEntries.entries",
+            cycle,
+        )
         self.assertIn("_uniquelyTitledRunningSubagentTrayEntries(", cycle)
         self.assertIn("CYCLE_TRAY_MAX_DURATION_MS", cycle)
         self.assertIn("const rowStartedPerformance = performance.now();", cycle)

@@ -175,15 +175,20 @@ use `caa --help` (or the full launcher path with `--help`).
    reloads the in-window script so the running window picks up the latest
    pattern fixes.
 11. Default-on nested recovery records exact mounted task-row identity and
-    revisits registered unmounted rows through the TanStack virtualizer. As a
-    backup, it expands an exact collapsed running-subagent tray, re-resolves
-    each entry after parent restoration, mounts each read-only child editor,
-    handles eligible approvals there, and restores the original tray/tabs/focus
-    state. Both paths count confirmations separately from click attempts.
+    revisits registered unmounted rows through the TanStack virtualizer, scoped
+    to the exact currently mounted parent composer. As a backup, it expands an
+    exact collapsed running-subagent tray, re-resolves each entry after parent
+    restoration, mounts each read-only child editor, handles eligible approvals
+    there, and restores the original tray/tabs/focus state. Both paths count
+    confirmations separately from click attempts.
     Automatic cycles pause while the focused window has its terminal or another
     non-composer editor active; focus settling follows newer user interaction
     instead of restoring a stale snapshot. Use `caa cycle --off` for the
     explicit opt-out.
+    Child navigation keeps a long transcript selected while its exact
+    virtualized tail is materialized for up to five seconds. Empty children and
+    exhausted prompts then receive bounded probe backoff instead of being
+    remounted every cycle.
     Mounted parent `Allow` cards remain eligible to the ordinary direct scanner;
     that path gets one attempt per task-scoped fingerprint. Registered-row
     recovery leases only the exact task it is actively confirming. Both paths
@@ -199,7 +204,7 @@ use `caa --help` (or the full launcher path with `--help`).
     Pinned still fail closed.
 13. Renderer safety bounds rate-limit mutation scans, cache private
     virtualizer snapshots, cap cycle duration, and turn the gate OFF after
-    repeated slow scans or excessive JavaScript heap use.
+    repeated slow scans or JavaScript heap use above 4 GiB.
 
 Inactive top-level sidebar agents are not mounted chat surfaces in Cursor
 3.12.17, so the injector cycles pinned conversations sequentially rather than

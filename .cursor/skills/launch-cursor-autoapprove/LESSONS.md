@@ -529,3 +529,30 @@
   clicks the same registered control forever. Give the mounted direct path one
   attempt per task-scoped fingerprint, share its cooldown with row recovery,
   and lease exclusive ownership only during an active bounded attempt.
+
+- **A click retry cap must also cap navigation**: Marking a prompt exhausted is
+  ineffective if every scheduler pass still opens its child transcript merely
+  to rediscover the same terminal retry record. Store the exact child title and
+  resource identity with the exhausted fingerprint, filter it before
+  navigation, and use bounded exponential probes. Treat an exhausted probe as
+  deferred work, not as a fresh failure that selects a faster scheduler delay.
+
+- **A renderer-wide task registry must be scoped to the mounted composer**:
+  Retained records from another parent transcript cannot materialize through
+  the current virtualizer. Filter by exact parent composer identity before row
+  recovery; do not count cross-composer routing mismatches as transient misses
+  or mark them terminal, because their parent may be selected again later.
+
+- **An editor tab and a quiet DOM do not prove transcript-tail readiness**:
+  Cursor can mount a selected child tab, one `div.conversations`, and a stable
+  partial virtual list before its pending approval tail exists. Keep the exact
+  child selected for a meaningful bounded window, repeatedly anchor its exact
+  conversation scroll container to the growing bottom, and record tail
+  readiness telemetry. A fully materialized child with no candidate also needs
+  probe backoff so normal running children are not remounted continuously.
+
+- **Heap circuit thresholds are operational policy, not leak diagnosis**:
+  Cursor itself can retain large transcript heaps. Keep the scan-duration trip
+  independent, expose the measured heap and threshold, and choose the heap
+  ceiling explicitly for the intended workload. This skill now uses 4 GiB;
+  terminal navigation backoff prevents known retry churn from racing toward it.

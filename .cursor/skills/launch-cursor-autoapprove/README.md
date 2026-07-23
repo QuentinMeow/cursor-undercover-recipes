@@ -110,8 +110,10 @@ built-in usage summary, `caa help` for examples and doc paths, or
   only the selected conversation. Automatic top-level
   navigation runs only while the window is unfocused; `cycle --once` is the
   explicit focused-window test path. Cycles are bounded, approvals are
-  confirmed with capped retries, and the original agent, tabs, scroll, and
-  focus are restored. Use `caa cycle --off` to opt out.
+  confirmed with capped retries, delayed child transcripts are kept selected
+  while their tail is materialized, and exhausted or empty children receive
+  probe backoff instead of being remounted continuously. The original agent,
+  tabs, scroll, and focus are restored. Use `caa cycle --off` to opt out.
 - Mounted parent `Allow` cards remain eligible to direct scanning while
   registered-row and individual-child navigation remain bounded backups. The
   paths share task-scoped dedupe state.
@@ -128,7 +130,7 @@ built-in usage summary, `caa help` for examples and doc paths, or
 - The script still relies on Cursor's DOM structure; major UI changes can break
   matching or require pattern updates.
 - Broad mutation work is rate-limited. Repeated scans over 250ms or JavaScript
-  heap above 768 MiB trips the gate OFF and appears under `status`.
+  heap above 4 GiB trips the gate OFF and appears under `status`.
 - Keep the gate OFF (`caa off`) when doing sensitive UI actions in the dedicated
   window that are unrelated to approvals.
 - Direct visible-prompt scans remain active while the terminal is focused, but

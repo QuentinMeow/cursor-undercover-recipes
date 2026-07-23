@@ -384,8 +384,11 @@ run simultaneously.
   bounded to two active, unselected rows per automatic cycle, so top-level
   navigation cannot consume the nested recovery budget; focused windows never
   receive automatic top-level navigation
-- Tray approvals use exact selected-tab resource identity, confirmation, and a
-  two-attempt limit; aggregate visits/attempts/confirmations appear in status
+- Tray approvals use exact selected-tab resource identity, transcript-tail
+  materialization, confirmation, and a two-attempt limit. Empty children back
+  off from 15 to 60 seconds; exhausted prompts back off from one to 15 minutes
+  instead of remounting the same child continuously. Aggregate
+  visits/attempts/confirmations appear in status
 - Real user interactions increment a monotonic generation and retain the latest
   terminal/editor target for focus-safe restoration
 - Cached private virtualizer snapshot (5-second TTL; one forced refresh per
@@ -406,6 +409,11 @@ cooldown. A click by either path therefore suppresses an immediate duplicate
 from the other while still allowing the other mechanism to recover a prompt
 that remains unresolved after cooldown. A direct-attempt map prevents the
 confirmation-blind scanner from bypassing exhausted cycle retries indefinitely.
+The task registry can retain records from multiple parent conversations, but
+registered-row recovery selects only records whose `parentComposerId` matches
+the currently mounted virtualizer composer. Cross-composer records stay
+available for a future exact parent selection and do not generate repeated
+`composer_identity_changed` misses.
 Tray and pinned navigation keep
 exclusive ownership from mount through verified restoration because ordinary
 body-level portal controls cannot be safely attributed during navigation.
@@ -445,9 +453,12 @@ handles those surfaces:
    matches the row and whose group contains `div.conversations`.
 7. Use the tab's agent resource UUID as approval identity.
 8. Wait for the selected child's transcript tail to materialize: observe only
-   that editor group, poll for an eligible candidate for at least one second, finish
-   after 250 ms of DOM quiet, and stop after 1.5 seconds or if tab identity
-   changes.
+   that editor group, repeatedly anchor its exact virtualized conversation
+   container to the current bottom as its height grows, poll for an eligible
+   candidate for at least 2.5 seconds, finish only after 500 ms of DOM quiet
+   with one stable tail container, and stop after five seconds or if tab
+   identity changes. Pinned top-level visits retain their shorter
+   one-to-1.5-second candidate window.
 9. Scan only that editor group. The editor workbench exclusion is relaxed only
    in this exact scope; exact labels, dismissal/companion evidence, unrelated
    modal blocking, and hit coverage remain required.
@@ -456,7 +467,11 @@ handles those surfaces:
    Disabled, hidden, covered, or temporarily context-less controls remain
    present and therefore do not produce false confirmations. Connected nodes
    are checked for their current label/prompt identity so a node reused for a
-   completed state does not remain falsely pending.
+    completed state does not remain falsely pending. A terminally exhausted
+    prompt is not remounted on the next cycle: its exact child title receives
+    exponential probe backoff until the prompt clears or changes. A fully
+    materialized child with no candidate receives a shorter bounded probe
+    backoff.
 11. Restore the original parent tab before resolving the next child. Cursor's
    tab widget requires
    `mousedown`/`mouseup` before `click`; plain `HTMLElement.click()` did not
@@ -470,8 +485,11 @@ Tray materialization emits `tray_expand`, `tray_expand_miss`, and
 `tray_approval_attempted`, `tray_approval_confirmed`, and
 `tray_approval_unconfirmed`. A visit that mounts the child but finds no eligible
 candidate emits `tray_no_candidate` with its bounded wait reason, duration, and
-raw approval-control count. The normal mounted-composer scanner remains active
-as the fast path. Navigation acquires editor-group ownership before dispatching
+raw approval-control count plus conversation/tail readiness telemetry.
+`tray_retry_exhausted` records the next bounded probe time. Deferred children
+do not count as fresh failures and therefore do not select the scheduler's
+two-second retry path. The normal mounted-composer scanner remains active as
+the fast path. Navigation acquires editor-group ownership before dispatching
 the row/tab click and retains it until selected sidebar/resource and tab state
 are observed restored. Acquiring only after mount or releasing when the attempt
 promise returns would let mutation-driven direct scanning race the mount or
@@ -583,9 +601,10 @@ The injector fails closed when its own renderer work becomes pathological:
   and normal status derivation resumes after the approval clears so changed
   row state can be observed
 - three consecutive approval scans above 250ms turn the gate OFF
-- JavaScript heap above 768 MiB turns the gate OFF when Chromium exposes
+- JavaScript heap above 4 GiB turns the gate OFF when Chromium exposes
   `performance.memory`
-- `status` reports last/max scan duration, heap, and any safety trip
+- `status` reports last/max scan duration, current heap, the configured heap
+  limit, and any safety trip
 
 Cursor can still consume substantial memory while rendering a large transcript
 with no injector loaded. The circuit limits injector contribution; it cannot
@@ -603,7 +622,7 @@ A simultaneous 90-second snapshot run recorded 43 samples and two additional
 parent-command clicks. After 339 scans, the maximum scan duration was 48.4ms,
 JavaScript heap was 247.7 MiB, and the safety circuit did not trip. This
 validates the faster fallback cadence for the tested transcript, but the
-250ms/768 MiB fail-safe bounds remain necessary for larger product workloads.
+250ms/4 GiB fail-safe bounds remain necessary for larger product workloads.
 
 The first real-prompt replay after this stress run exposed a delete-file
 regression from the earlier row-only fallback scope (11/12 fixtures passed).

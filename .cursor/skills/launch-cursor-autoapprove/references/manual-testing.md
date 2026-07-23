@@ -697,7 +697,17 @@ Expected result:
   visits the blocked child, and restores the tray's prior expansion state
 - multiple children are re-resolved after each parent-editor restoration;
   later visits do not fail because a previously captured row disconnected
+- a long selected child remains mounted for up to five seconds while its exact
+  virtualized transcript container is repeatedly anchored to the growing tail;
+  `tray_no_candidate` reports conversation, tail-container, tail-distance, and
+  pulse telemetry when no button appears
+- an empty child is deferred for 15–60 seconds and a two-attempt exhausted
+  prompt is deferred for one to 15 minutes; deferred children are not remounted
+  every two to five seconds and do not count as fresh cycle failures
 - every task has a distinct task/row identity even when labels are identical
+- registered parent-row recovery targets only records whose parent composer
+  matches the currently mounted virtualizer; retained records from other
+  parents do not emit `composer_identity_changed` every two seconds
 - unmounted registered rows are revisited without permanently expanding the list
 - `approval_attempted` is followed by `approval_confirmed` only after the card
   resolves
@@ -731,7 +741,7 @@ Expected result:
 Expected result:
 
 - ordinary scans remain well below the 250ms circuit threshold
-- three consecutive slow scans or heap above 768 MiB turns the gate OFF and
+- three consecutive slow scans or heap above 4 GiB turns the gate OFF and
   records a `safety_trip`
 - if exactly one replacement workbench target exists, `on` reports the old and
   new target IDs and reinjects successfully

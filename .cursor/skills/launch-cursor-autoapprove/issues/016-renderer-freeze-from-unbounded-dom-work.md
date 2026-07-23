@@ -47,8 +47,10 @@ lesson_extracted: true
   the existing per-fingerprint cooldown, so throughput does not mean repeatedly
   clicking one unresolved prompt.
 - Cycles have task-count and elapsed-time bounds.
-- Three consecutive scans above 250 ms or JavaScript heap above 768 MiB trips
-  the gate OFF and records `safety_trip`.
+- Three consecutive scans above 250 ms or JavaScript heap above the configured
+  limit trips the gate OFF and records `safety_trip`. The original limit was
+  768 MiB; issue 028 raised the current limit to 4 GiB after adding
+  exhausted-child navigation backoff.
 - `on`, `off`, `cycle`, and `subagents` can safely rebind after a renderer reload
   only when exactly one workbench target exists.
 
