@@ -310,14 +310,20 @@ identity. The original tray expansion state is restored unless newer user
 interaction takes ownership.
 
 The selected editor can appear before a long virtualized transcript mounts its
-tail, so recovery observes that exact group and waits one to 1.5 seconds for an
-eligible candidate. Within that group, exact approval labels still require a
-nearby dismissal/companion or narrow modal rule. Unrelated modals and covered
-controls block the click. Each prompt gets at most two attempts and is confirmed
-only when the raw control remains absent across consecutive final checks;
-temporary disabled, hidden, or covered states remain unconfirmed. The cycle then restores every previously
-selected editor tab and focus; Cursor's tab widget requires
-`mousedown`/`mouseup` before `click` for reliable restoration.
+tail, so tray recovery observes that exact group for up to five seconds and
+repeatedly anchors its exact conversation scroll container to the growing
+bottom. It permits an empty result only after at least 2.5 seconds, 500 ms of
+DOM quiet, one mounted conversation, and one stable tail container. Pinned
+top-level visits retain a shorter one-to-1.5-second candidate window. Within
+that group, exact approval labels still require a nearby dismissal/companion or
+narrow modal rule. Unrelated modals and covered controls block the click. Each
+prompt gets at most two attempts and is confirmed only when the raw control
+remains absent across consecutive final checks; temporary disabled, hidden, or
+covered states remain unconfirmed. Empty child mounts receive 15–60-second
+probe backoff. Exhausted prompts receive one-to-15-minute probe backoff and do
+not count as fresh cycle failures, preventing continuous child remounts. The
+cycle then restores every previously selected editor tab and focus; Cursor's tab
+widget requires `mousedown`/`mouseup` before `click` for reliable restoration.
 
 ### Pinned top-level Agent Window fallback
 

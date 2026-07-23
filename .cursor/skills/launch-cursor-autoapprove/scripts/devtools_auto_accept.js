@@ -74,16 +74,23 @@
   const CYCLE_TRAY_EXPAND_MAX_FAILURES = 5;
   const CYCLE_TRAY_MOUNT_TIMEOUT_MS = 800;
   const CYCLE_PINNED_MOUNT_TIMEOUT_MS = 1500;
-  const CYCLE_TRAY_MIN_CANDIDATE_WAIT_MS = 1000;
-  const CYCLE_TRAY_QUIET_MS = 250;
-  const CYCLE_TRAY_CANDIDATE_TIMEOUT_MS = 1500;
+  const CYCLE_PINNED_MIN_CANDIDATE_WAIT_MS = 1000;
+  const CYCLE_PINNED_CANDIDATE_QUIET_MS = 250;
+  const CYCLE_PINNED_CANDIDATE_TIMEOUT_MS = 1500;
+  const CYCLE_TRAY_MIN_CANDIDATE_WAIT_MS = 2500;
+  const CYCLE_TRAY_QUIET_MS = 500;
+  const CYCLE_TRAY_CANDIDATE_TIMEOUT_MS = 5000;
   const CYCLE_TRAY_CONFIRM_DELAYS_MS = [100, 300, 600];
   const CYCLE_TRAY_MAX_ATTEMPTS = 2;
+  const CYCLE_EXHAUSTED_PROBE_BASE_MS = 60000;
+  const CYCLE_EXHAUSTED_PROBE_MAX_MS = 15 * 60 * 1000;
+  const CYCLE_EMPTY_PROBE_BASE_MS = 15000;
+  const CYCLE_EMPTY_PROBE_MAX_MS = 60000;
   const FOCUS_SETTLE_DELAY_MS = 300;
   const VIRTUALIZER_SNAPSHOT_CACHE_MS = 5000;
   const MAX_SAFE_SCAN_DURATION_MS = 250;
   const MAX_CONSECUTIVE_SLOW_SCANS = 3;
-  const MAX_JS_HEAP_BYTES = 768 * 1024 * 1024;
+  const MAX_JS_HEAP_BYTES = 4 * 1024 * 1024 * 1024;
   const ACTIVE_SUBAGENT_STATUSES = new Set([
     "discovered",
     "running",
@@ -1139,8 +1146,17 @@
   }
 
   function _activeSubagentRecords() {
-    const records = Array.from(state.subagents.values()).filter((record) =>
-      ACTIVE_SUBAGENT_STATUSES.has(record.status)
+    const virtualizer = _getVirtualizerSnapshot();
+    const currentComposerId = virtualizer.ok
+      ? String(virtualizer.snapshot.composerId || "")
+      : null;
+    const records = Array.from(state.subagents.values()).filter(
+      (record) =>
+        ACTIVE_SUBAGENT_STATUSES.has(record.status) &&
+        (
+          !currentComposerId ||
+          record.parentComposerId === currentComposerId
+        )
     );
     records.sort((a, b) => {
       const pendingA = a.status === "approval_pending" ? 0 : 1;
@@ -1346,6 +1362,133 @@
     return entries.filter(
       (entry) => titleCounts.get(normalizeLabel(entry.title)) === 1
     );
+  }
+
+  function _navigatedApprovalAttempts(source) {
+    return source === "pinned"
+      ? state.pinnedApprovalAttempts
+      : state.trayApprovalAttempts;
+  }
+
+  function _failedNavigationBackoff(entry, source) {
+    const title = normalizeLabel(entry?.title || "");
+    if (!title) return null;
+    const deferred = Array.from(_navigatedApprovalAttempts(source).values()).filter(
+      (attempt) =>
+        normalizeLabel(attempt.title || "") === title &&
+        Number.isFinite(attempt.nextProbeAt)
+    );
+    if (deferred.length === 0) return null;
+    const nextProbeAt = Math.max(
+      ...deferred.map((attempt) => attempt.nextProbeAt)
+    );
+    const retryAfterMs = Math.max(0, nextProbeAt - Date.now());
+    return retryAfterMs > 0 ? { nextProbeAt, retryAfterMs } : null;
+  }
+
+  function _filterNavigationBackoff(entries, source) {
+    const available = [];
+    let skipped = 0;
+    let nextProbeAt = null;
+    for (const entry of entries) {
+      const backoff = _failedNavigationBackoff(entry, source);
+      if (!backoff) {
+        available.push(entry);
+        continue;
+      }
+      skipped++;
+      nextProbeAt =
+        nextProbeAt === null
+          ? backoff.nextProbeAt
+          : Math.min(nextProbeAt, backoff.nextProbeAt);
+    }
+    return { entries: available, skipped, nextProbeAt };
+  }
+
+  function _clearNavigatedAttemptsForTarget(attemptsMap, target) {
+    let cleared = 0;
+    for (const [fingerprint, attempt] of attemptsMap) {
+      if (
+        attempt.targetKey === target.targetKey ||
+        (
+          !attempt.targetKey &&
+          normalizeLabel(attempt.title || "") === normalizeLabel(target.title || "")
+        )
+      ) {
+        attemptsMap.delete(fingerprint);
+        cleared++;
+      }
+    }
+    return cleared;
+  }
+
+  function _clearSupersededNavigatedAttempts(
+    attemptsMap,
+    target,
+    currentFingerprint
+  ) {
+    for (const [fingerprint, attempt] of attemptsMap) {
+      if (
+        fingerprint !== currentFingerprint &&
+        attempt.targetKey === target.targetKey
+      ) {
+        attemptsMap.delete(fingerprint);
+      }
+    }
+  }
+
+  function _markNavigatedAttemptExhausted(previous, target, isProbe) {
+    const probeCount = isProbe ? (previous.exhaustedProbeCount || 0) + 1 : 0;
+    const delayMs = Math.min(
+      CYCLE_EXHAUSTED_PROBE_MAX_MS,
+      CYCLE_EXHAUSTED_PROBE_BASE_MS * 2 ** probeCount
+    );
+    previous.failed = true;
+    previous.title = target.title;
+    previous.targetKey = target.targetKey;
+    previous.exhaustedAt =
+      previous.exhaustedAt || new Date().toISOString();
+    previous.exhaustedProbeCount = probeCount;
+    previous.nextProbeAt = Date.now() + delayMs;
+    if (isProbe) previous.lastExhaustedProbeAt = new Date().toISOString();
+    return previous.nextProbeAt;
+  }
+
+  function _recordNavigatedEmptyBackoff(attemptsMap, target) {
+    const previous = Array.from(attemptsMap.values()).find(
+      (attempt) =>
+        attempt.noCandidate === true &&
+        attempt.targetKey === target.targetKey
+    );
+    const emptyProbeCount = (previous?.emptyProbeCount || 0) + 1;
+    const delayMs = Math.min(
+      CYCLE_EMPTY_PROBE_MAX_MS,
+      CYCLE_EMPTY_PROBE_BASE_MS * 2 ** (emptyProbeCount - 1)
+    );
+    _clearNavigatedAttemptsForTarget(attemptsMap, target);
+    const nextProbeAt = Date.now() + delayMs;
+    attemptsMap.set(
+      [
+        target.source,
+        state.workspace,
+        target.targetKey,
+        "no-candidate",
+      ].join("|"),
+      {
+        attempts: 0,
+        failed: false,
+        noCandidate: true,
+        emptyProbeCount,
+        title: target.title,
+        targetKey: target.targetKey,
+        lastEmptyAt: new Date().toISOString(),
+        nextProbeAt,
+      }
+    );
+    if (attemptsMap.size > 100) {
+      attemptsMap.delete(attemptsMap.keys().next().value);
+    }
+    return nextProbeAt;
   }
 
   function _subagentTrayExpansionSignature(header) {
@@ -2119,6 +2262,29 @@
     return true;
   }
 
+  function _materializeNavigatedTranscriptTail(target, readiness) {
+    const conversation = target.group?.querySelector("div.conversations");
+    const containers = target.group?.querySelectorAll(
+      SCROLL_CONTAINER_SELECTOR
+    );
+    readiness.conversationMounted = !!conversation;
+    readiness.tailContainerCount = containers?.length || 0;
+    if (!conversation || !containers || containers.length !== 1) return;
+    const container = containers[0];
+    const scrollHeight = container.scrollHeight;
+    const bottom = Math.max(0, scrollHeight - container.clientHeight);
+    const distanceFromBottom = Math.max(0, bottom - container.scrollTop);
+    readiness.tailDistanceFromBottom = distanceFromBottom;
+    if (
+      distanceFromBottom > 8 ||
+      readiness.lastTailScrollHeight !== scrollHeight
+    ) {
+      _setProgrammaticScroll(container, bottom);
+      readiness.lastTailScrollHeight = scrollHeight;
+      readiness.tailPulses++;
+    }
+  }
+
   function _waitForTrayCandidates(target) {
     return new Promise((resolve) => {
       const startedAt = performance.now();
@@ -2126,6 +2292,25 @@
       let finished = false;
       let observer = null;
       let timer = null;
+      const minCandidateWaitMs =
+        target.source === "pinned"
+          ? CYCLE_PINNED_MIN_CANDIDATE_WAIT_MS
+          : CYCLE_TRAY_MIN_CANDIDATE_WAIT_MS;
+      const candidateQuietMs =
+        target.source === "pinned"
+          ? CYCLE_PINNED_CANDIDATE_QUIET_MS
+          : CYCLE_TRAY_QUIET_MS;
+      const candidateTimeoutMs =
+        target.source === "pinned"
+          ? CYCLE_PINNED_CANDIDATE_TIMEOUT_MS
+          : CYCLE_TRAY_CANDIDATE_TIMEOUT_MS;
+      const readiness = {
+        conversationMounted: false,
+        tailContainerCount: 0,
+        tailDistanceFromBottom: null,
+        lastTailScrollHeight: null,
+        tailPulses: 0,
+      };
 
       const finish = (candidates, reason) => {
         if (finished) return;
@@ -2136,6 +2321,10 @@
           candidates,
           reason,
           waitedMs: Math.round(performance.now() - startedAt),
+          conversationMounted: readiness.conversationMounted,
+          tailContainerCount: readiness.tailContainerCount,
+          tailDistanceFromBottom: readiness.tailDistanceFromBottom,
+          tailPulses: readiness.tailPulses,
         });
       };
 
@@ -2164,18 +2353,23 @@
           finish(candidates, null);
           return;
         }
+        _materializeNavigatedTranscriptTail(target, readiness);
 
         const now = performance.now();
         const elapsed = now - startedAt;
-        if (elapsed >= CYCLE_TRAY_CANDIDATE_TIMEOUT_MS) {
+        if (elapsed >= candidateTimeoutMs) {
           finish([], "candidate_mount_timeout");
           return;
         }
         if (
-          elapsed >= CYCLE_TRAY_MIN_CANDIDATE_WAIT_MS &&
-          now - lastMutationAt >= CYCLE_TRAY_QUIET_MS
+          elapsed >= minCandidateWaitMs &&
+          now - lastMutationAt >= candidateQuietMs &&
+          readiness.conversationMounted &&
+          readiness.tailContainerCount === 1 &&
+          (readiness.tailDistanceFromBottom === null ||
+            readiness.tailDistanceFromBottom <= 8)
         ) {
-          finish([], "no_eligible_candidate");
+          finish([], "transcript_tail_stable_without_candidate");
           return;
         }
         timer = setTimeout(check, 50);
@@ -2243,13 +2437,21 @@
 
   async function _attemptNavigatedApprovalImpl(target, source) {
     target.source = source;
-    const attemptsMap =
-      source === "pinned" ? state.pinnedApprovalAttempts : state.trayApprovalAttempts;
+    const attemptsMap = _navigatedApprovalAttempts(source);
     const waitResult = await _waitForTrayCandidates(target);
     if (waitResult.candidates.length === 0) {
       const approvalControls = target.group?.isConnected
         ? _trayApprovalMatches(target.group).length
         : 0;
+      const paused = [
+        "window_focused",
+        "new_user_interaction",
+      ].includes(waitResult.reason);
+      const missed = waitResult.reason === "selected_subagent_changed";
+      const nextProbeAt =
+        !paused && !missed
+          ? _recordNavigatedEmptyBackoff(attemptsMap, target)
+          : null;
       _queueEvent({
         type: `${source}_no_candidate`,
         targetKey: target.targetKey,
@@ -2257,28 +2459,51 @@
         reason: waitResult.reason,
         waitedMs: waitResult.waitedMs,
         approvalControls,
+        conversationMounted: waitResult.conversationMounted,
+        tailContainerCount: waitResult.tailContainerCount,
+        tailDistanceFromBottom: waitResult.tailDistanceFromBottom,
+        tailPulses: waitResult.tailPulses,
+        nextProbeAt,
       });
       return {
-        outcome:
-          ["window_focused", "new_user_interaction"].includes(waitResult.reason)
-            ? "paused"
-            : waitResult.reason === "selected_subagent_changed"
-              ? "miss"
-              : "no_candidate",
+        outcome: paused ? "paused" : missed ? "miss" : "deferred",
         reason: waitResult.reason,
+        nextProbeAt,
       };
     }
     const candidate = waitResult.candidates[0];
     candidate.targetKey = target.targetKey;
+    _clearSupersededNavigatedAttempts(
+      attemptsMap,
+      target,
+      candidate.fingerprint
+    );
     const previous = attemptsMap.get(candidate.fingerprint) || {
       attempts: 0,
       failed: false,
+      title: target.title,
       targetKey: target.targetKey,
     };
     if (previous.failed || previous.attempts >= CYCLE_TRAY_MAX_ATTEMPTS) {
-      previous.failed = true;
+      const nextProbeAt = _markNavigatedAttemptExhausted(
+        previous,
+        target,
+        previous.failed === true
+      );
       attemptsMap.set(candidate.fingerprint, previous);
-      return { outcome: "failed", reason: `${source}_retry_exhausted` };
+      _queueEvent({
+        type: `${source}_retry_exhausted`,
+        targetKey: target.targetKey,
+        title: target.title,
+        fingerprint: candidate.fingerprint,
+        attempts: previous.attempts,
+        nextProbeAt,
+      });
+      return {
+        outcome: "deferred",
+        reason: `${source}_retry_exhausted`,
+        nextProbeAt,
+      };
     }
     if (_isCoolingDown(candidate.fingerprint)) {
       return { outcome: "cooldown" };
@@ -2288,6 +2513,8 @@
     const prompt = _capturePromptSubtree(candidate.el);
     previous.attempts += 1;
     previous.lastAttemptAt = new Date().toISOString();
+    previous.title = target.title;
+    previous.targetKey = target.targetKey;
     attemptsMap.set(candidate.fingerprint, previous);
     if (attemptsMap.size > 100) {
       attemptsMap.delete(attemptsMap.keys().next().value);
@@ -2353,7 +2580,7 @@
         : consecutiveAbsentChecks + 1;
     }
     if (consecutiveAbsentChecks >= 2) {
-      attemptsMap.delete(candidate.fingerprint);
+      _clearNavigatedAttemptsForTarget(attemptsMap, target);
       state.totalConfirmedApprovals++;
       if (source === "pinned") {
         state.totalPinnedConfirmedApprovals++;
@@ -2377,6 +2604,9 @@
     }
 
     previous.failed = previous.attempts >= CYCLE_TRAY_MAX_ATTEMPTS;
+    const nextProbeAt = previous.failed
+      ? _markNavigatedAttemptExhausted(previous, target, false)
+      : null;
     attemptsMap.set(candidate.fingerprint, previous);
     _queueEvent({
       type: `${source}_approval_unconfirmed`,
@@ -2387,10 +2617,12 @@
       attempt: previous.attempts,
       failed: previous.failed,
       reason: "unconfirmed_click",
+      nextProbeAt,
     });
     return {
-      outcome: previous.failed ? "failed" : "unconfirmed",
+      outcome: previous.failed ? "deferred" : "unconfirmed",
       reason: "unconfirmed_click",
+      nextProbeAt,
     };
   }
 
@@ -2556,6 +2788,14 @@
     const restorationOptions = {
       interactionGeneration: navigationOptions.interactionGeneration,
     };
+    let nextNavigationProbeAt = null;
+    const rememberNavigationProbe = (nextProbeAt) => {
+      if (!Number.isFinite(nextProbeAt)) return;
+      nextNavigationProbeAt =
+        nextNavigationProbeAt === null
+          ? nextProbeAt
+          : Math.min(nextNavigationProbeAt, nextProbeAt);
+    };
 
     _getVirtualizerSnapshot(true);
     _discoverSubagentRows(document);
@@ -2567,6 +2807,13 @@
       includeSelected: explicit,
     });
     if (!explicit && document.hasFocus()) pinnedEntries = [];
+    let pinnedBackoffSkipped = 0;
+    if (!explicit && pinnedEntries.length > 0) {
+      const filtered = _filterNavigationBackoff(pinnedEntries, "pinned");
+      pinnedEntries = filtered.entries;
+      pinnedBackoffSkipped = filtered.skipped;
+      rememberNavigationProbe(filtered.nextProbeAt);
+    }
     const sidebarContext =
       pinnedEntries.length > 0 ? _captureAgentSidebarSelectionContext() : null;
     if (pinnedEntries.length > 0 && !sidebarContext) {
@@ -2593,14 +2840,25 @@
         trayConfirmed: 0,
         trayFailed: 0,
         trayMisses: 0,
+        trayDeferred: 0,
+        trayBackoffSkipped: 0,
         pinnedVisits: 0,
         pinnedConfirmed: 0,
         pinnedFailed: 0,
         pinnedMisses: 0,
+        pinnedDeferred: 0,
+        pinnedBackoffSkipped,
       };
       state.lastCycle = { ...result, ts: new Date().toISOString() };
       if (state.running && state.cycleEnabled) {
-        _scheduleSubagentCycle(CYCLE_AUTOMATIC_INTERVAL_MS);
+        const delayMs =
+          pinnedBackoffSkipped > 0 && nextNavigationProbeAt !== null
+            ? Math.max(
+                CYCLE_AUTOMATIC_INTERVAL_MS,
+                nextNavigationProbeAt - Date.now()
+              )
+            : CYCLE_AUTOMATIC_INTERVAL_MS;
+        _scheduleSubagentCycle(delayMs);
       }
       return result;
     }
@@ -2621,10 +2879,14 @@
       trayConfirmed: 0,
       trayFailed: 0,
       trayMisses: 0,
+      trayDeferred: 0,
+      trayBackoffSkipped: 0,
       pinnedVisits: 0,
       pinnedConfirmed: 0,
       pinnedFailed: 0,
       pinnedMisses: 0,
+      pinnedDeferred: 0,
+      pinnedBackoffSkipped,
       abortedReason: null,
     };
     _queueEvent({
@@ -2683,6 +2945,10 @@
         if (result.outcome === "confirmed") summary.pinnedConfirmed++;
         if (result.outcome === "failed") summary.pinnedFailed++;
         if (result.outcome === "miss") summary.pinnedMisses++;
+        if (result.outcome === "deferred") {
+          summary.pinnedDeferred++;
+          rememberNavigationProbe(result.nextProbeAt);
+        }
         const afterVisitTakeover = _navigationTakeoverReason(navigationOptions);
         if (afterVisitTakeover) {
           abortAfterPinned = true;
@@ -2784,9 +3050,20 @@
                 _uniquelyTitledRunningSubagentTrayEntries(
                   preparedTray.entries
                 );
-              trayEntryPoolSize = eligibleTrayEntries.length;
+              const filteredTrayEntries = explicit
+                ? {
+                    entries: eligibleTrayEntries,
+                    skipped: 0,
+                    nextProbeAt: null,
+                  }
+                : _filterNavigationBackoff(eligibleTrayEntries, "tray");
+              summary.trayBackoffSkipped += filteredTrayEntries.skipped;
+              rememberNavigationProbe(filteredTrayEntries.nextProbeAt);
+              trayEntryPoolSize = filteredTrayEntries.entries.length;
               trayEntries =
-                _boundedRunningSubagentTrayEntries(eligibleTrayEntries);
+                _boundedRunningSubagentTrayEntries(
+                  filteredTrayEntries.entries
+                );
             }
           }
         }
@@ -2825,6 +3102,10 @@
           if (result.outcome === "confirmed") summary.trayConfirmed++;
           if (result.outcome === "failed") summary.trayFailed++;
           if (result.outcome === "miss") summary.trayMisses++;
+          if (result.outcome === "deferred") {
+            summary.trayDeferred++;
+            rememberNavigationProbe(result.nextProbeAt);
+          }
           const betweenVisitRestore = await _restoreEditorSelectionContext(
             editorContext,
             restorationOptions
@@ -3049,9 +3330,29 @@
           summary.trayMisses > 0 ||
           summary.pinnedFailed > 0 ||
           summary.pinnedMisses > 0;
-        _scheduleSubagentCycle(
-          needsSoonerRetry ? 2000 : CYCLE_AUTOMATIC_INTERVAL_MS
-        );
+        const deferredCount =
+          summary.trayDeferred +
+          summary.trayBackoffSkipped +
+          summary.pinnedDeferred +
+          summary.pinnedBackoffSkipped;
+        const navigatedVisits = summary.trayVisits + summary.pinnedVisits;
+        const onlyDeferredNavigation =
+          !needsSoonerRetry &&
+          records.length === 0 &&
+          summary.rows === 0 &&
+          deferredCount > 0 &&
+          navigatedVisits ===
+            summary.trayDeferred + summary.pinnedDeferred;
+        const delayMs =
+          onlyDeferredNavigation && nextNavigationProbeAt !== null
+            ? Math.max(
+                CYCLE_AUTOMATIC_INTERVAL_MS,
+                nextNavigationProbeAt - Date.now()
+              )
+            : needsSoonerRetry
+              ? 2000
+              : CYCLE_AUTOMATIC_INTERVAL_MS;
+        _scheduleSubagentCycle(delayMs);
       }
     }
     return state.lastCycle;
@@ -4283,6 +4584,7 @@
       maxScanDurationMs: state.maxScanDurationMs,
       safetyTrip: state.safetyTrip,
       usedJSHeapBytes: performance.memory?.usedJSHeapSize || null,
+      maxJSHeapBytes: MAX_JS_HEAP_BYTES,
       recentClicks: state.clicks.slice(-10),
       shareSafeTitle: state.shareSafeTitle,
       cycleEnabled: state.cycleEnabled,

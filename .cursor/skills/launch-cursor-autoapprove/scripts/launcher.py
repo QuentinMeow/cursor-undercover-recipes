@@ -2157,7 +2157,12 @@ def _print_session_status(session: dict) -> None:
                     f"({gate.get('totalScans', 0)} total)"
                 )
             if isinstance(gate.get("usedJSHeapBytes"), (int, float)):
-                print(f"JS Heap:   {gate['usedJSHeapBytes'] / (1024 * 1024):.1f} MiB")
+                heap_label = f"{gate['usedJSHeapBytes'] / (1024 * 1024):.1f} MiB"
+                if isinstance(gate.get("maxJSHeapBytes"), (int, float)):
+                    heap_label += (
+                        f" / {gate['maxJSHeapBytes'] / (1024 * 1024):.1f} MiB limit"
+                    )
+                print(f"JS Heap:   {heap_label}")
             if gate.get("safetyTrip"):
                 print(f"  SAFETY:  {json.dumps(gate['safetyTrip'])}")
             cycle_label = "ON" if gate.get("cycleEnabled") else "OFF"
