@@ -31,12 +31,14 @@ attempts while ordinary scanner clicks continued every eight seconds.
 - The task stays failed while the unresolved approval remains visible. Normal
   status derivation can resume after the approval clears so changed row state
   can be observed.
-- When cycling is enabled and exact registered task identity exists, the
-  candidate is `cycleOwned`: the confirmation-aware cycle path is its sole click
-  owner, and normal eligible, blocked, and unknown paths exclude it.
-- Debug snapshots expose `cycleOwned` and omit owned candidates from `eligible`.
-- When cycling is OFF or no registered identity exists, ordinary visible-card
-  scanning remains available.
+- The original resolution made the confirmation-aware cycle the sole owner for
+  every registered card. Issue 026 refined this after it proved too restrictive:
+  the mounted direct path now gets one attempt per task-scoped fingerprint,
+  shares cooldown with row recovery, and is excluded only while an exact
+  bounded lease is active. It cannot resume clicking forever after retries are
+  exhausted.
+- Debug snapshots expose both `cycleOwned` and `directRetryExhausted` and omit
+  either state from `eligible`.
 - Focused source-level unit coverage protects the sticky-failure and
   single-owner guards.
 
@@ -49,5 +51,5 @@ verification are deferred to the post-review check.
 ## Lesson
 
 A retry limit is ineffective if reconciliation can reopen terminal state or a
-second confirmation-blind scanner can click the same action outside that retry
-budget. Retry-governed actions need one click owner.
+second confirmation-blind scanner can click the same action without its own
+cap. Redundant paths need shared dedupe, bounded attempts, and leased ownership.

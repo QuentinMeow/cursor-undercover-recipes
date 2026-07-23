@@ -33,7 +33,7 @@
   const LOG_PREFIX = "[autoAccept]";
   const SCRIPT_HASH = globalThis.__cursorAutoAcceptScriptHash || "unknown";
   const REPO_SLUG = globalThis.__cursorAutoAcceptRepoSlug || "workspace";
-  const STRATEGY_VERSION = "2026-07-agent-cycle-v5-collapsed-tray";
+  const STRATEGY_VERSION = "2026-07-agent-cycle-v6-redundant-mounted";
   const TITLE_SYNC_INTERVAL = 3000;
   /** Faster ping while discreet so Cursor cannot show a fresh native title for long. */
   const TITLE_SYNC_INTERVAL_SHARE_SAFE = 500;
@@ -200,6 +200,7 @@
     trayExpansionRetry: null,
     trayApprovalAttempts: new Map(),
     pinnedApprovalAttempts: new Map(),
+    directRegisteredApprovalAttempts: new Map(),
     totalTrayVisits: 0,
     totalTrayApprovalAttempts: 0,
     totalTrayConfirmedApprovals: 0,
@@ -207,6 +208,7 @@
     totalPinnedApprovalAttempts: 0,
     totalPinnedConfirmedApprovals: 0,
     navigationApprovalScope: null,
+    registeredApprovalOwnerTaskKey: null,
     lastPinnedRestore: null,
     lastCycle: null,
     lastUserInteractionAt: 0,
@@ -921,12 +923,10 @@
       .filter((candidate) => _notCoveredByUnrelatedElement(candidate.el));
     if (candidates.length === 0) return null;
     const candidate = candidates[0];
-    candidate.fingerprint = [
-      record.taskKey,
-      record.rowKey,
-      candidate.id,
-      normalizeLabel(candidate.text),
-    ].join("|");
+    // Share the direct scanner's task-scoped fingerprint. A mounted direct
+    // click cools the bounded row path (and vice versa), so the two mechanisms
+    // back each other up without issuing concurrent duplicate clicks.
+    candidate.fingerprint = _promptFingerprint(candidate.el);
     if (!bypassCooldown && _isCoolingDown(candidate.fingerprint)) return null;
     return candidate;
   }
@@ -1042,83 +1042,90 @@
       return { outcome: "no_candidate", reason: "no_eligible_candidate" };
     }
 
-    const command = _extractCommandText(candidate.el);
-    const prompt = _capturePromptSubtree(candidate.el);
-    const clickTakeover = _navigationTakeoverReason(options);
-    if (clickTakeover) {
-      _rollbackMaterializationScroll(context, materialized);
-      return { outcome: "paused", reason: clickTakeover };
-    }
-    const now = new Date().toISOString();
-    record.status = "approval_attempted";
-    record.lastAttemptAt = now;
-    record.attempts += 1;
-    record.failure = null;
-    state.totalClicks++;
-    state.totalClickAttempts++;
-    clickEl(candidate.el);
-    _markClicked(candidate.fingerprint);
-    _queueEvent({
-      type: "approval_attempted",
-      taskKey: record.taskKey,
-      toolUseId: record.toolUseId,
-      rowKey: record.rowKey,
-      pattern_id: candidate.id,
-      text: candidate.text,
-      reason: candidate.reason,
-      fingerprint: candidate.fingerprint,
-      retry,
-      prompt,
-      command,
-    });
-    _persistSubagentRegistry();
-
-    const confirmation = await _confirmCycleApproval(
-      record,
-      candidate,
-      context,
-      options
-    );
-    if (confirmation.confirmed) {
-      record.status = ["completed", "failed"].includes(confirmation.status)
-        ? confirmation.status
-        : "approved";
-      record.confirmedAt = new Date().toISOString();
-      record.lastProgressAt = record.confirmedAt;
+    state.registeredApprovalOwnerTaskKey = record.taskKey;
+    try {
+      const command = _extractCommandText(candidate.el);
+      const prompt = _capturePromptSubtree(candidate.el);
+      const clickTakeover = _navigationTakeoverReason(options);
+      if (clickTakeover) {
+        _rollbackMaterializationScroll(context, materialized);
+        return { outcome: "paused", reason: clickTakeover };
+      }
+      const now = new Date().toISOString();
+      record.status = "approval_attempted";
+      record.lastAttemptAt = now;
+      record.attempts += 1;
       record.failure = null;
-      state.totalConfirmedApprovals++;
-      _pushRecentConfirmedClick(candidate, command);
+      state.totalClicks++;
+      state.totalClickAttempts++;
+      clickEl(candidate.el);
+      _markClicked(candidate.fingerprint);
       _queueEvent({
-        type: "approval_confirmed",
+        type: "approval_attempted",
         taskKey: record.taskKey,
         toolUseId: record.toolUseId,
         rowKey: record.rowKey,
         pattern_id: candidate.id,
         text: candidate.text,
-        reason: confirmation.reason,
-        eligibility_reason: candidate.reason,
+        reason: candidate.reason,
         fingerprint: candidate.fingerprint,
+        retry,
         prompt,
         command,
       });
       _persistSubagentRegistry();
-      return { outcome: "confirmed", reason: confirmation.reason };
-    }
 
-    _queueEvent({
-      type: "approval_unconfirmed",
-      taskKey: record.taskKey,
-      rowKey: record.rowKey,
-      pattern_id: candidate.id,
-      fingerprint: candidate.fingerprint,
-      retry,
-      reason: confirmation.reason,
-    });
-    if (["new_user_interaction", "window_focused"].includes(confirmation.reason)) {
-      _rollbackMaterializationScroll(context, materialized);
-      return { outcome: "paused", reason: confirmation.reason };
+      const confirmation = await _confirmCycleApproval(
+        record,
+        candidate,
+        context,
+        options
+      );
+      if (confirmation.confirmed) {
+        record.status = ["completed", "failed"].includes(confirmation.status)
+          ? confirmation.status
+          : "approved";
+        record.confirmedAt = new Date().toISOString();
+        record.lastProgressAt = record.confirmedAt;
+        record.failure = null;
+        state.totalConfirmedApprovals++;
+        _pushRecentConfirmedClick(candidate, command);
+        _queueEvent({
+          type: "approval_confirmed",
+          taskKey: record.taskKey,
+          toolUseId: record.toolUseId,
+          rowKey: record.rowKey,
+          pattern_id: candidate.id,
+          text: candidate.text,
+          reason: confirmation.reason,
+          eligibility_reason: candidate.reason,
+          fingerprint: candidate.fingerprint,
+          prompt,
+          command,
+        });
+        _persistSubagentRegistry();
+        return { outcome: "confirmed", reason: confirmation.reason };
+      }
+
+      _queueEvent({
+        type: "approval_unconfirmed",
+        taskKey: record.taskKey,
+        rowKey: record.rowKey,
+        pattern_id: candidate.id,
+        fingerprint: candidate.fingerprint,
+        retry,
+        reason: confirmation.reason,
+      });
+      if (["new_user_interaction", "window_focused"].includes(confirmation.reason)) {
+        _rollbackMaterializationScroll(context, materialized);
+        return { outcome: "paused", reason: confirmation.reason };
+      }
+      return { outcome: "unconfirmed", reason: confirmation.reason };
+    } finally {
+      if (state.registeredApprovalOwnerTaskKey === record.taskKey) {
+        state.registeredApprovalOwnerTaskKey = null;
+      }
     }
-    return { outcome: "unconfirmed", reason: confirmation.reason };
   }
 
   function _restoreScrollContext(context) {
@@ -1155,27 +1162,37 @@
       .slice(0, 120);
   }
 
-  function _agentSidebarTitleCounts() {
-    const counts = new Map();
-    for (const row of document.querySelectorAll(AGENT_SIDEBAR_CELL_SELECTOR)) {
-      const title = _agentSidebarRowTitle(row);
-      if (!title) continue;
-      const key = normalizeLabel(title);
-      counts.set(key, (counts.get(key) || 0) + 1);
-    }
-    return counts;
+  function _agentSidebarSectionTitle(row) {
+    return String(
+      row
+        ?.closest(AGENT_SIDEBAR_SECTION_SELECTOR)
+        ?.querySelector(AGENT_SIDEBAR_SECTION_TITLE_SELECTOR)
+        ?.textContent || ""
+    )
+      .trim()
+      .replace(/\s+/g, " ")
+      .slice(0, 120);
   }
 
-  function _uniqueAgentSidebarRow(title) {
+  function _uniqueAgentSidebarRow(title, sectionTitle = null) {
     const wanted = normalizeLabel(title);
+    const wantedSection =
+      sectionTitle === null ? null : normalizeLabel(sectionTitle);
     const matches = Array.from(
       document.querySelectorAll(AGENT_SIDEBAR_CELL_SELECTOR)
-    ).filter((row) => normalizeLabel(_agentSidebarRowTitle(row)) === wanted);
+    ).filter(
+      (row) =>
+        normalizeLabel(_agentSidebarRowTitle(row)) === wanted &&
+        (
+          wantedSection === null ||
+          normalizeLabel(_agentSidebarSectionTitle(row)) === wantedSection
+        )
+    );
     return matches.length === 1 ? matches[0] : null;
   }
 
   function _resolvePinnedAgentEntry(title, options = {}) {
-    const item = _uniqueAgentSidebarRow(title);
+    const item = _uniqueAgentSidebarRow(title, "Pinned");
     if (!item || !item.isConnected || !isVisible(item) || !isClickable(item)) {
       return null;
     }
@@ -1215,7 +1232,11 @@
       }
     }
 
-    const titleCounts = _agentSidebarTitleCounts();
+    const titleCounts = new Map();
+    for (const entry of raw) {
+      const key = normalizeLabel(entry.title);
+      titleCounts.set(key, (titleCounts.get(key) || 0) + 1);
+    }
     for (const entry of raw) {
       entry.ambiguous = titleCounts.get(normalizeLabel(entry.title)) !== 1;
     }
@@ -1780,7 +1801,8 @@
     if (selectedRows.length !== 1) return null;
     const row = selectedRows[0];
     const title = _agentSidebarRowTitle(row);
-    if (!_uniqueAgentSidebarRow(title)) return null;
+    const sectionTitle = _agentSidebarSectionTitle(row);
+    if (_uniqueAgentSidebarRow(title, sectionTitle) !== row) return null;
     const selectedGroup = _selectedAgentGroupNow(title);
     if (!selectedGroup) return null;
     const scrollContainers = selectedGroup.group.querySelectorAll(
@@ -1798,6 +1820,7 @@
     return {
       row,
       title,
+      sectionTitle,
       resourceKey: selectedGroup.targetKey,
       scroll,
       interactionGeneration: state.interactionGeneration,
@@ -1821,7 +1844,9 @@
         reason: "preserved_new_user_selection",
       });
     }
-    const row = context?.title ? _uniqueAgentSidebarRow(context.title) : null;
+    const row = context?.title
+      ? _uniqueAgentSidebarRow(context.title, context.sectionTitle)
+      : null;
     if (!row) {
       return _recordPinnedRestore({
         ok: false,
@@ -3614,7 +3639,17 @@
     }
     if (!state.cycleEnabled) return false;
     const row = btn.el.closest(SUBAGENT_ROW_SELECTOR);
-    return !!_taskForRow(row);
+    const task = _taskForRow(row);
+    return (
+      !!task &&
+      state.registeredApprovalOwnerTaskKey !== null &&
+      task.taskKey === state.registeredApprovalOwnerTaskKey
+    );
+  }
+
+  function _registeredTaskForCandidate(btn) {
+    if (!btn?.el) return null;
+    return _taskForRow(btn.el.closest(SUBAGENT_ROW_SELECTOR));
   }
 
   function _debugSurface(el) {
@@ -3752,22 +3787,43 @@
 
     const priority = { approval: 0, connection: 1, resume: 2 };
 
-    const evaluated = buttons.map((btn) => ({
-      ...btn,
-      reason: _eligibilityReason(btn),
-      fingerprint: _promptFingerprint(btn.el),
-      cycleOwned: _isCycleOwnedSubagentCandidate(btn),
-    }));
+    const evaluated = buttons.map((btn) => {
+      const fingerprint = _promptFingerprint(btn.el);
+      const registeredTask = _registeredTaskForCandidate(btn);
+      return {
+        ...btn,
+        reason: _eligibilityReason(btn),
+        fingerprint,
+        cycleOwned: _isCycleOwnedSubagentCandidate(btn),
+        registeredTask,
+        directRetryExhausted:
+          !!registeredTask &&
+          state.directRegisteredApprovalAttempts.has(fingerprint),
+      };
+    });
 
     const eligible = evaluated
-      .filter((btn) => btn.reason !== null && !btn.cycleOwned)
+      .filter(
+        (btn) =>
+          btn.reason !== null &&
+          !btn.cycleOwned &&
+          !btn.directRetryExhausted
+      )
       .sort((a, b) => (priority[a.kind || "approval"] ?? 9) - (priority[b.kind || "approval"] ?? 9));
 
     const blocked = evaluated.filter(
-      (btn) => !btn.cycleOwned && btn.reason === null && _hasTrustedPromptContext(btn)
+      (btn) =>
+        !btn.cycleOwned &&
+        !btn.directRetryExhausted &&
+        btn.reason === null &&
+        _hasTrustedPromptContext(btn)
     );
     const unknown = evaluated.filter(
-      (btn) => !btn.cycleOwned && btn.reason === null && !_hasTrustedPromptContext(btn)
+      (btn) =>
+        !btn.cycleOwned &&
+        !btn.directRetryExhausted &&
+        btn.reason === null &&
+        !_hasTrustedPromptContext(btn)
     );
 
     for (const btn of blocked) {
@@ -3806,6 +3862,17 @@
       interactionGeneration: state.interactionGeneration,
     };
 
+    if (btn.registeredTask) {
+      state.directRegisteredApprovalAttempts.set(btn.fingerprint, {
+        taskKey: btn.registeredTask.taskKey,
+        attemptedAt: new Date().toISOString(),
+      });
+      if (state.directRegisteredApprovalAttempts.size > 200) {
+        state.directRegisteredApprovalAttempts.delete(
+          state.directRegisteredApprovalAttempts.keys().next().value
+        );
+      }
+    }
     clickEl(btn.el);
     _settleFocusAfterAutomation(focusContext, "direct_scan");
     _markClicked(btn.fingerprint);
@@ -4080,12 +4147,16 @@
   function debugSnapshot() {
     const candidates = findApprovalButtons().map((btn) => {
       const fp = _promptFingerprint(btn.el);
+      const registeredTask = _registeredTaskForCandidate(btn);
       return {
         kind: btn.kind || "approval",
         id: btn.id || "",
         text: btn.text || "",
         reason: _eligibilityReason(btn),
         cycleOwned: _isCycleOwnedSubagentCandidate(btn),
+        directRetryExhausted:
+          !!registeredTask &&
+          state.directRegisteredApprovalAttempts.has(fp),
         surface: _debugSurface(btn.el),
         fingerprint: fp,
         coolingDown: _isCoolingDown(fp),
@@ -4111,6 +4182,7 @@
       mountedConversationCount: document.querySelectorAll("div.conversations").length,
       eventQueueLength: state.eventQueue.length,
       cooldownEntries: state.fingerprintCooldowns.size,
+      directRegisteredAttempts: state.directRegisteredApprovalAttempts.size,
       totalClickAttempts: state.totalClickAttempts,
       totalConfirmedApprovals: state.totalConfirmedApprovals,
       activeFocusKind: _focusKind(document.activeElement),
@@ -4121,7 +4193,12 @@
       subagents: exportSubagentRegistry(),
       visibleButtons: _debugButtons(),
       candidates,
-      eligible: candidates.filter((c) => c.reason !== null && !c.cycleOwned),
+      eligible: candidates.filter(
+        (c) =>
+          c.reason !== null &&
+          !c.cycleOwned &&
+          !c.directRetryExhausted
+      ),
       ts: new Date().toISOString(),
     };
   }
@@ -4198,6 +4275,7 @@
       observerActive: !!state.observer,
       eventQueueLength: state.eventQueue.length,
       cooldownEntries: state.fingerprintCooldowns.size,
+      directRegisteredAttempts: state.directRegisteredApprovalAttempts.size,
       totalClickAttempts: state.totalClickAttempts,
       totalConfirmedApprovals: state.totalConfirmedApprovals,
       totalScans: state.totalScans,

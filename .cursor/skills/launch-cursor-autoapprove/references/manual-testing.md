@@ -37,6 +37,8 @@ LAUNCHER="$HOME/.cursor/launch-autoapprove/launcher.py"
 
 You should see:
 
+- `Mode: IDE (verified)` — stop if status instead reports an Agents/incomplete
+  surface
 - `Gate: ON`
 - `Cycle: ON`
 - `Poll: 0.5s fallback interval` (unless you selected another interval)
@@ -389,7 +391,7 @@ Expected result:
 
 - the current renderer still contains one `div.full-input-box` and one
   `div.conversations`; support is sequential, not truly simultaneous
-- `cycle --once` reports two pinned visits when two globally unique rows are
+- `cycle --once` reports two pinned visits when two section-unique rows are
   pinned; larger sets rotate through bounded two-row passes
 - `pinned_visit` and `pinned_no_candidate` or
   `pinned_approval_confirmed` events identify each bounded visit
@@ -397,8 +399,10 @@ Expected result:
   selected agent tab, transcript scroll, and focus are restored
 - `status` reports `Pinned: <active>/<total> active` plus ambiguous-title and
   cumulative visit/attempt/confirmation/failure totals
-- duplicate normalized titles anywhere in the rendered Agent sidebar fail
-  closed instead of selecting by position
+- a pinned conversation may also appear with the same title in `Today` or
+  another history section without becoming ambiguous
+- duplicate normalized titles inside `Pinned` still fail closed instead of
+  selecting by position
 
 For automatic behavior, start work in two pinned agents and move the dedicated
 window to the background without minimizing it. Only unselected rows with
@@ -464,6 +468,12 @@ Expected result:
 - prompt is auto-clicked without manual interaction
 - `Clicks:` increases
 - `Recent:` includes an entry with `"reason": "companion"`
+- for a mounted parent task row, the visible parent `Allow` is eligible through
+  the ordinary direct scanner even while cycling is ON, with one direct attempt
+  per task-scoped fingerprint
+- if the parent card is unmounted or unresolved, registered-row or individual
+  child navigation can still approve it; shared task fingerprints prevent the
+  two paths from clicking concurrently
 
 ## Test 8: Self-Debug (diagnose command)
 
@@ -789,13 +799,16 @@ The injector's DOM selectors are coupled to specific Cursor versions. Always rec
 | 3.12.17 | Chrome/144.0.7559.236 | 460391c03c13 | OK (real Run) | OK (4 concurrent real Allow prompts; 60s tasks) | Not tested | 2026-07-21 |
 | 3.12.17 | Chrome/144.0.7559.236 | 538f6927c92e | OK (real Run) | Not rerun | OK (2 rows; confirm, transient-control, user-selection, and restoration probes) | 2026-07-22 |
 | 3.12.17 | Chrome/144.0.7559.236 | 8643e4bfc524 | OK (real Run) | OK (collapsed tray auto-expanded; two real Run prompts confirmed; parent identity/restoration confirmed) | Not rerun | 2026-07-22 |
+| 3.12.30 | Chrome/144.0.7559.236 | 8b314b2e3196 | OK (real pinned and tray Run confirmations) | OK (real mounted parent Allow clicked directly with `reason: companion`) | OK (2 active rows despite history duplicate; visits, real confirmation, and restoration) | 2026-07-23 |
 
 ### Version Upgrade Checklist
 
 When upgrading Cursor:
 
 1. **Before upgrading**: Record current version and injector hash
-2. **After upgrading**: Run `caa status` to check if the injector is still loaded
+2. **After upgrading**: Confirm `cursor --help` still advertises `--classic`
+   (it is dev-only), then run `caa status`; require `Mode: IDE (verified)` and
+   an injector hash before testing prompts
 3. **Test shell commands**: Trigger a non-allowlisted command, verify auto-click
 4. **Test subagent approval**: Launch a subagent with shell commands, verify View+Allow click
 5. **Test pinned cycling**: Pin two agents, run `cycle --once`, and verify the
@@ -807,6 +820,8 @@ When upgrading Cursor:
 
 - `div.full-input-box` — anchor for composer surface detection
 - `div.conversations` — container for chat messages and prompts
+- `workbench.desktop.main.css/js` — primary IDE-mode proof; reject
+  `workbench.glass.main.css/js`
 - `div.view-allow-btn-container-v1` — subagent tool-call button container
 - `.agent-sidebar-section`, `.agent-sidebar-cell`, and
   `.agent-sidebar-cell-text` — pinned top-level navigation identity

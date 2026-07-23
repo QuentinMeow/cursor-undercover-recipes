@@ -274,11 +274,18 @@ When you run `caa launch --workspace <path>`:
 8. Launch Cursor with:
    - `--remote-debugging-port=<port>`
    - `--user-data-dir ~/.cursor/launch-autoapprove/dedicated-profile-<slug>`
+   - `--classic` (after verifying Cursor CLI help still advertises it)
+   - `--new-window`
    - `<workspace>` (local launch) or `--folder-uri <vscode-remote URI>` (SSH launch)
 9. Wait for a new Cursor main PID that includes the expected launch args.
 10. Save session to `state.json` under the workspace path (local) or folder URI (SSH) key.
-11. Inject `devtools_auto_accept.js` via CDP `Runtime.evaluate`.
-12. Call `startAccept(<interval-ms>)`, which starts the gate and the default-on
+11. Probe CDP targets and require the mode-specific
+    `workbench.desktop.main.css/js` bundle. `workbench.glass.main.css/js` is
+    Agents mode; generic editor/panel/status/navigation parts are diagnostics,
+    not mode proof. A non-IDE target is never injected; a new mismatched process
+    is closed and its session removed.
+12. Inject `devtools_auto_accept.js` via CDP `Runtime.evaluate`.
+13. Call `startAccept(<interval-ms>)`, which starts the gate and the default-on
     bounded scheduler for registered nested-subagent rows, running children,
     and active pinned agents, then sync title to `autoapprove ✅ <repo>`.
 
@@ -297,11 +304,22 @@ SSH launch flow, including the bounded remote directory preflight.
 
 ## CDP Target Selection and Stable Binding
 
-At launch time, `_cdp_select_workbench_target()` picks the best workbench
-page target from `/json` and stores its `id` in `state.json` as
+At launch time, `_cdp_select_workbench_target()` requires exactly one verified
+full IDE page target from `/json` and stores its `id` in `state.json` as
 `cdp_target_id`. All subsequent commands (`on`, `off`, `status`, `stop`) pass
 this ID to `_cdp_evaluate()`, which looks up the specific target by ID rather
 than iterating through all pages.
+
+The launcher requests `--classic --new-window` with a path or folder URI and
+never passes standalone `--chat` or `--glass`. Because Cursor 3.12.30 labels
+`--classic` dev-only, `_cursor_classic_mode_support()` checks CLI help before
+every new local or SSH launch and fails closed if the flag disappears.
+URL/title matching and generic workbench parts are insufficient because both
+product modes use the renderer. `_cdp_target_surface()` requires a loaded
+`workbench.desktop.main.css/js` and rejects `workbench.glass.main.css/js` before
+initial injection, rebind, `on`, or cycling. Status prints
+`Mode: IDE (verified)`; a non-IDE bound target produces a warning and is not
+enabled.
 
 If the bound target ID is not found in the current `/json` listing, the
 command normally fails closed. `on`, `off`, `cycle`, and `subagents` may rebind
@@ -376,17 +394,29 @@ run simultaneously.
 
 ### Registered Subagent Click Ownership
 
-Default-on recovery uses one click owner for each registered subagent approval.
-When cycling is enabled and a candidate belongs to an exact registered task row,
-`_isCycleOwnedSubagentCandidate()` marks it `cycleOwned`. The ordinary
-`_checkAndClickImpl()` path excludes owned candidates from eligible clicks and
-from blocked/unknown telemetry, leaving the bounded, confirmation-aware cycle
-path as the sole click owner.
+The ordinary mounted-composer scanner and registered-row recovery are redundant
+paths. A visible `Allow` in the parent transcript remains eligible for the
+ordinary fast path even when cycling is enabled, with one direct attempt per
+task-scoped prompt fingerprint. Registered-row recovery leases ownership only
+after it has materialized the exact row and selected one exact candidate; the
+lease is released in `finally`.
 
-`acceptDebugSnapshot()` includes `cycleOwned` on candidate records and excludes
-owned records from its `eligible` list so diagnostics match runtime behavior.
-When cycling is OFF, or no exact task identity is registered for the row,
-ownership is false and ordinary visible-card scanning continues to work.
+Both paths use `_promptFingerprint()` for the same task-scoped eight-second
+cooldown. A click by either path therefore suppresses an immediate duplicate
+from the other while still allowing the other mechanism to recover a prompt
+that remains unresolved after cooldown. A direct-attempt map prevents the
+confirmation-blind scanner from bypassing exhausted cycle retries indefinitely.
+Tray and pinned navigation keep
+exclusive ownership from mount through verified restoration because ordinary
+body-level portal controls cannot be safely attributed during navigation.
+
+`acceptDebugSnapshot()` includes `cycleOwned` and excludes only candidates with
+an active registered-task lease or navigation owner from its `eligible` list.
+
+Live Cursor 3.12.30 validation launched a harness subagent that ran one harmless
+Python command. The mounted parent `Allow | Stop` card was clicked by the direct
+scanner (`reason: companion`) and completed without individual-child
+navigation.
 
 ### Running-Subagent Tray Fallback
 
@@ -458,16 +488,16 @@ inside the exact `Pinned` `.agent-sidebar-section`, but mounts only one
 navigation rather than pretending inactive chats are simultaneously clickable:
 
 1. Discover exact `.agent-sidebar-cell-text` titles under the `Pinned` section.
-2. Reject normalized titles duplicated anywhere in the currently rendered
-   Agent sidebar, not only inside `Pinned`, because selected-tab identity would
-   be ambiguous.
+2. Reject normalized titles duplicated inside the exact `Pinned` section.
+   Cursor 3.12.30 legitimately projects one pinned conversation again in its
+   date-based history section, so cross-section duplicates are not ambiguous.
 3. For automatic cycles, keep only unselected rows with Cursor's
    `.spinning-loader` active marker and require `document.hasFocus() === false`;
    recheck focus before selection and while waiting for the mounted candidate.
 4. Save the selected sidebar row, selected editor tabs, transcript scroll, and
    focus context.
 5. Select each row with the same mouse event sequence used for editor tabs.
-   Re-resolve its globally unique title, exact Pinned-section membership,
+   Re-resolve its section-unique title, exact Pinned-section membership,
    active state, and row node immediately before every click; never reuse a
    later entry captured before an earlier conversation switch.
 6. Require one selected agent tab with an exact matching title and one mounted
@@ -476,9 +506,9 @@ navigation rather than pretending inactive chats are simultaneously clickable:
 7. Scope approval discovery to that exact editor group, require the exact
    pinned row to remain selected, confirm raw-control disappearance, and cap
    retries at two.
-8. Re-resolve the original globally unique title, require its selected-tab
-   resource to match the captured resource, then restore transcript scroll,
-   editor tabs, and focus before nested recovery continues.
+8. Re-resolve the original title inside its captured sidebar section, require
+   its selected-tab resource to match the captured resource, then restore
+   transcript scroll, editor tabs, and focus before nested recovery continues.
 9. If a real user interaction or window-focus transition occurs during an
    automatic visit, abort the entire cycle. A newer user sidebar/tab/scroll
    selection is preserved and all remaining pinned, tray, and virtual-row
@@ -762,6 +792,7 @@ settings remain there until manually removed.
 - workspace
 - bound CDP target ID
 - page target count on port
+- verified product mode (`IDE (verified)` or a non-IDE warning)
 - gate ON/OFF
 - click count
 - injector hash (with drift warning if mismatched)
@@ -770,6 +801,7 @@ settings remain there until manually removed.
 - recent click entries (last 3 printed)
 - last approved command preview (first line + line count) when available
 - click attempts versus confirmed cycle approvals
+- registered parent prompts that have consumed their one direct-scanner attempt
 - cycle toggle/activity, task counts, and last-cycle outcome
 - running-subagent tray advertised/mounted/collapsed counts plus visits,
   attempts, confirmations, and failed retry states
@@ -879,7 +911,9 @@ prevent regression.
   `div.conversations` before and after selecting a pinned row. Selection
   replaces the mounted chat instead of revealing hidden chats. Pinned-agent
   support is therefore sequential, automatic only for active background rows,
-  and title-identity dependent; duplicate titles fail closed. This remains
+  and title-identity dependent. Duplicate titles inside `Pinned` fail closed;
+  the same conversation projected once in Pinned and once in history is
+  accepted and confirmed through selected-tab resource identity. This remains
   distinct from the `N subagents running` tray, which indexes nested children.
 
 ## Related Docs

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -42,7 +43,7 @@ class InjectorSourceTests(unittest.TestCase):
             derive_status,
         )
 
-    def test_cycle_owned_subagents_bypass_normal_and_debug_eligible_paths(self) -> None:
+    def test_direct_and_cycle_paths_share_bounded_candidate_ownership(self) -> None:
         source = INJECTOR_PATH.read_text()
 
         ownership_start = source.index("function _isCycleOwnedSubagentCandidate(")
@@ -52,7 +53,12 @@ class InjectorSourceTests(unittest.TestCase):
         self.assertIn("if (state.cycleActive && navigationScope)", ownership)
         self.assertNotIn("navigationScope.group.contains(btn.el)", ownership)
         self.assertIn("if (!state.cycleEnabled) return false;", ownership)
-        self.assertIn("return !!_taskForRow(row);", ownership)
+        self.assertIn("const task = _taskForRow(row);", ownership)
+        self.assertIn("state.registeredApprovalOwnerTaskKey !== null", ownership)
+        self.assertIn(
+            "task.taskKey === state.registeredApprovalOwnerTaskKey",
+            ownership,
+        )
 
         scanner_start = source.index("function _checkAndClickImpl(")
         scanner_end = source.index("\n  function ", scanner_start)
@@ -61,13 +67,15 @@ class InjectorSourceTests(unittest.TestCase):
             "cycleOwned: _isCycleOwnedSubagentCandidate(btn),",
             scanner,
         )
+        self.assertIn("!btn.cycleOwned &&", scanner)
+        self.assertIn("!btn.directRetryExhausted", scanner)
         self.assertIn(
-            ".filter((btn) => btn.reason !== null && !btn.cycleOwned)",
+            "state.directRegisteredApprovalAttempts.set(btn.fingerprint",
             scanner,
         )
-        self.assertEqual(
-            scanner.count("!btn.cycleOwned && btn.reason === null"),
-            2,
+        self.assertIn(
+            "state.directRegisteredApprovalAttempts.size > 200",
+            scanner,
         )
 
         debug_start = source.index("function debugSnapshot(")
@@ -77,13 +85,18 @@ class InjectorSourceTests(unittest.TestCase):
             "cycleOwned: _isCycleOwnedSubagentCandidate(btn),",
             debug_snapshot,
         )
-        self.assertIn(
-            "eligible: candidates.filter((c) => c.reason !== null && !c.cycleOwned),",
-            debug_snapshot,
-        )
+        self.assertIn("!c.cycleOwned &&", debug_snapshot)
+        self.assertIn("!c.directRetryExhausted", debug_snapshot)
+        self.assertIn("directRetryExhausted:", debug_snapshot)
         navigation_start = source.index("async function _attemptNavigatedApproval(")
         navigation_end = source.index("\n  async function ", navigation_start)
         navigation_attempt = source[navigation_start:navigation_end]
+        row_attempt_start = source.index("async function _attemptSubagentApproval(")
+        row_attempt_end = source.index("\n  function ", row_attempt_start)
+        row_attempt = source[row_attempt_start:row_attempt_end]
+        scoped_start = source.index("function _scopedCycleCandidate(")
+        scoped_end = source.index("\n  function ", scoped_start)
+        scoped_candidate = source[scoped_start:scoped_end]
         cycle_start = source.index("async function runSubagentCycle(")
         cycle_end = source.index("\n  function ", cycle_start)
         cycle = source[cycle_start:cycle_end]
@@ -91,6 +104,19 @@ class InjectorSourceTests(unittest.TestCase):
         self.assertNotIn("state.navigationApprovalScope = null", navigation_attempt)
         self.assertIn("state.navigationApprovalScope = null;", cycle)
         self.assertIn("function _beginNavigationApprovalScope(", source)
+        self.assertIn(
+            "state.registeredApprovalOwnerTaskKey = record.taskKey;",
+            row_attempt,
+        )
+        self.assertIn(
+            "state.registeredApprovalOwnerTaskKey = null;",
+            row_attempt,
+        )
+        self.assertIn("} finally {", row_attempt)
+        self.assertIn(
+            "candidate.fingerprint = _promptFingerprint(candidate.el);",
+            scoped_candidate,
+        )
 
     def test_scanner_skips_cooling_candidates_before_selecting_one(self) -> None:
         source = INJECTOR_PATH.read_text()
@@ -337,8 +363,13 @@ class InjectorSourceTests(unittest.TestCase):
             "entry.ambiguous = titleCounts.get(normalizeLabel(entry.title)) !== 1",
             discovery,
         )
-        self.assertIn("const titleCounts = _agentSidebarTitleCounts();", discovery)
+        self.assertIn("const titleCounts = new Map();", discovery)
+        self.assertIn("for (const entry of raw)", discovery)
         self.assertIn("raw.filter((entry) => !entry.ambiguous)", discovery)
+        self.assertIn(
+            'const item = _uniqueAgentSidebarRow(title, "Pinned");',
+            source,
+        )
         self.assertIn("_resolvePinnedAgentEntry(entry.title", visit)
         self.assertGreaterEqual(visit.count("_resolvePinnedAgentEntry("), 2)
         self.assertIn("_activateAgentSidebarRow(resolved.item);", visit)
@@ -351,7 +382,10 @@ class InjectorSourceTests(unittest.TestCase):
         self.assertIn("_navigationTakeoverReason(target)", candidate_wait)
         self.assertIn("target.selectionElement.getAttribute", source)
         self.assertIn("await _attemptNavigatedApproval(", visit)
-        self.assertIn("_uniqueAgentSidebarRow(context.title)", restore)
+        self.assertIn(
+            "_uniqueAgentSidebarRow(context.title, context.sectionTitle)",
+            restore,
+        )
         self.assertIn("_activateAgentSidebarRow(row);", restore)
         self.assertIn("selected.targetKey !== context.resourceKey", restore)
         self.assertIn("shouldPreserveUserSelection()", restore)
@@ -646,6 +680,112 @@ class CdpJsonTests(unittest.TestCase):
         self.assertTrue(evaluate.call_args.kwargs["await_promise"])
 
 
+class IdeModeTests(unittest.TestCase):
+    def test_launch_args_force_classic_ide_without_chat_or_glass(self) -> None:
+        local = launcher._cursor_ide_launch_args(
+            9222, Path("/profile"), workspace="/workspace",
+        )
+        remote = launcher._cursor_ide_launch_args(
+            9223,
+            Path("/profile-remote"),
+            folder_uri="vscode-remote://ssh-remote+devbox/workspace",
+        )
+
+        self.assertIn("--new-window", local)
+        self.assertIn("--classic", local)
+        self.assertIn("/workspace", local)
+        self.assertNotIn("--chat", local)
+        self.assertNotIn("--glass", local)
+        self.assertIn("--new-window", remote)
+        self.assertIn("--classic", remote)
+        self.assertIn("--folder-uri", remote)
+        self.assertNotIn("--chat", remote)
+        self.assertNotIn("--glass", remote)
+
+    def test_classic_mode_support_fails_closed_when_flag_disappears(self) -> None:
+        supported = subprocess.CompletedProcess(
+            args=["cursor", "--help"],
+            returncode=0,
+            stdout="--classic  Disable glass mode and force classic windows",
+        )
+        missing = subprocess.CompletedProcess(
+            args=["cursor", "--help"],
+            returncode=0,
+            stdout="--new-window  Force to open a new window",
+        )
+        with (
+            mock.patch.object(launcher, "CURSOR_CLI", Path(__file__)),
+            mock.patch.object(launcher.subprocess, "run", return_value=supported),
+        ):
+            ok, reason = launcher._cursor_classic_mode_support()
+        self.assertTrue(ok)
+        self.assertEqual(reason, "classic_mode_supported")
+
+        with (
+            mock.patch.object(launcher, "CURSOR_CLI", Path(__file__)),
+            mock.patch.object(launcher.subprocess, "run", return_value=missing),
+        ):
+            ok, reason = launcher._cursor_classic_mode_support()
+        self.assertFalse(ok)
+        self.assertIn("--classic", reason)
+
+    def test_surface_probe_uses_mode_specific_workbench_bundles(self) -> None:
+        expression = launcher._CDP_SURFACE_MODE_EXPR
+        self.assertIn("workbench\\.desktop\\.main", expression)
+        self.assertIn("workbench\\.glass\\.main", expression)
+        self.assertIn('"desktop_bundle"', expression)
+        self.assertIn('"glass_bundle"', expression)
+
+    def test_selects_only_a_verified_full_ide_target(self) -> None:
+        targets = [
+            {
+                "id": "agents",
+                "url": "vscode-file://workbench/workbench.html",
+                "webSocketDebuggerUrl": "ws://agents",
+            },
+            {
+                "id": "ide",
+                "url": "vscode-file://workbench/workbench.html",
+                "webSocketDebuggerUrl": "ws://ide",
+            },
+        ]
+
+        with (
+            mock.patch.object(
+                launcher, "_cdp_list_page_targets", return_value=targets,
+            ),
+            mock.patch.object(
+                launcher,
+                "_cdp_target_surface",
+                side_effect=lambda target, timeout=5.0: {
+                    "mode": "ide" if target["id"] == "ide" else "agents_or_incomplete",
+                },
+            ),
+        ):
+            selected = launcher._cdp_select_workbench_target(9222)
+
+        self.assertEqual(selected["id"], "ide")
+
+    def test_rejects_agents_only_target(self) -> None:
+        target = {
+            "id": "agents",
+            "url": "vscode-file://workbench/workbench.html",
+            "webSocketDebuggerUrl": "ws://agents",
+        }
+        with (
+            mock.patch.object(
+                launcher, "_cdp_list_page_targets", return_value=[target],
+            ),
+            mock.patch.object(
+                launcher,
+                "_cdp_target_surface",
+                return_value={"mode": "agents_or_incomplete"},
+            ),
+            self.assertRaisesRegex(RuntimeError, "No full IDE target found"),
+        ):
+            launcher._cdp_select_workbench_target(9222)
+
+
 class TargetRebindTests(unittest.TestCase):
     def test_rebinds_only_unique_replacement_workbench(self) -> None:
         session = {
@@ -661,6 +801,9 @@ class TargetRebindTests(unittest.TestCase):
                 return_value=[{"id": "new", "type": "page"}],
             ),
             mock.patch.object(launcher, "_is_workbench", return_value=True),
+            mock.patch.object(
+                launcher, "_cdp_target_surface", return_value={"mode": "ide"},
+            ),
             mock.patch.object(launcher, "_load_state", return_value=state),
             mock.patch.object(launcher, "_save_state") as save_state,
         ):
@@ -684,6 +827,9 @@ class TargetRebindTests(unittest.TestCase):
                 return_value=[{"id": "one"}, {"id": "two"}],
             ),
             mock.patch.object(launcher, "_is_workbench", return_value=True),
+            mock.patch.object(
+                launcher, "_cdp_target_surface", return_value={"mode": "ide"},
+            ),
         ):
             target, changed = launcher._rebind_session_target_if_unique(session)
 

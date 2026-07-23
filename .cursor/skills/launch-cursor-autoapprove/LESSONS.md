@@ -79,6 +79,14 @@
   likely mean a manual window was opened inside the dedicated process, which
   can confuse CDP commands.
 
+- **A workbench target is not proof of full IDE mode**: Cursor 3.12.30 can use
+  the workbench renderer for a standalone Agents window. `--new-window` does
+  not select product mode. Require Cursor's version-coupled `--classic` flag
+  before launch, never pass `--chat` or `--glass`, and fail closed if CLI help
+  no longer advertises the flag. Over CDP, verify
+  `workbench.desktop.main.css/js`; `workbench.glass.main.css/js` is Agents mode.
+  Generic workbench parts and body classes are only secondary evidence.
+
 ## Session State Hygiene
 
 - **Dead and invalid sessions must be garbage-collected automatically**: If
@@ -218,6 +226,12 @@
   virtual-row references. Restore the original agent and rediscover nested
   rows/tray entries before continuing the cycle.
 
+- **Pinned and history sections can project the same conversation twice**:
+  Cursor 3.12.30 keeps a pinned conversation in its date-based history section.
+  Global title uniqueness therefore rejects a normal sidebar. Resolve targets
+  by exact title inside `Pinned`, capture the original row's section, and retain
+  selected-tab resource identity as the cross-navigation confirmation.
+
 - **A newer user selection outranks automation restoration**: Capture an
   interaction generation before top-level navigation. If it changes, abort the
   entire cycle, preserve the user's current sidebar/tab/scroll selection, and
@@ -255,6 +269,14 @@
   recovery. Visit a bounded number of tray rows per pass, confirm that each
   prompt changed, cap retries, and retain the interaction guard so redundancy
   does not become unbounded UI churn.
+
+- **Lease ownership; do not permanently suppress a backup path**: A registered
+  task row that is merely eligible for cycling must remain available to the
+  ordinary mounted-composer scanner. Hold an exact task lease only while the
+  confirmation-aware row attempt is active, release it in `finally`, and share
+  one task-scoped cooldown fingerprint across both paths. Navigation ownership
+  remains exclusive until restoration because its target is otherwise
+  unattributable.
 
 - **Selected editor does not mean transcript tail mounted**: A long read-only
   child can expose its selected tab and `div.conversations` before the pending
@@ -502,8 +524,8 @@
   until the approval clears and changed row state can be observed. Otherwise
   each mutation silently resets the retry budget and creates an unbounded loop.
 
-- **Retry-governed actions need one click owner**: A confirmation-aware cycle
-  cannot enforce retry limits if a generic scanner can click the same registered
-  control on its own cooldown. Route owned candidates exclusively through the
-  bounded path, while retaining generic fallback when ownership is absent or
-  disabled.
+- **Retry-governed redundancy needs leased ownership and independent caps**:
+  A confirmation-aware cycle cannot enforce retry limits if a generic scanner
+  clicks the same registered control forever. Give the mounted direct path one
+  attempt per task-scoped fingerprint, share its cooldown with row recovery,
+  and lease exclusive ownership only during an active bounded attempt.

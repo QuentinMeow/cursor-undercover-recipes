@@ -325,16 +325,18 @@ The bound workbench exposes pinned conversations under the exact `Pinned`
 `.agent-sidebar-section`. Each `.agent-sidebar-cell` has a stable title for the
 current mount, `data-selected`, and an active `.spinning-loader` marker.
 Automatic cycles visit only active unselected rows while
-`document.hasFocus() === false`. Normalized titles duplicated anywhere in the
-currently rendered Agent sidebar are skipped because exact selected-tab
-confirmation would be ambiguous.
+`document.hasFocus() === false`. Normalized titles duplicated inside the exact
+`Pinned` section are skipped. A pinned conversation duplicated in a date-based
+history section is expected on Cursor 3.12.30 and does not make the pinned row
+ambiguous.
 
 Each visit requires one selected editor tab whose title exactly matches the
 sidebar row, the exact pinned row to remain selected, and its group to contain
 `div.conversations`. Candidate matching, raw-control confirmation, and the
 two-attempt cap reuse the tray-scoped policy. Restoration re-resolves the
-captured globally unique title and requires the selected tab's resource key to
-match before restoring transcript scroll, editor selection, and focus.
+captured title inside its original sidebar section and requires the selected
+tab's resource key to match before restoring transcript scroll, editor
+selection, and focus.
 Every later pinned entry is re-resolved inside the Pinned section immediately
 before navigation so an earlier remount cannot leave a stale/recycled row.
 Navigation ownership starts before the row click and ends only after selected
@@ -440,13 +442,16 @@ candidate is cooling down, continue evaluating other tasks.
 
 ## Click and Confirmation
 
-Registered subagent approvals have one click owner. While cycling is enabled,
-an eligible candidate tied to an exact registry row is `cycleOwned`; the
-ordinary fallback scanner excludes it from clicks and blocked/unknown telemetry.
-The confirmation-aware cycle path alone may click it and consume its retry
-budget. Debug snapshots expose the flag and exclude owned candidates from
-`eligible`. With cycling OFF or no registered task identity, ordinary visible
-card handling remains available.
+Registered subagent approvals use leased click ownership. A mounted visible
+candidate remains available to the ordinary fast scanner while cycling is
+enabled, for one direct attempt per task-scoped prompt fingerprint. The
+confirmation-aware row path leases the exact task only from candidate selection
+through confirmation, releasing it in `finally`; tray and pinned navigation
+retain exclusive ownership through restoration. Direct and registered-row
+paths share one task-scoped cooldown fingerprint so either click suppresses an
+immediate duplicate while preserving the other as a later backup. Debug
+snapshots expose `cycleOwned` and `directRetryExhausted`; either state is
+excluded from `eligible`.
 
 1. Bring the exact button inside the scroll viewport.
 2. Re-query after scrolling to avoid a recycled element.
@@ -677,7 +682,8 @@ after its row is already unmounted was not deterministically reproduced.
 - Tray recovery is bounded, confirms disappearance, caps retries, and restores
   the selected editor tabs.
 - Pinned Agent Window recovery is bounded, background-only when automatic,
-  rejects duplicate titles, and restores the original selected agent.
+  rejects duplicate titles inside Pinned, tolerates the same conversation's
+  history projection, and restores the original selected agent.
 
 ## Known Risks
 
