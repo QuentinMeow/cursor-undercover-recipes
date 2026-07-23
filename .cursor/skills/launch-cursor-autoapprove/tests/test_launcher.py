@@ -132,9 +132,18 @@ class InjectorSourceTests(unittest.TestCase):
 
     def test_cycle_visits_running_subagent_tray_and_restores_editor_tabs(self) -> None:
         source = INJECTOR_PATH.read_text()
+        header_start = source.index("function _runningSubagentTrayHeaders(")
+        header_end = source.index("\n  function ", header_start)
+        tray_headers = source[header_start:header_end]
         tray_start = source.index("function _runningSubagentTrayEntries(")
         tray_end = source.index("\n  function ", tray_start)
         tray_discovery = source[tray_start:tray_end]
+        bounds_start = source.index("function _boundedRunningSubagentTrayEntries(")
+        bounds_end = source.index("\n  function ", bounds_start)
+        tray_bounds = source[bounds_start:bounds_end]
+        advance_start = source.index("function _advanceRunningSubagentTrayCursor(")
+        advance_end = source.index("\n  function ", advance_start)
+        tray_advance = source[advance_start:advance_end]
         wait_start = source.index("async function _waitForSelectedSubagentGroup(")
         wait_end = source.index("\n  function ", wait_start)
         wait_for_group = source[wait_start:wait_end]
@@ -151,9 +160,13 @@ class InjectorSourceTests(unittest.TestCase):
         cycle_end = source.index("\n  function ", cycle_start)
         cycle = source[cycle_start:cycle_end]
 
-        self.assertIn("SUBAGENT_TRAY_HEADER_PATTERN.test(headerText)", tray_discovery)
+        self.assertIn("SUBAGENT_TRAY_HEADER_PATTERN.test(headerText)", tray_headers)
         self.assertIn("SUBAGENT_TRAY_ITEM_SELECTOR", tray_discovery)
-        self.assertIn("CYCLE_MAX_TRAY_ITEMS", tray_discovery)
+        self.assertIn("!isVisible(item)", tray_discovery)
+        self.assertIn("_boundedRunningSubagentTrayEntries(entries)", tray_discovery)
+        self.assertIn("CYCLE_MAX_TRAY_ITEMS", tray_bounds)
+        self.assertNotIn("state.trayCursor =", tray_bounds)
+        self.assertIn("Math.min(processedCount, entryCount)", tray_advance)
         self.assertIn('group.querySelector("div.conversations")', wait_for_group)
         self.assertNotIn('group.querySelector("div.full-input-box")', wait_for_group)
         self.assertIn("new MutationObserver(", wait_for_candidate)
@@ -174,7 +187,14 @@ class InjectorSourceTests(unittest.TestCase):
             "const match = matchesApproval(el, { allowExcluded: true });",
             source,
         )
-        self.assertIn("let trayEntries = _runningSubagentTrayEntries();", cycle)
+        self.assertIn(
+            "let trayEntries = _runningSubagentTrayEntries({ bounded: false });",
+            cycle,
+        )
+        self.assertEqual(
+            cycle.count("_runningSubagentTrayEntries({ bounded: false })"),
+            2,
+        )
         self.assertIn("await _visitSubagentTrayEntry(", cycle)
         self.assertLess(
             cycle.index("for (const entry of trayEntries)"),
@@ -197,6 +217,93 @@ class InjectorSourceTests(unittest.TestCase):
         self.assertIn("reason: `${source}_retry_exhausted`", attempt)
         self.assertIn("state.pinnedApprovalAttempts", attempt)
         self.assertIn("state.trayApprovalAttempts", attempt)
+
+    def test_collapsed_tray_is_expanded_and_entries_are_reresolved(self) -> None:
+        source = INJECTOR_PATH.read_text()
+        headers_start = source.index("function _runningSubagentTrayHeaders(")
+        headers_end = source.index("\n  function ", headers_start)
+        headers = source[headers_start:headers_end]
+        ensure_start = source.index("async function _ensureRunningSubagentTrayExpanded(")
+        ensure_end = source.index("\n  async function ", ensure_start)
+        ensure = source[ensure_start:ensure_end]
+        ready_start = source.index("function _subagentTrayEntriesReady(")
+        ready_end = source.index("\n  function ", ready_start)
+        ready = source[ready_start:ready_end]
+        signature_start = source.index("function _subagentTrayExpansionSignature(")
+        signature_end = source.index("\n  function ", signature_start)
+        signature = source[signature_start:signature_end]
+        resolve_start = source.index("async function _resolveRunningSubagentTrayEntry(")
+        resolve_end = source.index("\n  async function ", resolve_start)
+        resolve = source[resolve_start:resolve_end]
+        restore_start = source.index(
+            "async function _restoreSubagentTrayExpansionContext("
+        )
+        restore_end = source.index("\n  function ", restore_start)
+        restore = source[restore_start:restore_end]
+        visit_start = source.index("async function _visitSubagentTrayEntry(")
+        visit_end = source.index("\n  async function ", visit_start)
+        visit = source[visit_start:visit_end]
+        cycle_start = source.index("async function runSubagentCycle(")
+        cycle_end = source.index("\n  function ", cycle_start)
+        cycle = source[cycle_start:cycle_end]
+
+        self.assertIn("SUBAGENT_TRAY_HEADER_PATTERN.test(headerText)", headers)
+        self.assertIn("_subagentTrayHeaderExpanded(header, block)", headers)
+        self.assertIn("_activateNavigationElement(headers[0].header);", ensure)
+        self.assertIn("CYCLE_TRAY_EXPAND_TIMEOUT_MS", ensure)
+        self.assertIn("_runningSubagentTrayEntries({ bounded: false })", ensure)
+        self.assertIn('reason: "tray_header_ambiguous"', ensure)
+        self.assertIn("_subagentTrayExpansionBackoff(headers[0])", ensure)
+        self.assertIn("_recordSubagentTrayExpansionFailure(", ensure)
+        self.assertIn("CYCLE_TRAY_EXPAND_MAX_FAILURES", source)
+        self.assertIn('"tray_expand_retry_exhausted"', ensure)
+        self.assertIn("parentIdentity", signature)
+        self.assertIn("state.trayParentIds.get(parentTab)", signature)
+        self.assertNotIn("header.expanded", signature)
+        self.assertIn("_subagentTrayEntriesReady(headers[0], entries)", ensure)
+        self.assertIn("header.mounted >= header.advertised", ready)
+        self.assertIn('"tray_items_partially_mounted"', ensure)
+        self.assertLess(
+            ensure.index("let headers = _runningSubagentTrayHeaders();"),
+            ensure.index("let entries = _runningSubagentTrayEntries({ bounded: false });"),
+        )
+        self.assertIn(
+            "const prepared = await _ensureRunningSubagentTrayExpanded(options);",
+            resolve,
+        )
+        self.assertIn("normalizeLabel(candidate.title) === wanted", resolve)
+        self.assertIn(
+            "const resolved = await _resolveRunningSubagentTrayEntry(entry, options);",
+            visit,
+        )
+        self.assertNotIn("if (!entry.item.isConnected)", visit)
+        self.assertIn("currentEntry.item", visit)
+        self.assertIn("let trayHeaders = _runningSubagentTrayHeaders();", cycle)
+        self.assertIn(
+            "trayExpansionContext = _captureSubagentTrayExpansionContext();",
+            cycle,
+        )
+        self.assertIn("if (!trayExpansionContext.ok) {", cycle)
+        self.assertIn("_boundedRunningSubagentTrayEntries(eligibleTrayEntries)", cycle)
+        self.assertIn("_uniquelyTitledRunningSubagentTrayEntries(", cycle)
+        self.assertIn("CYCLE_TRAY_MAX_DURATION_MS", cycle)
+        self.assertIn("const rowStartedPerformance = performance.now();", cycle)
+        self.assertIn("trayEntriesProcessed++;", cycle)
+        self.assertIn("_advanceRunningSubagentTrayCursor(", cycle)
+        self.assertIn(
+            "await _restoreSubagentTrayExpansionContext(",
+            cycle,
+        )
+        self.assertIn('reason: "tray_restore_parent_changed"', source)
+        self.assertIn("_editorTabResourceKey(parentTab)", source)
+        self.assertIn("type: \"tray_restore\"", restore)
+        self.assertIn("changed: false", restore)
+        self.assertEqual(source.count('"tray_expansion_not_restored"'), 1)
+        self.assertIn('source: "tray_between_visits"', cycle)
+        self.assertLess(
+            cycle.index("const betweenVisitRestore = await _restoreEditorSelectionContext("),
+            cycle.index("const afterTrayTakeover = _navigationTakeoverReason("),
+        )
 
     def test_cycle_visits_and_restores_pinned_top_level_agents(self) -> None:
         source = INJECTOR_PATH.read_text()
@@ -258,7 +365,8 @@ class InjectorSourceTests(unittest.TestCase):
         self.assertIn("preserveUserSelection = true;", cycle)
         self.assertIn("if (!abortAfterPinned) {", cycle)
         self.assertIn("CYCLE_PINNED_MAX_DURATION_MS", cycle)
-        self.assertIn("const nestedStartedPerformance = performance.now();", cycle)
+        self.assertIn("const trayStartedPerformance = performance.now();", cycle)
+        self.assertIn("const rowStartedPerformance = performance.now();", cycle)
         self.assertIn("{ preserveOnInteraction: true }", cycle)
         self.assertIn("_visitSubagentTrayEntry(", cycle)
         self.assertIn("navigationOptions", cycle)
@@ -399,6 +507,11 @@ class SubagentSnapshotTests(unittest.TestCase):
             "counts": {"active": 1},
             "tray": {
                 "running": 2,
+                "mounted": 3,
+                "advertised": 3,
+                "headers": 1,
+                "collapsed": 1,
+                "unknown": 0,
                 "visits": 3,
                 "attempts": 1,
                 "confirmed": 1,
@@ -442,6 +555,11 @@ class SubagentSnapshotTests(unittest.TestCase):
         self.assertNotIn("prompt", clean["tasks"][0])
         self.assertEqual(clean["tasks"][0]["title"], "Safe title")
         self.assertEqual(clean["tray"]["confirmed"], 1)
+        self.assertEqual(clean["tray"]["mounted"], 3)
+        self.assertEqual(clean["tray"]["advertised"], 3)
+        self.assertEqual(clean["tray"]["headers"], 1)
+        self.assertEqual(clean["tray"]["collapsed"], 1)
+        self.assertEqual(clean["tray"]["unknown"], 0)
         self.assertNotIn("prompt", clean["tray"])
         self.assertEqual(clean["pinned"]["total"], 2)
         self.assertEqual(clean["pinned"]["active"], 1)
@@ -453,6 +571,27 @@ class SubagentSnapshotTests(unittest.TestCase):
         )
         self.assertNotIn("prompt", clean["pinned"]["lastRestore"])
         self.assertNotIn("titles", clean["pinned"])
+
+    def test_tray_status_formats_current_and_legacy_snapshots(self) -> None:
+        current = launcher._format_tray_status({
+            "advertised": 3,
+            "mounted": 2,
+            "running": 1,
+            "headers": 1,
+            "collapsed": 0,
+            "unknown": 1,
+            "visits": 4,
+            "attempts": 2,
+            "confirmed": 1,
+            "failed": 0,
+        })
+        legacy = launcher._format_tray_status({"running": 2})
+
+        self.assertIn("3 advertised, 2 mounted, 1 eligible", current)
+        self.assertIn("0/1 collapsed, 1 unknown", current)
+        self.assertIn("4 visits, 2 attempts, 1 confirmed, 0 failed", current)
+        self.assertIn("2 advertised, 2 mounted, 2 eligible", legacy)
+        self.assertIn("0/0 collapsed, 0 unknown", legacy)
 
     def test_sync_writes_atomic_multi_session_snapshot(self) -> None:
         exported = {

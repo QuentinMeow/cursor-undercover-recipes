@@ -27,8 +27,9 @@ description: >-
 Open a dedicated Cursor window with the DOM auto-accept script injected and the
 gate ON. Bounded agent recovery also starts ON: registered parent-transcript
 rows, exact navigation through the `N subagents running` tray, and sequential
-cycling across active pinned Agent Window conversations. Simple commands can
-pause either behavior later.
+cycling across active pinned Agent Window conversations. Collapsed running
+trays are materialized within a fixed bound. Simple commands can pause either
+behavior later.
 
 This is the supported auto-approval skill in this repo. The older
 `cursor-autoapprove` and `personal-cursor-quickapprove` experiments were
@@ -105,7 +106,7 @@ lifecycle with `on`/`off`/`stop`.
 | `off [-w PATH\|SLUG]` | Pause auto-clicking (`stopAccept()` via CDP) while keeping the dedicated window open. Auto-detected if only one session, otherwise opens an interactive picker in a TTY. |
 | `cycle --on\|--off\|--once [-w PATH\|SLUG]` | Control registered parent-transcript rows, exact `N subagents running` tray entries, and pinned top-level agents. Automatic pinned navigation visits active unselected rows in round-robin passes of up to two while the Agent Window is unfocused. `--once` runs one bounded pass, including completed rows. Confirms results, caps retries, restores the original agent/tabs/scroll/focus, and fails closed on drift. |
 | `subagents [-w PATH\|SLUG] [--json]` | Show the sanitized renderer task registry, row hints, statuses, attempts, and confirmation timestamps. |
-| `status [-w PATH\|SLUG]` | Show session details including last approved command preview plus nested-tray and pinned-agent visit/confirmation totals. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
+| `status [-w PATH\|SLUG]` | Show session details including last approved command preview, tray advertised/mounted/collapsed state, and nested/pinned visit/confirmation totals. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
 | `stop [-w PATH\|SLUG] [--all]` | Pause gate, close dedicated Cursor process, and remove session when shutdown succeeds. Without `-w`, it prefers running sessions when any are alive; if none are running, it falls back to stale entries for cleanup. Use `--all` to stop every session, but do not combine `--all` with `-w` or a positional workspace. |
 | `alias [set\|remove\|list]` | Manage workspace aliases stored in `config.json`. `set <name> <path>` registers a new alias (validates the path exists and the name is not already taken). `remove <name>` deletes one. `list` shows all. |
 | `history [-w SLUG] [-n LIMIT] [--json] [--commands]` | Show durable event log of session/gate/click events. Persisted across sessions. Use `--commands` for a dedicated command-approval view with readable multiline formatting. |
@@ -159,13 +160,14 @@ use `caa --help` (or the full launcher path with `--help`).
    pattern fixes.
 10. Default-on nested recovery records exact mounted task-row identity and
     revisits registered unmounted rows through the TanStack virtualizer. As a
-    backup, it visits exact running-subagent tray entries, mounts each
-    read-only child editor, handles eligible approvals there, and restores the
-    original tabs/focus. Both paths count confirmations separately from click
-    attempts. Automatic cycles pause while the focused window has its terminal
-    or another non-composer editor active; focus settling follows newer user
-    interaction instead of restoring a stale snapshot. Use `caa cycle --off`
-    for the explicit opt-out.
+    backup, it expands an exact collapsed running-subagent tray, re-resolves
+    each entry after parent restoration, mounts each read-only child editor,
+    handles eligible approvals there, and restores the original tray/tabs/focus
+    state. Both paths count confirmations separately from click attempts.
+    Automatic cycles pause while the focused window has its terminal or another
+    non-composer editor active; focus settling follows newer user interaction
+    instead of restoring a stale snapshot. Use `caa cycle --off` for the
+    explicit opt-out.
 11. Active pinned Agent Window conversations are visited sequentially because
     Cursor mounts only the selected conversation. Automatic visits happen only
     while the window is unfocused, skip the selected row, reject duplicate

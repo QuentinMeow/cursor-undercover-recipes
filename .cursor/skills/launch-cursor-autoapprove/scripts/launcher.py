@@ -710,7 +710,18 @@ def _sanitize_subagent_snapshot(snapshot: dict, workspace: str, slug: str) -> di
             {
                 key: value
                 for key, value in snapshot.get("tray", {}).items()
-                if key in {"running", "visits", "attempts", "confirmed", "failed"}
+                if key in {
+                    "running",
+                    "mounted",
+                    "advertised",
+                    "headers",
+                    "collapsed",
+                    "unknown",
+                    "visits",
+                    "attempts",
+                    "confirmed",
+                    "failed",
+                }
                 and isinstance(value, int)
             }
             if isinstance(snapshot.get("tray"), dict)
@@ -1866,6 +1877,27 @@ def _resolve_session(args: argparse.Namespace, state: dict,
     return None
 
 
+def _format_tray_status(tray: dict) -> str:
+    """Format current and legacy tray telemetry consistently."""
+    advertised = tray.get("advertised", tray.get("running", 0))
+    mounted = tray.get("mounted", tray.get("running", 0))
+    headers = tray.get("headers", 0)
+    collapsed = tray.get("collapsed", 0)
+    unknown = tray.get("unknown", 0)
+    return (
+        "Tray:      "
+        f"{advertised} advertised, "
+        f"{mounted} mounted, "
+        f"{tray.get('running', 0)} eligible, "
+        f"{collapsed}/{headers} collapsed, "
+        f"{unknown} unknown, "
+        f"{tray.get('visits', 0)} visits, "
+        f"{tray.get('attempts', 0)} attempts, "
+        f"{tray.get('confirmed', 0)} confirmed, "
+        f"{tray.get('failed', 0)} failed"
+    )
+
+
 def _print_session_status(session: dict) -> None:
     """Print status for a single session with target-level diagnostics."""
     pid = session.get("pid")
@@ -1976,14 +2008,7 @@ def _print_session_status(session: dict) -> None:
                 else gate.get("subagentTray", {})
             )
             if isinstance(tray, dict):
-                print(
-                    "Tray:      "
-                    f"{tray.get('running', 0)} running, "
-                    f"{tray.get('visits', 0)} visits, "
-                    f"{tray.get('attempts', 0)} attempts, "
-                    f"{tray.get('confirmed', 0)} confirmed, "
-                    f"{tray.get('failed', 0)} failed"
-                )
+                print(_format_tray_status(tray))
             pinned = (
                 registry.get("pinned", {})
                 if isinstance(registry, dict)
@@ -2769,14 +2794,7 @@ def cmd_subagents(args: argparse.Namespace) -> int:
     )
     tray = snapshot.get("tray", {})
     if isinstance(tray, dict):
-        print(
-            "Tray:      "
-            f"{tray.get('running', 0)} running, "
-            f"{tray.get('visits', 0)} visits, "
-            f"{tray.get('attempts', 0)} attempts, "
-            f"{tray.get('confirmed', 0)} confirmed, "
-            f"{tray.get('failed', 0)} failed"
-        )
+        print(_format_tray_status(tray))
     pinned = snapshot.get("pinned", {})
     if isinstance(pinned, dict):
         print(

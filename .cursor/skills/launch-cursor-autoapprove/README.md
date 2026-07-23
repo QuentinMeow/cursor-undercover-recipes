@@ -80,7 +80,7 @@ built-in usage summary, `caa help` for examples and doc paths, or
 | `off` | Turn gate OFF without closing the dedicated window. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
 | `cycle --on\|--off\|--once` | Control registered parent-transcript rows, exact entries in the `N subagents running` tray, and pinned top-level agents. It starts ON; automatic pinned navigation visits active unselected rows in round-robin passes of up to two while the window is unfocused. `--once` explicitly visits one bounded pass, including completed rows, then restores the original agent. |
 | `subagents [--json]` | Show the sanitized task registry, row hints, attempts, and confirmations. |
-| `status` | Show PID, CDP port, workspace, gate state, click count, injector hash, current title, recent clicks, and last approved command preview. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
+| `status` | Show PID, CDP port, workspace, gate state, click count, injector hash, current title, tray advertised/mounted/collapsed state, recent clicks, and last approved command preview. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
 | `stop` | Turn gate OFF, close the dedicated Cursor process, and clear local session state when shutdown succeeds. Without `-w`, it prefers running sessions when any are alive; if none are running, it falls back to stale entries for cleanup. Use `--all` to stop every session, and do not combine `--all` with `-w` or a positional workspace. |
 | `history [-w SLUG] [-n N] [--json] [--commands]` | Show durable event log (session/gate/click events). Use `--commands` to show only approved commands with readable multiline formatting from the dedicated command ledger. |
 | `alias [set\|remove\|list]` | Manage workspace aliases stored in `config.json`. Auto-registered on launch. |
@@ -102,8 +102,10 @@ built-in usage summary, `caa help` for examples and doc paths, or
   unresolved prompt remains deduped for eight seconds.
 - Agent cycling is ON by default for new `launch` and `launch-ssh` sessions. It
   targets exact registered task rows, running-subagent tray entries, and active
-  pinned top-level agents. Pinned agents are necessarily visited sequentially
-  because Cursor mounts only the selected conversation. Automatic top-level
+  pinned top-level agents. A collapsed exact running tray is expanded within a
+  fixed bound, and child rows are re-resolved after each parent restoration.
+  Pinned agents are necessarily visited sequentially because Cursor mounts
+  only the selected conversation. Automatic top-level
   navigation runs only while the window is unfocused; `cycle --once` is the
   explicit focused-window test path. Cycles are bounded, approvals are
   confirmed with capped retries, and the original agent, tabs, scroll, and
