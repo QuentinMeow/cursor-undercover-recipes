@@ -3967,9 +3967,13 @@
     ) {
       return false;
     }
-    const container = row.closest(SCROLL_CONTAINER_SELECTOR);
+    const containers = [];
+    for (let node = row.parentElement; node && node !== document.body; node = node.parentElement) {
+      if (node.matches?.(SCROLL_CONTAINER_SELECTOR)) containers.push(node);
+    }
+    if (containers.length !== 1) return false;
+    const container = containers[0];
     return (
-      !!container &&
       _rowInsideViewport(btn.el, container) &&
       _notCoveredByUnrelatedElement(btn.el)
     );

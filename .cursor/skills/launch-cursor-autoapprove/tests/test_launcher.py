@@ -76,6 +76,7 @@ class InjectorSourceTests(unittest.TestCase):
             helper,
         )
         self.assertIn("_hasUnrelatedVisibleModal(row)", helper)
+        self.assertIn("containers.length !== 1", helper)
         self.assertIn("_rowInsideViewport(btn.el, container)", helper)
         self.assertIn("_notCoveredByUnrelatedElement(btn.el)", helper)
         self.assertIn(
