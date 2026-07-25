@@ -32,7 +32,10 @@ These install snippets assume you are running from this repo checkout, since
 they use `git rev-parse --show-toplevel` to locate the repo root.
 
 Global installs appear in Cursor as `/global-launch-cursor-autoapprove`.
-Runtime files live under `~/.cursor/launch-autoapprove/`.
+The global launcher, injector, session state, and dedicated profiles live under
+`~/.cursor/launch-autoapprove/`. A repo-local install instead copies the
+launcher and injector to `<target>/.cursor/launch-autoapprove/`; its session
+state and dedicated profiles still live under the home-directory runtime path.
 
 Useful install flags:
 
@@ -41,7 +44,7 @@ Useful install flags:
 - `--force` overwrites existing installed files.
 - `--dry-run` shows planned changes without writing files.
 
-### Optional Alias
+### Optional Alias (Global Install)
 
 ```bash
 alias caa='/usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py"'
@@ -51,6 +54,12 @@ alias caa='/usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py"'
 
 ```bash
 /usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py" launch --workspace ~/code/my-project
+```
+
+For a repo-local-only install, run from the target repo root:
+
+```bash
+/usr/bin/python3 "$PWD/.cursor/launch-autoapprove/launcher.py" launch --workspace "$PWD"
 ```
 
 If you set the alias:
@@ -76,7 +85,7 @@ built-in usage summary, `caa help` for examples and doc paths, or
 
 | Command | Behavior |
 |---|---|
-| `launch [--workspace PATH] [PATH] [--interval SECONDS]` | Start dedicated Cursor process for a local workspace, inject script, and turn the gate plus nested/pinned-agent cycling ON. The fallback scan defaults to 0.5 seconds; supported range is 0.25–60 seconds. Blocks only if the same workspace is already running; other workspaces can run in parallel. |
+| `launch [--workspace PATH] [PATH\|ALIAS] [--interval SECONDS]` | Start dedicated Cursor for a local path or registered alias, inject the script, and turn the gate plus nested/pinned-agent cycling ON. SSH folder URI aliases reuse the SSH launch flow. The fallback scan defaults to 0.5 seconds; supported range is 0.25–60 seconds. Blocks only if the same workspace is already running; other workspaces can run in parallel. |
 | `launch-ssh <host> [/absolute/remote/path] [--no-preflight] [--interval SECONDS]` | Start dedicated Cursor connected to an SSH remote host from `~/.ssh/config`, inject script, and turn the gate plus nested/pinned-agent cycling ON. Path-specific launches verify the remote directory with `ssh <host> test -d <path>` before creating a profile or alias. |
 | `on [--interval SECONDS]` | Turn gate ON and optionally change/persist the session's fallback scan interval. Reloads injector code when in-window hash differs from the current injector file. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
 | `off` | Turn gate OFF without closing the dedicated window. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
@@ -97,9 +106,9 @@ built-in usage summary, `caa help` for examples and doc paths, or
 - Copies `settings.json`, `keybindings.json`, and `cursorAuth/*` auth tokens from your default profile.
 - Does **not** copy non-auth `state.vscdb` rows (chat history/model state remain profile-specific).
 - There is no `inject --restart` command in this supported launcher.
-- The branded title reports `<repo> - autoapprove 🟢 on active-window: N`,
+- The branded title reports `<repo> - autoapprove 🟢 on - active window: N`,
   with 🟡 `paused` for temporarily focus-blocked recovery and 🔴 `off` for a
-  disabled gate. `active-window` is the number of uniquely titled active Agent
+  disabled gate. `active window` is the number of uniquely titled active Agent
   Window conversations currently discovered across the sidebar. Direct
   visible-prompt scanning remains enabled during the recovery-only `paused`
   state.

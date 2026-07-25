@@ -8,10 +8,11 @@ alwaysApply: true
 ## Summary
 
 This folder owns the `launch-cursor-autoapprove` skill. It launches a dedicated
-Cursor instance with DOM auto-accept injected via CDP, and provides `on`/`off`
-gate commands. This is the canonical auto-approval skill in the repo. Keep
-public onboarding in `README.md`, deep user docs in `references/`, and agent
-rules in this file.
+verified IDE Cursor instance with DOM auto-accept and bounded nested/pinned-agent
+recovery injected via CDP. It provides gate, cycling, diagnostics, and session
+controls. This is the canonical auto-approval skill in the repo. Keep public
+onboarding in `README.md`, deep user docs in `references/`, and agent rules in
+this file.
 
 ## Folder Structure
 
@@ -22,11 +23,23 @@ rules in this file.
 - `issues/` -- structured issue records for launch-skill failures and fixes.
 - `references/implementation.md` -- user-facing architecture and code-path deep dive.
 - `references/manual-testing.md` -- user-facing smoke-test plan and evidence guide.
+- `references/subagent-approval-cycling.md` -- nested and pinned-agent recovery design.
 - `references/retired-approaches.md` -- why older auto-approval skills were removed.
 - `scripts/launcher.py` -- main CLI for launching, SSH remotes, toggles, status,
   aliases, history, diagnostics, screenshots, share-safe mode, and stopping sessions.
 - `scripts/devtools_auto_accept.js` -- canonical DOM injector for this skill.
+- `scripts/stress_test.py` -- live snapshot, synthetic, and real-prompt replay harness.
 - `scripts/install.sh` -- installs globally to `~/.cursor/launch-autoapprove/` or copies the skill into another repo.
+- `tests/test_launcher.py` -- launcher and injector-shape unit coverage.
+- `tests/fixtures/real-prompts/` -- sanitized prompt fixtures for the replay harness.
+
+## Handy Commands
+
+```bash
+/usr/bin/python3 -m unittest discover -s "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/tests" -p "test_*.py"
+bash "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/scripts/install.sh" --target global --dry-run
+/usr/bin/python3 "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/scripts/launcher.py" status
+```
 
 ## Guidance to AI Agent Tasks
 
@@ -51,7 +64,11 @@ rules in this file.
   `references/retired-approaches.md` before deleting the old files.
 
 ### Verification
+- After changing any file under `scripts/` or changing `SKILL.md`, reinstall
+  globally with `scripts/install.sh --target global --force` before runtime
+  verification; the installed runtime does not auto-sync.
 - After changing `launcher.py`, test:
+  `/usr/bin/python3 -m unittest discover -s "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/tests" -p "test_*.py"` and
   `/usr/bin/python3 "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/scripts/launcher.py" status`
   (should report state or "no active session").
 - After changing `devtools_auto_accept.js`, verify:
@@ -59,5 +76,5 @@ rules in this file.
   can refresh a running window and `status` shows the expected injector hash.
 - After install changes, test:
   `bash "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/scripts/install.sh" --target global --dry-run`
-- After doc changes, check that `README.md` still fits on one screen and links
-  to deeper material instead of duplicating it.
+- After doc changes, keep the `README.md` summary and Quick Start scannable on
+  the first screen, and link to deeper material instead of duplicating it.

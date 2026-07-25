@@ -396,6 +396,11 @@
   within milliseconds of DOM changes. The poll remains as a safety net for edge
   cases the observer might miss (e.g., attribute-only changes on existing nodes).
 
+- **Observer startup needs a catch-up scan**: A prompt can already exist before
+  the MutationObserver attaches, so no later mutation is guaranteed to reveal
+  it. Schedule one bounded scan immediately after observer setup; keep the
+  fallback poll as a separate safety net.
+
 - **Runtime interval changes must replace the existing timer**: A
   `startAccept(interval)` API that returns early when already running makes a
   CLI interval flag appear successful without changing behavior. Update

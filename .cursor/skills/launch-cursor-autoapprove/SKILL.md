@@ -1,11 +1,11 @@
 ---
 name: launch-cursor-autoapprove
 description: >-
-  Launch a dedicated Cursor window with auto-approval pre-injected via CDP.
-  Provides dead-simple on/off gate toggle. Use when the user wants a
-  dedicated auto-approve Cursor instance, or says "launch auto-approve
-  cursor", "open a cursor that auto-approves", or "I don't want to click
-  accept."
+  Launch a dedicated, verified IDE Cursor window with auto-approval and bounded
+  nested/pinned-agent recovery pre-injected via CDP. Provides on/off and cycling
+  controls. Use when the user wants a dedicated auto-approve Cursor instance,
+  or says "launch auto-approve cursor", "open a cursor that auto-approves", or
+  "I don't want to click accept."
 ---
 
 > **AGENT: REINSTALL AFTER EVERY CODE CHANGE.**
@@ -68,23 +68,36 @@ bash "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/
 ```
 
 That copies the skill docs plus a launcher entrypoint into the target repo's
-`.cursor/`, while the dedicated runtime state and dedicated profile remain under
-`~/.cursor/launch-autoapprove/`.
+`.cursor/`. The copied launcher and injector live under
+`<target>/.cursor/launch-autoapprove/`, while session state and dedicated
+profiles remain under `~/.cursor/launch-autoapprove/`.
 
 ## Agent Workflow
+
+For a global install, set:
+
+```bash
+LAUNCHER="$HOME/.cursor/launch-autoapprove/launcher.py"
+```
+
+For a repo-local-only install, run from the target repo root and set:
+
+```bash
+LAUNCHER="$PWD/.cursor/launch-autoapprove/launcher.py"
+```
 
 When the user asks for auto-approval on a **local** workspace, run:
 
 ```bash
-/usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py" launch --workspace "$PWD"
-/usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py" status --workspace "$PWD"
+/usr/bin/python3 "$LAUNCHER" launch --workspace "$PWD"
+/usr/bin/python3 "$LAUNCHER" status --workspace "$PWD"
 ```
 
 When the user asks for auto-approval on an **SSH remote** host, run:
 
 ```bash
-/usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py" launch-ssh <ssh-host> [/absolute/remote/path]
-/usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py" status -w <workspace-slug>
+/usr/bin/python3 "$LAUNCHER" launch-ssh <ssh-host> [/absolute/remote/path]
+/usr/bin/python3 "$LAUNCHER" status -w <workspace-slug>
 ```
 
 **Always verify `Mode: IDE (verified)` before telling the user launch
@@ -162,10 +175,10 @@ use `caa --help` (or the full launcher path with `--help`).
    consecutive scans; the same unresolved prompt stays deduped for eight
    seconds.
 7. The injector continuously maintains a detailed window title such as
-   `<repo> - autoapprove 🟢 on active-window: 2`. It uses 🟢 `on`, 🟡
+   `<repo> - autoapprove 🟢 on - active window: 2`. It uses 🟢 `on`, 🟡
    `paused`, and 🔴 `off`; `paused` means focus-safe automatic agent
    navigation/recovery is temporarily blocked while the direct visible-prompt
-   scanner remains enabled. `active-window` counts uniquely titled active Agent
+   scanner remains enabled. `active window` counts uniquely titled active Agent
    Window conversations currently discovered across the sidebar, including the
    selected conversation outside Pinned. The one-second title sync also
    self-heals if Cursor resets it — unless
