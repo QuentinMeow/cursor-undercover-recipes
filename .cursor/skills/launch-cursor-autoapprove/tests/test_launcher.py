@@ -639,7 +639,7 @@ class InjectorSourceTests(unittest.TestCase):
             source,
         )
 
-    def test_banner_reports_gate_pause_and_active_pinned_agent_count(self) -> None:
+    def test_banner_reports_gate_pause_and_active_sidebar_agent_count(self) -> None:
         source = INJECTOR_PATH.read_text()
         count_start = source.index("function _activeAgentWindowCount(")
         count_end = source.index("\n  function ", count_start)
