@@ -1186,8 +1186,11 @@ def _repo_slug(workspace: str | Path) -> str:
 
 
 def _window_title(workspace: str | Path, gate_on: bool) -> str:
-    state = "✅" if gate_on else "⏸"
-    return f"autoapprove {state} {_repo_slug(workspace)}"
+    emoji, status = ("🟢", "on") if gate_on else ("🔴", "off")
+    return (
+        f"{_repo_slug(workspace)} - autoapprove {emoji} {status} "
+        "active-window: 0"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1727,7 +1730,7 @@ def _cdp_gate(port: int, action: str, title: str | None = None,
             expr = "setShareSafeTitle(true); stopAccept(); JSON.stringify(acceptStatus())"
         else:
             title_expr = _title_sync_expr(title) if title else ""
-            expr = f"stopAccept(); {title_expr} JSON.stringify(acceptStatus())"
+            expr = f"{title_expr} stopAccept(); JSON.stringify(acceptStatus())"
     elif action == "status":
         expr = "JSON.stringify(acceptStatus())"
     else:
@@ -2248,6 +2251,17 @@ def _print_session_status(session: dict) -> None:
             if "shareSafeTitle" in gate:
                 tmode = "discreet" if gate.get("shareSafeTitle") else "branded"
                 print(f"Title:     {tmode}")
+            if gate.get("bannerState"):
+                pause_reason = (
+                    f" ({gate.get('bannerPauseReason')})"
+                    if gate.get("bannerPauseReason")
+                    else ""
+                )
+                print(
+                    "Banner:    "
+                    f"{str(gate['bannerState']).upper()}{pause_reason}, "
+                    f"{gate.get('activeAgentWindows', 0)} active agent windows"
+                )
             print(f"Injector:  {_format_injector_hash(gate.get('scriptHash'))}")
             expected_hash: str | None = None
             try:
@@ -2523,7 +2537,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
         print("\nAuto-approve ON.")
         print("Mode: IDE (verified)")
         print(f"Fallback poll interval: {interval_seconds:g}s")
-        print(f"Window title target: {enabled_title}")
+        print(f"Window title target: {result.get('bannerTitle', enabled_title)}")
         if pinned_target:
             print(f"Bound target: {pinned_target}")
         if result and result.get("scriptHash"):
@@ -2710,7 +2724,7 @@ def cmd_launch_ssh(args: argparse.Namespace) -> int:
         print("\nAuto-approve ON.")
         print("Mode: IDE (verified)")
         print(f"Fallback poll interval: {interval_seconds:g}s")
-        print(f"Window title target: {enabled_title}")
+        print(f"Window title target: {result.get('bannerTitle', enabled_title)}")
         if pinned_target:
             print(f"Bound target: {pinned_target}")
         if result and result.get("scriptHash"):
@@ -2837,7 +2851,7 @@ def cmd_on(args: argparse.Namespace) -> int:
         if share_safe:
             print("Window title: discreet (screen-share safe; captured at inject time)")
         else:
-            print(f"Window title target: {enabled_title}")
+            print(f"Window title target: {result.get('bannerTitle', enabled_title)}")
         if bound_target:
             print(f"Bound target: {bound_target}")
         if result.get("scriptHash"):
@@ -2888,7 +2902,7 @@ def cmd_off(args: argparse.Namespace) -> int:
         if share_safe:
             print("Window title: discreet (screen-share safe; captured at inject time)")
         else:
-            print(f"Window title target: {disabled_title}")
+            print(f"Window title target: {result.get('bannerTitle', disabled_title)}")
         _log_event("gate", workspace, slug, action="off",
                    cdp_target_id=bound_target)
         _drain_injector_events(port, bound_target, workspace, slug)

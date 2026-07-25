@@ -355,6 +355,12 @@
   position on takeover. This removes automation's movement while preserving
   any relative wheel/keyboard movement the user added afterward.
 
+- **A paused recovery banner is not an off gate**: Focus and interaction guards
+  temporarily suspend automatic row/tray/pinned navigation, but the direct
+  visible-prompt scanner remains enabled and restores focus after a click.
+  Operational titles and docs must distinguish this 🟡 recovery pause from a
+  🔴 disabled gate.
+
 ## Harness Engineering
 
 - **Pass/fail lines are not enough; save per-case evidence artifacts**: Stress tests

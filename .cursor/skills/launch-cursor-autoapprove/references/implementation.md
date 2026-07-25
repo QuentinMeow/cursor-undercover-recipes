@@ -287,7 +287,8 @@ When you run `caa launch --workspace <path>`:
 12. Inject `devtools_auto_accept.js` via CDP `Runtime.evaluate`.
 13. Call `startAccept(<interval-ms>)`, which starts the gate and the default-on
     bounded scheduler for registered nested-subagent rows, running children,
-    and active pinned agents, then sync title to `autoapprove ✅ <repo>`.
+    and active pinned agents, then sync the detailed title to
+    `<repo> - autoapprove 🟢 on active-window: N`.
 
 If `open -na` path detection fails, the launcher falls back to direct executable
 launch and repeats PID detection.
@@ -369,7 +370,7 @@ run simultaneously.
   per session from 250–60000ms
 - Calling `startAccept(<milliseconds>)` while already running replaces the
   existing fallback timer immediately instead of returning early
-- Title sync interval: `3000ms` (`state.titleTimer`)
+- Title sync interval: `1000ms` (`state.titleTimer`)
 - Tracks click history in memory (`state.clicks`, max 100 entries)
 - Event queue (`state.eventQueue`, max 200 entries) for launcher to drain
 - Fingerprint cooldown map (`state.fingerprintCooldowns`, 8s per fingerprint)
@@ -394,6 +395,29 @@ run simultaneously.
 - Cached private virtualizer snapshot (5-second TTL; one forced refresh per
   cycle instead of toggling the debug API per mutation)
 - Safety telemetry for scan duration, JavaScript heap, and circuit-breaker state
+
+### Detailed Window Banner
+
+The branded title is
+`<repo> - autoapprove <emoji> <status> active-window: <count>`:
+
+- 🟢 `on` — the approval gate is enabled and recovery has no current safety
+  block.
+- 🟡 `paused` — the gate remains enabled, but automatic agent
+  navigation/recovery is temporarily blocked by its focus/safety guard (for
+  example, terminal/editor focus, recent user input, unsent composer text, or
+  an unrelated modal). The direct visible-prompt scanner remains enabled and
+  uses guarded focus restoration.
+- 🔴 `off` — the approval gate is disabled.
+
+`active-window` counts uniquely titled active Agent Window rows currently
+discovered across all sidebar sections through Cursor's `.spinning-loader`
+marker. This includes a selected running conversation under a date section,
+while deduplicating the same title when Cursor projects one conversation in
+both Pinned and history. It does not count nested subagents in the
+running-subagent tray. The title is recomputed once per second so active counts
+and short focus pauses become visible without requiring a CLI status refresh.
+Share-safe mode continues to restore the natural Cursor title instead.
 
 ### Registered Subagent Click Ownership
 
@@ -819,6 +843,8 @@ settings remain there until manually removed.
 - page target count on port
 - verified product mode (`IDE (verified)` or a non-IDE warning)
 - gate ON/OFF
+- detailed banner state, any temporary pause reason, and active Agent Window
+  count
 - click count
 - injector hash (with drift warning if mismatched)
 - current window title

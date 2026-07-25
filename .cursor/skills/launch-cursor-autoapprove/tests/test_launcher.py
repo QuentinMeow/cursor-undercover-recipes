@@ -639,6 +639,35 @@ class InjectorSourceTests(unittest.TestCase):
             source,
         )
 
+    def test_banner_reports_gate_pause_and_active_sidebar_agent_count(self) -> None:
+        source = INJECTOR_PATH.read_text()
+        count_start = source.index("function _activeAgentWindowCount(")
+        count_end = source.index("\n  function ", count_start)
+        active_count = source[count_start:count_end]
+        banner_start = source.index("function _bannerSnapshot(")
+        banner_end = source.index("\n  function ", banner_start)
+        banner = source[banner_start:banner_end]
+        status_start = source.index("function status()")
+        status_end = source.index("\n  // ", status_start)
+        status = source[status_start:status_end]
+
+        self.assertIn("const activeTitles = new Set();", active_count)
+        self.assertIn(
+            "document.querySelectorAll(AGENT_SIDEBAR_CELL_SELECTOR)",
+            active_count,
+        )
+        self.assertIn("row.querySelector(PINNED_AGENT_ACTIVE_SELECTOR)", active_count)
+        self.assertIn("normalizeLabel(_agentSidebarRowTitle(row))", active_count)
+        self.assertIn("return activeTitles.size;", active_count)
+        self.assertIn('let status = "off";', banner)
+        self.assertIn('status = "paused";', banner)
+        self.assertIn('status = "on";', banner)
+        self.assertIn("state.cycleEnabled ? _cycleBlockReason(false) : null", banner)
+        self.assertIn("`${REPO_SLUG} - autoapprove ${emoji} ${status} `", banner)
+        self.assertIn("`active-window: ${activeCount}`", banner)
+        self.assertIn("bannerPauseReason: banner.pauseReason", status)
+        self.assertIn("activeAgentWindows: banner.activeAgentWindows", status)
+
 
 class ParserTests(unittest.TestCase):
     def test_default_poll_interval_is_half_second(self) -> None:
@@ -654,6 +683,16 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(
             launcher._session_poll_interval({"poll_interval_seconds": "invalid"}),
             0.5,
+        )
+
+    def test_static_title_fallback_matches_detailed_banner_format(self) -> None:
+        self.assertEqual(
+            launcher._window_title("/workspace/my-repo", gate_on=True),
+            "my-repo - autoapprove 🟢 on active-window: 0",
+        )
+        self.assertEqual(
+            launcher._window_title("/workspace/my-repo", gate_on=False),
+            "my-repo - autoapprove 🔴 off active-window: 0",
         )
 
     def test_cycle_modes_and_subagents_json(self) -> None:

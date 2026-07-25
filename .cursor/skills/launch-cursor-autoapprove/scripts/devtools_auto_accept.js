@@ -33,8 +33,8 @@
   const LOG_PREFIX = "[autoAccept]";
   const SCRIPT_HASH = globalThis.__cursorAutoAcceptScriptHash || "unknown";
   const REPO_SLUG = globalThis.__cursorAutoAcceptRepoSlug || "workspace";
-  const STRATEGY_VERSION = "2026-07-agent-cycle-v6-redundant-mounted";
-  const TITLE_SYNC_INTERVAL = 3000;
+  const STRATEGY_VERSION = "2026-07-agent-cycle-v7-status-banner";
+  const TITLE_SYNC_INTERVAL = 1000;
   /** Faster ping while discreet so Cursor cannot show a fresh native title for long. */
   const TITLE_SYNC_INTERVAL_SHARE_SAFE = 500;
   const OBSERVER_DEBOUNCE_MS = 300;
@@ -4381,6 +4381,46 @@
   // Title sync
   // -----------------------------------------------------------------------
 
+  function _activeAgentWindowCount() {
+    const activeTitles = new Set();
+    for (const row of document.querySelectorAll(AGENT_SIDEBAR_CELL_SELECTOR)) {
+      if (!row.querySelector(PINNED_AGENT_ACTIVE_SELECTOR)) continue;
+      const title = normalizeLabel(_agentSidebarRowTitle(row));
+      if (title) activeTitles.add(title);
+    }
+    return activeTitles.size;
+  }
+
+  function _bannerSnapshot(activeAgentWindows = _activeAgentWindowCount()) {
+    const activeCount = Number.isFinite(activeAgentWindows)
+      ? Math.max(0, Math.trunc(activeAgentWindows))
+      : 0;
+    let status = "off";
+    let emoji = "\u{1F534}";
+    let pauseReason = null;
+
+    if (state.running) {
+      pauseReason = state.cycleEnabled ? _cycleBlockReason(false) : null;
+      if (pauseReason) {
+        status = "paused";
+        emoji = "\u{1F7E1}";
+      } else {
+        status = "on";
+        emoji = "\u{1F7E2}";
+      }
+    }
+
+    return {
+      status,
+      emoji,
+      pauseReason,
+      activeAgentWindows: activeCount,
+      title:
+        `${REPO_SLUG} - autoapprove ${emoji} ${status} ` +
+        `active-window: ${activeCount}`,
+    };
+  }
+
   function _syncTitle() {
     if (state.shareSafeTitle) {
       const docTitle = NATURAL_DOC_TITLE_AT_INJECT;
@@ -4406,8 +4446,7 @@
       return;
     }
 
-    const emoji = state.running ? "\u2705" : "\u23F8";
-    const title = `autoapprove ${emoji} ${REPO_SLUG}`;
+    const title = _bannerSnapshot().title;
     if (document.title !== title) document.title = title;
     const titleButton = document.querySelector(
       '[id="workbench.parts.titlebar"] .window-title-text'
@@ -4556,6 +4595,7 @@
       } else {
         console.log(`${LOG_PREFIX} already running (interval ${state.interval}ms)`);
       }
+      _syncTitle();
       return;
     }
     state.interval = nextInterval;
@@ -4592,6 +4632,7 @@
 
   function status() {
     const registry = exportSubagentRegistry();
+    const banner = _bannerSnapshot();
     const s = {
       strategyVersion: STRATEGY_VERSION,
       scriptHash: state.scriptHash,
@@ -4613,6 +4654,10 @@
       maxJSHeapBytes: MAX_JS_HEAP_BYTES,
       recentClicks: state.clicks.slice(-10),
       shareSafeTitle: state.shareSafeTitle,
+      bannerState: banner.status,
+      bannerPauseReason: banner.pauseReason,
+      bannerTitle: banner.title,
+      activeAgentWindows: banner.activeAgentWindows,
       cycleEnabled: state.cycleEnabled,
       cycleActive: state.cycleActive,
       subagentCounts: registry.counts,
