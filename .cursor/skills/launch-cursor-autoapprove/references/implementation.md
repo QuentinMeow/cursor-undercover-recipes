@@ -104,7 +104,7 @@ Behavior notes:
 | Flag | Meaning |
 |---|---|
 | `--target global` | Install runtime to `~/.cursor/launch-autoapprove/` and skill docs to `~/.cursor/skills/global-launch-cursor-autoapprove/`. |
-| `--target /path/to/repo` | Install skill docs and launcher entrypoint into that repo's `.cursor/`. Runtime still uses `~/.cursor/launch-autoapprove/`. |
+| `--target /path/to/repo` | Install skill docs plus the launcher and injector under that repo's `.cursor/`. Session state and dedicated profiles still use `~/.cursor/launch-autoapprove/`. |
 | `--force` | Overwrite existing installed files. |
 | `--dry-run` | Print actions without writing files. |
 

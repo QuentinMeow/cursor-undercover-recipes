@@ -32,7 +32,10 @@ These install snippets assume you are running from this repo checkout, since
 they use `git rev-parse --show-toplevel` to locate the repo root.
 
 Global installs appear in Cursor as `/global-launch-cursor-autoapprove`.
-Runtime files live under `~/.cursor/launch-autoapprove/`.
+The global launcher, injector, session state, and dedicated profiles live under
+`~/.cursor/launch-autoapprove/`. A repo-local install instead copies the
+launcher and injector to `<target>/.cursor/launch-autoapprove/`; its session
+state and dedicated profiles still live under the home-directory runtime path.
 
 Useful install flags:
 
@@ -41,7 +44,7 @@ Useful install flags:
 - `--force` overwrites existing installed files.
 - `--dry-run` shows planned changes without writing files.
 
-### Optional Alias
+### Optional Alias (Global Install)
 
 ```bash
 alias caa='/usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py"'
@@ -51,6 +54,12 @@ alias caa='/usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py"'
 
 ```bash
 /usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py" launch --workspace ~/code/my-project
+```
+
+For a repo-local-only install, run from the target repo root:
+
+```bash
+/usr/bin/python3 "$PWD/.cursor/launch-autoapprove/launcher.py" launch --workspace "$PWD"
 ```
 
 If you set the alias:

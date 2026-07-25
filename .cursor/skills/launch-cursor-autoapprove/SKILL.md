@@ -68,23 +68,36 @@ bash "$(git rev-parse --show-toplevel)/.cursor/skills/launch-cursor-autoapprove/
 ```
 
 That copies the skill docs plus a launcher entrypoint into the target repo's
-`.cursor/`, while the dedicated runtime state and dedicated profile remain under
-`~/.cursor/launch-autoapprove/`.
+`.cursor/`. The copied launcher and injector live under
+`<target>/.cursor/launch-autoapprove/`, while session state and dedicated
+profiles remain under `~/.cursor/launch-autoapprove/`.
 
 ## Agent Workflow
+
+For a global install, set:
+
+```bash
+LAUNCHER="$HOME/.cursor/launch-autoapprove/launcher.py"
+```
+
+For a repo-local-only install, run from the target repo root and set:
+
+```bash
+LAUNCHER="$PWD/.cursor/launch-autoapprove/launcher.py"
+```
 
 When the user asks for auto-approval on a **local** workspace, run:
 
 ```bash
-/usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py" launch --workspace "$PWD"
-/usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py" status --workspace "$PWD"
+/usr/bin/python3 "$LAUNCHER" launch --workspace "$PWD"
+/usr/bin/python3 "$LAUNCHER" status --workspace "$PWD"
 ```
 
 When the user asks for auto-approval on an **SSH remote** host, run:
 
 ```bash
-/usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py" launch-ssh <ssh-host> [/absolute/remote/path]
-/usr/bin/python3 "$HOME/.cursor/launch-autoapprove/launcher.py" status -w <workspace-slug>
+/usr/bin/python3 "$LAUNCHER" launch-ssh <ssh-host> [/absolute/remote/path]
+/usr/bin/python3 "$LAUNCHER" status -w <workspace-slug>
 ```
 
 **Always verify `Mode: IDE (verified)` before telling the user launch
