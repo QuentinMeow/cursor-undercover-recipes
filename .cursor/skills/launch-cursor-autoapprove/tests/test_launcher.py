@@ -663,8 +663,8 @@ class InjectorSourceTests(unittest.TestCase):
         self.assertIn('status = "paused";', banner)
         self.assertIn('status = "on";', banner)
         self.assertIn("state.cycleEnabled ? _cycleBlockReason(false) : null", banner)
-        self.assertIn("`${REPO_SLUG} - autoapprove ${emoji} ${status} `", banner)
-        self.assertIn("`active-window: ${activeCount}`", banner)
+        self.assertIn("`${REPO_SLUG} - autoapprove ${emoji} ${status} - `", banner)
+        self.assertIn("`active window: ${activeCount}`", banner)
         self.assertIn("bannerPauseReason: banner.pauseReason", status)
         self.assertIn("activeAgentWindows: banner.activeAgentWindows", status)
 
@@ -688,11 +688,11 @@ class ParserTests(unittest.TestCase):
     def test_static_title_fallback_matches_detailed_banner_format(self) -> None:
         self.assertEqual(
             launcher._window_title("/workspace/my-repo", gate_on=True),
-            "my-repo - autoapprove 🟢 on active-window: 0",
+            "my-repo - autoapprove 🟢 on - active window: 0",
         )
         self.assertEqual(
             launcher._window_title("/workspace/my-repo", gate_on=False),
-            "my-repo - autoapprove 🔴 off active-window: 0",
+            "my-repo - autoapprove 🔴 off - active window: 0",
         )
 
     def test_cycle_modes_and_subagents_json(self) -> None:

@@ -2,8 +2,9 @@
 
 ## Scope and Design
 
-`launch-cursor-autoapprove` intentionally does one thing: run approval clicking
-inside a dedicated Cursor process.
+`launch-cursor-autoapprove` keeps approval automation inside dedicated,
+verified IDE Cursor processes. It launches and controls those processes, runs
+direct approval scanning, and performs bounded nested/pinned-agent recovery.
 
 Design constraints:
 
@@ -17,9 +18,9 @@ Design constraints:
 This narrow scope is why this is the supported approach and older approaches
 were retired.
 
-## Architecture (Observer + Policy + Event Sink)
+## Architecture (Observer + Policy + Event Sink + Recovery)
 
-The injector uses a three-layer architecture:
+The injector uses a five-part architecture:
 
 1. **Surface Observer**: A `MutationObserver` detects DOM changes after a 300ms
    debounce. A configurable fallback poll (`setInterval`, 0.5 seconds by default)
@@ -288,7 +289,7 @@ When you run `caa launch --workspace <path>`:
 13. Call `startAccept(<interval-ms>)`, which starts the gate and the default-on
     bounded scheduler for registered nested-subagent rows, running children,
     and active pinned agents, then sync the detailed title to
-    `<repo> - autoapprove 🟢 on active-window: N`.
+    `<repo> - autoapprove 🟢 on - active window: N`.
 
 If `open -na` path detection fails, the launcher falls back to direct executable
 launch and repeats PID detection.
@@ -399,7 +400,7 @@ run simultaneously.
 ### Detailed Window Banner
 
 The branded title is
-`<repo> - autoapprove <emoji> <status> active-window: <count>`:
+`<repo> - autoapprove <emoji> <status> - active window: <count>`:
 
 - 🟢 `on` — the approval gate is enabled and recovery has no current safety
   block.
@@ -410,7 +411,7 @@ The branded title is
   uses guarded focus restoration.
 - 🔴 `off` — the approval gate is disabled.
 
-`active-window` counts uniquely titled active Agent Window rows currently
+`active window` counts uniquely titled active Agent Window rows currently
 discovered across all sidebar sections through Cursor's `.spinning-loader`
 marker. This includes a selected running conversation under a date section,
 while deduplicating the same title when Cursor projects one conversation in

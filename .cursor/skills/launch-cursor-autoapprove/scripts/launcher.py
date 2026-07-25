@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-Launch a dedicated Cursor window with DOM auto-accept injected via CDP.
+Launch and control dedicated Cursor IDE windows with DOM auto-accept and
+bounded agent recovery injected via CDP.
 
 Subcommands:
-    launch      Open dedicated Cursor for a local workspace, inject DOM script, gate ON
-    launch-ssh  Open dedicated Cursor connected to an SSH remote host, inject DOM script, gate ON
+    launch      Open local dedicated Cursor, inject DOM script, gate/recovery ON
+    launch-ssh  Open SSH dedicated Cursor, inject DOM script, gate/recovery ON
     on          Resume auto-clicking (startAccept via CDP)
     off         Pause auto-clicking (stopAccept via CDP)
     cycle       Enable, disable, or run bounded agent approval cycling
     subagents   Show the renderer-local subagent task registry
-    status      Show gate state and click count
+    status      Show verified mode, gate/recovery state, and session diagnostics
     alias       Manage workspace aliases
     history     Show persisted session/gate/click history
     screenshot  Capture a screenshot via CDP
@@ -1188,8 +1189,8 @@ def _repo_slug(workspace: str | Path) -> str:
 def _window_title(workspace: str | Path, gate_on: bool) -> str:
     emoji, status = ("🟢", "on") if gate_on else ("🔴", "off")
     return (
-        f"{_repo_slug(workspace)} - autoapprove {emoji} {status} "
-        "active-window: 0"
+        f"{_repo_slug(workspace)} - autoapprove {emoji} {status} - "
+        "active window: 0"
     )
 
 

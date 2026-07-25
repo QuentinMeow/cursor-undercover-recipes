@@ -17,33 +17,27 @@ The dialog shows:
 - Expected: auto-click on "Accept ↩"
 - Actual: no click — prompt stays until manually resolved
 
-## Likely Cause
+## Historical Cause
 
 At session start, the injector may not yet be loaded or the gate may not be ON
 when the first approval prompt appears. Timing sequence:
 
 1. Agent produces a change
 2. Cursor shows the accept dialog immediately
-3. The injector is either not yet injected (if this is a fresh launch) or the
-   MutationObserver hasn't yet fired (if the dialog was present before the
-   observer attached)
-
-The 2s poll fallback should eventually catch it, but if the dialog appears in
-the brief window between page load and injector injection, it will be missed
-entirely.
+3. The dialog is already present when the MutationObserver attaches, so no new
+   mutation necessarily triggers a scan.
 
 ## Status
 
-**Open** — not yet fixed by the observer-policy rework. The rework improves
-detection speed (MutationObserver fires within 300ms of DOM changes) but
-doesn't address the cold-start timing gap where the dialog exists before
-the injector is loaded.
+**Resolved in the current implementation.** `start()` now installs the observer
+and schedules `checkAndClick()` after 50 ms, providing a catch-up scan for
+prompts that already existed when the observer attached. The fallback poll now
+defaults to 0.5 seconds.
 
-## Potential Fixes
+The sanitized real-prompt replay fixture
+`tests/fixtures/real-prompts/skip-accept-diff-dialog.json` preserves the
+`Skip` + `Accept ↩` label and single-click policy coverage.
 
-1. Run `checkAndClick()` immediately when `startAccept()` is called (not just
-   on the next interval/observer tick) — catches prompts that were already
-   present before the observer attached.
-2. Reduce `CDP_INJECT_DELAY` to inject earlier.
-3. Add a dedicated "catch-up scan" after observer setup that processes any
-   existing prompt roots.
+Live validation is still required after Cursor upgrades because the fixture
+proves matching policy, while the 50 ms startup scan is what closes the timing
+gap.

@@ -1,11 +1,11 @@
 ---
 name: launch-cursor-autoapprove
 description: >-
-  Launch a dedicated Cursor window with auto-approval pre-injected via CDP.
-  Provides dead-simple on/off gate toggle. Use when the user wants a
-  dedicated auto-approve Cursor instance, or says "launch auto-approve
-  cursor", "open a cursor that auto-approves", or "I don't want to click
-  accept."
+  Launch a dedicated, verified IDE Cursor window with auto-approval and bounded
+  nested/pinned-agent recovery pre-injected via CDP. Provides on/off and cycling
+  controls. Use when the user wants a dedicated auto-approve Cursor instance,
+  or says "launch auto-approve cursor", "open a cursor that auto-approves", or
+  "I don't want to click accept."
 ---
 
 > **AGENT: REINSTALL AFTER EVERY CODE CHANGE.**
@@ -162,10 +162,10 @@ use `caa --help` (or the full launcher path with `--help`).
    consecutive scans; the same unresolved prompt stays deduped for eight
    seconds.
 7. The injector continuously maintains a detailed window title such as
-   `<repo> - autoapprove 🟢 on active-window: 2`. It uses 🟢 `on`, 🟡
+   `<repo> - autoapprove 🟢 on - active window: 2`. It uses 🟢 `on`, 🟡
    `paused`, and 🔴 `off`; `paused` means focus-safe automatic agent
    navigation/recovery is temporarily blocked while the direct visible-prompt
-   scanner remains enabled. `active-window` counts uniquely titled active Agent
+   scanner remains enabled. `active window` counts uniquely titled active Agent
    Window conversations currently discovered across the sidebar, including the
    selected conversation outside Pinned. The one-second title sync also
    self-heals if Cursor resets it — unless

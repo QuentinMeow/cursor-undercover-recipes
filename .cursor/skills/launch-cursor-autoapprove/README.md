@@ -76,7 +76,7 @@ built-in usage summary, `caa help` for examples and doc paths, or
 
 | Command | Behavior |
 |---|---|
-| `launch [--workspace PATH] [PATH] [--interval SECONDS]` | Start dedicated Cursor process for a local workspace, inject script, and turn the gate plus nested/pinned-agent cycling ON. The fallback scan defaults to 0.5 seconds; supported range is 0.25–60 seconds. Blocks only if the same workspace is already running; other workspaces can run in parallel. |
+| `launch [--workspace PATH] [PATH\|ALIAS] [--interval SECONDS]` | Start dedicated Cursor for a local path or registered alias, inject the script, and turn the gate plus nested/pinned-agent cycling ON. SSH folder URI aliases reuse the SSH launch flow. The fallback scan defaults to 0.5 seconds; supported range is 0.25–60 seconds. Blocks only if the same workspace is already running; other workspaces can run in parallel. |
 | `launch-ssh <host> [/absolute/remote/path] [--no-preflight] [--interval SECONDS]` | Start dedicated Cursor connected to an SSH remote host from `~/.ssh/config`, inject script, and turn the gate plus nested/pinned-agent cycling ON. Path-specific launches verify the remote directory with `ssh <host> test -d <path>` before creating a profile or alias. |
 | `on [--interval SECONDS]` | Turn gate ON and optionally change/persist the session's fallback scan interval. Reloads injector code when in-window hash differs from the current injector file. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
 | `off` | Turn gate OFF without closing the dedicated window. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
@@ -97,9 +97,9 @@ built-in usage summary, `caa help` for examples and doc paths, or
 - Copies `settings.json`, `keybindings.json`, and `cursorAuth/*` auth tokens from your default profile.
 - Does **not** copy non-auth `state.vscdb` rows (chat history/model state remain profile-specific).
 - There is no `inject --restart` command in this supported launcher.
-- The branded title reports `<repo> - autoapprove 🟢 on active-window: N`,
+- The branded title reports `<repo> - autoapprove 🟢 on - active window: N`,
   with 🟡 `paused` for temporarily focus-blocked recovery and 🔴 `off` for a
-  disabled gate. `active-window` is the number of uniquely titled active Agent
+  disabled gate. `active window` is the number of uniquely titled active Agent
   Window conversations currently discovered across the sidebar. Direct
   visible-prompt scanning remains enabled during the recovery-only `paused`
   state.

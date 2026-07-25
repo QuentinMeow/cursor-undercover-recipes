@@ -4416,8 +4416,8 @@
       pauseReason,
       activeAgentWindows: activeCount,
       title:
-        `${REPO_SLUG} - autoapprove ${emoji} ${status} ` +
-        `active-window: ${activeCount}`,
+        `${REPO_SLUG} - autoapprove ${emoji} ${status} - ` +
+        `active window: ${activeCount}`,
     };
   }
 
