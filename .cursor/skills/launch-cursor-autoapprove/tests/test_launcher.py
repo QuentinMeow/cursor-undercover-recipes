@@ -43,6 +43,47 @@ class InjectorSourceTests(unittest.TestCase):
             derive_status,
         )
 
+    def test_direct_attempt_rearms_only_after_mounted_row_clears(self) -> None:
+        source = INJECTOR_PATH.read_text()
+        helper_start = source.index(
+            "function _clearDirectRegisteredApprovalAttemptsForTask("
+        )
+        helper_end = source.index("\n  function ", helper_start)
+        helper = source[helper_start:helper_end]
+        discovery_start = source.index("function _discoverSubagentRows(")
+        discovery_end = source.index("\n  function ", discovery_start)
+        discovery = source[discovery_start:discovery_end]
+
+        self.assertIn(
+            "for (const [fingerprint, attempt] of "
+            "state.directRegisteredApprovalAttempts)",
+            helper,
+        )
+        self.assertIn("if (attempt.taskKey !== taskKey) continue;", helper)
+        self.assertIn(
+            "state.directRegisteredApprovalAttempts.delete(fingerprint);",
+            helper,
+        )
+        self.assertIn("const hasVisibleApproval = _visibleRowApproval(row);", discovery)
+        self.assertIn("if (existing && !hasVisibleApproval)", discovery)
+        self.assertIn(
+            "_clearDirectRegisteredApprovalAttemptsForTask(taskKey);",
+            discovery,
+        )
+
+    def test_registered_row_confirmation_requires_raw_control_absence(self) -> None:
+        source = INJECTOR_PATH.read_text()
+        confirm_start = source.index("async function _confirmCycleApproval(")
+        confirm_end = source.index("\n  function ", confirm_start)
+        confirm = source[confirm_start:confirm_end]
+
+        self.assertIn("let consecutiveAbsentChecks = 0;", confirm)
+        self.assertIn("_sameApprovalStillPresent(record, row, candidate)", confirm)
+        self.assertIn("if (consecutiveAbsentChecks >= 2)", confirm)
+        self.assertIn('reason: "candidate_gone"', confirm)
+        self.assertNotIn("statusAdvanced", confirm)
+        self.assertNotIn('"status_advanced"', confirm)
+
     def test_registered_row_recovery_targets_only_current_composer(self) -> None:
         source = INJECTOR_PATH.read_text()
         active_start = source.index("function _activeSubagentRecords(")
@@ -177,6 +218,54 @@ class InjectorSourceTests(unittest.TestCase):
         self.assertIn("if (!btn) return;", scanner)
         self.assertNotIn("const btn = eligible[0];", scanner)
         self.assertNotIn("if (_isCoolingDown(btn.fingerprint))", scanner)
+
+    def test_subagent_allow_uses_scoped_mouse_activation_sequence(self) -> None:
+        source = INJECTOR_PATH.read_text()
+        click_start = source.index("function clickEl(")
+        click_end = source.index("\n  function ", click_start)
+        click = source[click_start:click_end]
+
+        self.assertIn(
+            'el.matches?.("button.task-subagent-header-pill-button--allow")',
+            click,
+        )
+        self.assertIn('new PointerEvent("pointerdown", pointerOpts)', click)
+        self.assertIn('new MouseEvent("mousedown", opts)', click)
+        self.assertIn('new PointerEvent("pointerup"', click)
+        self.assertIn('new MouseEvent("mouseup", { ...opts, buttons: 0 })', click)
+        self.assertLess(
+            click.index('new PointerEvent("pointerdown", pointerOpts)'),
+            click.index("el.click();"),
+        )
+        self.assertNotIn("new KeyboardEvent(", click)
+
+    def test_trusted_click_requests_are_exact_delayed_and_bounded(self) -> None:
+        source = INJECTOR_PATH.read_text()
+        take_start = source.index("function takeTrustedClickRequest(")
+        take_end = source.index("\n  function ", take_start)
+        take = source[take_start:take_end]
+        report_start = source.index("function reportTrustedClickResult(")
+        report_end = source.index("\n  // ", report_start)
+        report = source[report_start:report_end]
+        validate_start = source.index("function validateTrustedClickRequest(")
+        validate_end = source.index("\n  function ", validate_start)
+        validate = source[validate_start:validate_end]
+
+        self.assertIn(
+            'btn.el?.matches?.("button.task-subagent-header-pill-button--allow")',
+            take,
+        )
+        self.assertIn("state.directRegisteredApprovalAttempts.get(fingerprint)", take)
+        self.assertIn("TRUSTED_CLICK_FALLBACK_DELAY_MS", take)
+        self.assertIn("_isCycleOwnedSubagentCandidate(btn)", take)
+        self.assertIn("_notCoveredByUnrelatedElement(btn.el)", take)
+        self.assertIn("attempt.trustedAttemptedAt =", take)
+        self.assertIn("state.trustedClickTarget = btn.el;", take)
+        self.assertIn("request?.el?.isConnected", validate)
+        self.assertIn("_promptFingerprint(request.el) !== request.fingerprint", validate)
+        self.assertIn("_notCoveredByUnrelatedElement(request.el)", validate)
+        self.assertIn("state.totalTrustedClickAttempts++;", report)
+        self.assertIn("trusted: true", report)
 
     def test_direct_scanner_checks_all_mounted_composer_surfaces(self) -> None:
         source = INJECTOR_PATH.read_text()
@@ -890,6 +979,107 @@ class CdpJsonTests(unittest.TestCase):
 
         self.assertEqual(result, {"ok": True})
         self.assertTrue(evaluate.call_args.kwargs["await_promise"])
+
+
+class TrustedClickWorkerTests(unittest.TestCase):
+    def test_ensure_worker_replaces_stale_launcher_hash(self) -> None:
+        state = {
+            "sessions": {
+                "/workspace": {
+                    "trusted_click_worker_pid": 123,
+                    "trusted_click_worker_launcher_hash": "old",
+                }
+            }
+        }
+        process = mock.Mock(pid=456)
+        with (
+            mock.patch.object(launcher, "_load_state", return_value=state),
+            mock.patch.object(
+                launcher, "_pid_is_trusted_click_worker", return_value=True,
+            ),
+            mock.patch.object(launcher, "_launcher_script_hash", return_value="new"),
+            mock.patch.object(launcher.os, "kill") as kill,
+            mock.patch.object(
+                launcher.subprocess, "Popen", return_value=process,
+            ) as popen,
+            mock.patch.object(launcher, "_save_state") as save,
+        ):
+            pid = launcher._ensure_trusted_click_worker("/workspace")
+
+        self.assertEqual(pid, 456)
+        kill.assert_called_once_with(123, launcher.signal.SIGTERM)
+        self.assertEqual(
+            state["sessions"]["/workspace"]["trusted_click_worker_launcher_hash"],
+            "new",
+        )
+        self.assertIn("--launcher-hash", popen.call_args.args[0])
+        save.assert_called_once_with(state)
+
+    def test_worker_dispatches_pressed_and_released_only_in_verified_ide(self) -> None:
+        session = {
+            "cdp_port": 9222,
+            "cdp_target_id": "target",
+        }
+        target = {
+            "id": "target",
+            "webSocketDebuggerUrl": "ws://target",
+        }
+        with (
+            mock.patch.object(
+                launcher,
+                "_cdp_json_expression",
+                return_value={"ok": True, "token": "request", "x": 10, "y": 20},
+            ),
+            mock.patch.object(
+                launcher,
+                "_cdp_bound_target_surface",
+                return_value={"mode": "ide"},
+            ),
+            mock.patch.object(
+                launcher,
+                "_cdp_list_page_targets",
+                return_value=[target],
+            ),
+            mock.patch.object(launcher, "_cdp_send_method") as send,
+            mock.patch.object(launcher, "_report_trusted_click_result") as report,
+        ):
+            clicked = launcher._trusted_click_worker_step(session)
+
+        self.assertTrue(clicked)
+        self.assertEqual(
+            [call.args[1] for call in send.call_args_list],
+            ["Input.dispatchMouseEvent", "Input.dispatchMouseEvent"],
+        )
+        self.assertEqual(
+            [call.args[2]["type"] for call in send.call_args_list],
+            ["mousePressed", "mouseReleased"],
+        )
+        report.assert_called_once_with(9222, "target", "request", True)
+
+    def test_worker_refuses_trusted_input_outside_verified_ide(self) -> None:
+        session = {
+            "cdp_port": 9222,
+            "cdp_target_id": "target",
+        }
+        with (
+            mock.patch.object(
+                launcher,
+                "_cdp_json_expression",
+                return_value={"ok": True, "token": "request", "x": 10, "y": 20},
+            ),
+            mock.patch.object(
+                launcher,
+                "_cdp_bound_target_surface",
+                return_value={"mode": "agents_or_incomplete"},
+            ),
+            mock.patch.object(launcher, "_cdp_send_method") as send,
+            mock.patch.object(launcher, "_report_trusted_click_result") as report,
+        ):
+            clicked = launcher._trusted_click_worker_step(session)
+
+        self.assertFalse(clicked)
+        send.assert_not_called()
+        report.assert_called_once_with(9222, "target", "request", False)
 
 
 class IdeModeTests(unittest.TestCase):

@@ -26,6 +26,13 @@
   and the injector script hash. Future failures can then be bisected against version
   changes.
 
+- **Do not execute Cursor's macOS GUI binary to query its version**:
+  `/Applications/Cursor.app/Contents/MacOS/Cursor --version` may stay running
+  and open the product's default Agents surface. Read
+  `CFBundleShortVersionString` from the app bundle metadata instead. All actual
+  workspace launches must go through this skill's launcher, which supplies
+  `--classic` and verifies the desktop bundle before enabling automation.
+
 ## Live CDP Diagnostic Method
 
 - **When the injector silently fails, deploy a CDP polling diagnostic**: Connect
@@ -147,6 +154,21 @@
   checks, and click simulation should stay minimal (`el.click()` first, no
   blind Enter key spam). This combination is what turns "best effort" DOM
   automation into something predictable enough for day-to-day use.
+
+- **Escalate click simulation only for a proven exact widget**: Cursor 3.13.10
+  task-subagent `Allow` pills ignored bare `HTMLElement.click()` but responded
+  consistently to `pointerdown`, `mousedown`, `pointerup`, `mouseup`, then
+  `click`. Scope that sequence to the exact already-authorized Allow-pill
+  selector; keep native click for every other surface and do not add keyboard
+  event spam.
+
+- **Some task pills require trusted input, not more synthetic events**: One
+  Cursor 3.13.10 Allow pill remained after the full synthetic lifecycle but
+  cleared immediately through CDP `Input.dispatchMouseEvent`. Bridge that case
+  with a detached helper that accepts only a delayed, exact
+  renderer-authorized task/fingerprint request, re-verifies IDE mode and the
+  pinned target, and dispatches one bounded trusted attempt. Never let the
+  helper discover or choose arbitrary controls itself.
 
 - **Approval synonyms drift across Cursor surfaces**: Some permission prompts
   use `Approve` wording rather than `Accept`/`Allow`/`Run`, and compound labels
@@ -580,3 +602,15 @@
   independent, expose the measured heap and threshold, and choose the heap
   ceiling explicitly for the intended workload. This skill now uses 4 GiB;
   terminal navigation backoff prevents known retry churn from racing toward it.
+
+- **A task-scoped fingerprint is not a task-lifetime prompt identity**:
+  One long-running subagent can request several sequential approvals while its
+  row key and `Allow|Stop` labels remain unchanged. A direct-attempt cap must be
+  rearmed after the exact mounted row is observed without an approval control;
+  absence caused by virtualization is not evidence that a prompt resolved.
+
+- **Outer task status cannot confirm an approval while its raw control remains**:
+  A subagent row may report completed or failed while an `Allow` control is
+  still pending. Confirmation must require the same raw approval to remain
+  absent across consecutive checks. Treating status advancement as proof
+  creates false confirmations and leaves the real prompt permanently blocked.

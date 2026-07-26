@@ -10,6 +10,7 @@ Design constraints:
 
 - one-or-more dedicated Cursor processes (one per workspace, each with its own `--user-data-dir`)
 - one DOM injector per dedicated process
+- one detached trusted-input helper per session for exact task Allow-pill fallbacks
 - one multi-session state file tracking all active sessions
 - no global shell hook (stale hooks are detected and warned)
 - no AX watcher
@@ -290,9 +291,20 @@ When you run `caa launch --workspace <path>`:
     bounded scheduler for registered nested-subagent rows, running children,
     and active pinned agents, then sync the detailed title to
     `<repo> - autoapprove 🟢 multi-window - active agents: N`.
+14. Start one detached trusted-input worker. It polls only the injector's
+    narrow `takeTrustedClickRequest()` API and dispatches CDP mouse input only
+    after re-verifying the pinned target is an IDE workbench. The session stores
+    the launcher's hash and `caa on` replaces a stale worker after reinstall.
 
 If `open -na` path detection fails, the launcher falls back to direct executable
 launch and repeats PID detection.
+
+Agents operating this skill must not invoke Cursor's macOS GUI executable
+directly, even with `--version`. That executable can stay running and open the
+default Agents product surface outside this launcher's verified argument and
+CDP checks. Version diagnostics read `CFBundleShortVersionString` from the app
+bundle metadata; workspace launches always use `caa launch` or
+`caa launch-ssh` and require `Mode: IDE (verified)`.
 
 For `caa launch-ssh <host> <remote-path>`, absolute path validation happens
 first. If `<remote-path>` is not `/`, the launcher also runs a bounded
@@ -445,6 +457,19 @@ cooldown. A click by either path therefore suppresses an immediate duplicate
 from the other while still allowing the other mechanism to recover a prompt
 that remains unresolved after cooldown. A direct-attempt map prevents the
 confirmation-blind scanner from bypassing exhausted cycle retries indefinitely.
+Because one task can issue multiple sequential approvals with the same row key
+and `Allow|Stop` labels, the direct cap is rearmed after the exact mounted row
+is observed without an approval. An unmounted row does not clear the cap.
+Registered-row confirmation likewise requires the raw approval control to be
+absent across two consecutive checks; outer task status alone cannot confirm a
+click while the control remains visible.
+If an exact task-subagent Allow pill remains after the renderer's first bounded
+attempt, the injector may issue one delayed trusted-click request for that same
+task/fingerprint. A detached launcher worker re-verifies the IDE surface and
+pinned CDP target, dispatches `Input.dispatchMouseEvent` pressed/released at the
+injector-validated uncovered center point, and reports the attempt back into
+the normal cooldown and event ledger. No other control can request trusted
+input, and one fingerprint receives at most one trusted fallback attempt.
 The task registry can retain records from multiple parent conversations, but
 registered-row recovery selects only records whose `parentComposerId` matches
 the currently mounted virtualizer composer. Cross-composer records stay
@@ -757,11 +782,17 @@ both clicked and non-clicked cases.
 
 Clicking is intentionally conservative:
 
-1. call native `el.click()` when available
-2. fallback to dispatching a single mouse click event
+1. for an exact task-subagent Allow pill, dispatch `pointerdown`, `mousedown`,
+   `pointerup`, `mouseup`, then native `click`; Cursor 3.13.10 ignores native
+   click alone and handled mouse-only synthesis inconsistently on that widget
+2. call native `el.click()` for every other control when available
+3. fallback to dispatching a single mouse click event
+4. if that exact task Allow pill remains after 750 ms, request one trusted CDP
+   pressed/released click from the per-session helper
 
 No `el.focus()` is called to avoid stealing OS focus from the user's normal
-Cursor window. No synthetic Enter keydowns are dispatched.
+Cursor window. The pointer/mouse sequence is never used as a generic fallback,
+and no synthetic Enter keydowns are dispatched.
 
 ### Click Prioritization
 
