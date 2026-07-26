@@ -106,12 +106,13 @@ built-in usage summary, `caa help` for examples and doc paths, or
 - Copies `settings.json`, `keybindings.json`, and `cursorAuth/*` auth tokens from your default profile.
 - Does **not** copy non-auth `state.vscdb` rows (chat history/model state remain profile-specific).
 - There is no `inject --restart` command in this supported launcher.
-- The branded title reports `<repo> - autoapprove 🟢 on - active window: N`,
-  with 🟡 `paused` for temporarily focus-blocked recovery and 🔴 `off` for a
-  disabled gate. `active window` is the number of uniquely titled active Agent
-  Window conversations currently discovered across the sidebar. Direct
-  visible-prompt scanning remains enabled during the recovery-only `paused`
-  state.
+- The branded title reports `<repo> - autoapprove 🟢 multi-window - active agents: N`
+  while the dedicated IDE is unfocused and cross-agent recovery can navigate.
+  🔵 `focused` means approval scanning remains active for the currently mounted
+  conversation, while top-level Agent Window switching is withheld because the
+  IDE is focused or another recovery guard is active. 🔴 `off` disables the
+  gate. `active agents` counts uniquely titled active Agent Window
+  conversations discovered across the sidebar.
 - The observer reacts to DOM changes after a 300ms debounce. `--interval`
   controls the fallback scan, defaults to 0.5 seconds, and can be changed while
   the gate is already ON. Each scan clicks at most one candidate: distinct

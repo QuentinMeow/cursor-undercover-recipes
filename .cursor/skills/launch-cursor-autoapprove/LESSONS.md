@@ -355,11 +355,18 @@
   position on takeover. This removes automation's movement while preserving
   any relative wheel/keyboard movement the user added afterward.
 
-- **A paused recovery banner is not an off gate**: Focus and interaction guards
-  temporarily suspend automatic row/tray/pinned navigation, but the direct
-  visible-prompt scanner remains enabled and restores focus after a click.
-  Operational titles and docs must distinguish this 🟡 recovery pause from a
-  🔴 disabled gate.
+- **Name the actual automation scope, not a generic pause**: A focused dedicated
+  IDE still scans the currently mounted conversation, while top-level pinned
+  navigation is intentionally withheld. Operational titles must distinguish
+  🔵 `focused`, 🟢 `multi-window`, and 🔴 `off` so the visible mode states what
+  can actually run.
+
+- **ARIA `dialog` does not prove modality**: Monaco's embedded editor Find
+  widget uses `role="dialog"` even though it is non-modal and can remain visible
+  with `No results`. A broad modal safety guard treated that persistent widget
+  as an unrelated modal and blocked every pinned-agent cycle. Classify known
+  embedded non-modal dialogs separately and expose blocking/ignored counts in
+  status.
 
 ## Harness Engineering
 

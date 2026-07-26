@@ -33,7 +33,7 @@
   const LOG_PREFIX = "[autoAccept]";
   const SCRIPT_HASH = globalThis.__cursorAutoAcceptScriptHash || "unknown";
   const REPO_SLUG = globalThis.__cursorAutoAcceptRepoSlug || "workspace";
-  const STRATEGY_VERSION = "2026-07-agent-cycle-v7-status-banner";
+  const STRATEGY_VERSION = "2026-07-agent-cycle-v8-focused-multi-window";
   const TITLE_SYNC_INTERVAL = 1000;
   /** Faster ping while discreet so Cursor cannot show a fresh native title for long. */
   const TITLE_SYNC_INTERVAL_SHARE_SAFE = 500;
@@ -701,9 +701,39 @@
     return String(editable.innerText || editable.textContent || "").trim().length > 0;
   }
 
-  function _hasUnrelatedVisibleModal(row = null) {
+  function _isNonModalEditorDialog(modal) {
+    return (
+      modal instanceof Element &&
+      modal.getAttribute("role") === "dialog" &&
+      modal.getAttribute("aria-modal") !== "true" &&
+      modal.matches(".find-widget") &&
+      !!modal.closest(".monaco-editor")
+    );
+  }
+
+  function _isBlockingModalRoot(modal) {
+    if (!(modal instanceof Element) || !isVisible(modal)) return false;
+    // Monaco's persistent find widget is exposed as role="dialog", but it is
+    // an embedded editor control rather than a modal. Treating it as blocking
+    // leaves recovery permanently suspended after a find reports "No results".
+    if (_isNonModalEditorDialog(modal)) return false;
+    return true;
+  }
+
+  function _modalRootSummary() {
+    let blocking = 0;
+    let ignoredNonModal = 0;
     for (const modal of document.querySelectorAll(PROMPT_ROOT_SELECTORS.join(", "))) {
       if (!isVisible(modal)) continue;
+      if (_isBlockingModalRoot(modal)) blocking++;
+      else ignoredNonModal++;
+    }
+    return { blocking, ignoredNonModal };
+  }
+
+  function _hasUnrelatedVisibleModal(row = null) {
+    for (const modal of document.querySelectorAll(PROMPT_ROOT_SELECTORS.join(", "))) {
+      if (!_isBlockingModalRoot(modal)) continue;
       if (row && (row.contains(modal) || modal.contains(row))) continue;
       return true;
     }
@@ -4391,21 +4421,27 @@
     return activeTitles.size;
   }
 
+  function _multiWindowBlockReason() {
+    if (!state.cycleEnabled) return "cycle_disabled";
+    if (document.hasFocus()) return "window_focused";
+    return _cycleBlockReason(false);
+  }
+
   function _bannerSnapshot(activeAgentWindows = _activeAgentWindowCount()) {
     const activeCount = Number.isFinite(activeAgentWindows)
       ? Math.max(0, Math.trunc(activeAgentWindows))
       : 0;
     let status = "off";
     let emoji = "\u{1F534}";
-    let pauseReason = null;
+    let modeReason = null;
 
     if (state.running) {
-      pauseReason = state.cycleEnabled ? _cycleBlockReason(false) : null;
-      if (pauseReason) {
-        status = "paused";
-        emoji = "\u{1F7E1}";
+      modeReason = _multiWindowBlockReason();
+      if (modeReason) {
+        status = "focused";
+        emoji = "\u{1F535}";
       } else {
-        status = "on";
+        status = "multi-window";
         emoji = "\u{1F7E2}";
       }
     }
@@ -4413,11 +4449,11 @@
     return {
       status,
       emoji,
-      pauseReason,
+      modeReason,
       activeAgentWindows: activeCount,
       title:
         `${REPO_SLUG} - autoapprove ${emoji} ${status} - ` +
-        `active window: ${activeCount}`,
+        `active agents: ${activeCount}`,
     };
   }
 
@@ -4551,6 +4587,7 @@
       directRegisteredAttempts: state.directRegisteredApprovalAttempts.size,
       totalClickAttempts: state.totalClickAttempts,
       totalConfirmedApprovals: state.totalConfirmedApprovals,
+      dialogRoots: _modalRootSummary(),
       activeFocusKind: _focusKind(document.activeElement),
       cycleFocusBlockReason: document.hasFocus()
         ? _activeEditingSurfaceBlockReason()
@@ -4655,9 +4692,10 @@
       recentClicks: state.clicks.slice(-10),
       shareSafeTitle: state.shareSafeTitle,
       bannerState: banner.status,
-      bannerPauseReason: banner.pauseReason,
+      bannerModeReason: banner.modeReason,
       bannerTitle: banner.title,
       activeAgentWindows: banner.activeAgentWindows,
+      dialogRoots: _modalRootSummary(),
       cycleEnabled: state.cycleEnabled,
       cycleActive: state.cycleActive,
       subagentCounts: registry.counts,

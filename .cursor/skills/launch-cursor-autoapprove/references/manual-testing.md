@@ -44,15 +44,17 @@ You should see:
 - `Poll: 0.5s fallback interval` (unless you selected another interval)
 - an `Injector:` hash
 - a window title like
-  `<repo> - autoapprove 🟢 on - active window: <count>`
+  `<repo> - autoapprove 🟢 multi-window - active agents: <count>`
 
-Focus the integrated terminal or another non-composer editor and confirm the
-title changes to 🟡 `paused`, then returns to 🟢 `on` after the focus guard
-clears. This pause applies to automatic agent navigation/recovery; the direct
-visible-prompt scanner remains enabled. `caa off` should instead show 🔴 `off`.
-The `active window` count is the number of uniquely titled active Agent Window
-conversations currently discovered across the sidebar, not the nested-subagent
-tray count.
+Focus the dedicated IDE and confirm the title changes to 🔵 `focused`; direct
+visible-prompt scanning should remain enabled for its mounted conversation.
+Move focus to another app/window and confirm the title returns to 🟢
+`multi-window`, where active pinned Agent Window conversations can be visited
+sequentially. Open Monaco Find in an editor, search for a missing string so it
+shows `No results`, then unfocus the IDE; the title must still become
+`multi-window`. `caa off` should instead show 🔴 `off`. The `active agents`
+count is the number of uniquely titled active Agent Window conversations
+currently discovered across the sidebar, not the nested-subagent tray count.
 
 5. Smoke-test the command help:
 

@@ -175,12 +175,13 @@ use `caa --help` (or the full launcher path with `--help`).
    consecutive scans; the same unresolved prompt stays deduped for eight
    seconds.
 7. The injector continuously maintains a detailed window title such as
-   `<repo> - autoapprove 🟢 on - active window: 2`. It uses 🟢 `on`, 🟡
-   `paused`, and 🔴 `off`; `paused` means focus-safe automatic agent
-   navigation/recovery is temporarily blocked while the direct visible-prompt
-   scanner remains enabled. `active window` counts uniquely titled active Agent
-   Window conversations currently discovered across the sidebar, including the
-   selected conversation outside Pinned. The one-second title sync also
+   `<repo> - autoapprove 🟢 multi-window - active agents: 2`. It uses 🟢
+   `multi-window` when the dedicated IDE is unfocused and top-level agent
+   switching is available, 🔵 `focused` when direct scanning remains active for
+   the mounted conversation but cross-agent navigation is withheld, and 🔴
+   `off` when the gate is disabled. `active agents` counts uniquely titled
+   active Agent Window conversations currently discovered across the sidebar,
+   including the selected conversation outside Pinned. The one-second title sync also
    self-heals if Cursor resets it — unless
    **share-safe** mode is on (`caa share-safe --on`), in which case the
    title bar reuses the text captured when the script was first injected
