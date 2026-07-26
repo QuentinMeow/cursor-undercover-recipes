@@ -289,7 +289,7 @@ When you run `caa launch --workspace <path>`:
 13. Call `startAccept(<interval-ms>)`, which starts the gate and the default-on
     bounded scheduler for registered nested-subagent rows, running children,
     and active pinned agents, then sync the detailed title to
-    `<repo> - autoapprove 🟢 on - active window: N`.
+    `<repo> - autoapprove 🟢 multi-window - active agents: N`.
 
 If `open -na` path detection fails, the launcher falls back to direct executable
 launch and repeats PID detection.
@@ -396,28 +396,33 @@ run simultaneously.
 - Cached private virtualizer snapshot (5-second TTL; one forced refresh per
   cycle instead of toggling the debug API per mutation)
 - Safety telemetry for scan duration, JavaScript heap, and circuit-breaker state
+- Modal safety classification ignores Monaco's embedded `.find-widget`, whose
+  non-modal `role="dialog"` otherwise leaves recovery blocked whenever editor
+  Find remains open with `No results`. Status reports blocking and ignored
+  non-modal dialog-root counts separately.
 
 ### Detailed Window Banner
 
 The branded title is
-`<repo> - autoapprove <emoji> <status> - active window: <count>`:
+`<repo> - autoapprove <emoji> <mode> - active agents: <count>`:
 
-- 🟢 `on` — the approval gate is enabled and recovery has no current safety
-  block.
-- 🟡 `paused` — the gate remains enabled, but automatic agent
-  navigation/recovery is temporarily blocked by its focus/safety guard (for
-  example, terminal/editor focus, recent user input, unsent composer text, or
-  an unrelated modal). The direct visible-prompt scanner remains enabled and
-  uses guarded focus restoration.
+- 🟢 `multi-window` — the approval gate is enabled, the dedicated IDE is
+  unfocused, and top-level pinned Agent Window recovery may navigate between
+  active conversations.
+- 🔵 `focused` — the gate remains enabled for direct scanning of the mounted
+  conversation, but top-level Agent Window switching is withheld because the
+  dedicated IDE is focused, cycling is disabled, or another recovery guard is
+  active (for example, recent input, unsent composer text, or an unrelated
+  blocking modal).
 - 🔴 `off` — the approval gate is disabled.
 
-`active window` counts uniquely titled active Agent Window rows currently
+`active agents` counts uniquely titled active Agent Window rows currently
 discovered across all sidebar sections through Cursor's `.spinning-loader`
 marker. This includes a selected running conversation under a date section,
 while deduplicating the same title when Cursor projects one conversation in
 both Pinned and history. It does not count nested subagents in the
 running-subagent tray. The title is recomputed once per second so active counts
-and short focus pauses become visible without requiring a CLI status refresh.
+and focus-mode transitions become visible without requiring a CLI status refresh.
 Share-safe mode continues to restore the natural Cursor title instead.
 
 ### Registered Subagent Click Ownership

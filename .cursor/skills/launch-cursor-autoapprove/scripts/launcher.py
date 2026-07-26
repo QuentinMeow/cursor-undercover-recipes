@@ -1187,10 +1187,10 @@ def _repo_slug(workspace: str | Path) -> str:
 
 
 def _window_title(workspace: str | Path, gate_on: bool) -> str:
-    emoji, status = ("🟢", "on") if gate_on else ("🔴", "off")
+    emoji, status = ("🟢", "multi-window") if gate_on else ("🔴", "off")
     return (
         f"{_repo_slug(workspace)} - autoapprove {emoji} {status} - "
-        "active window: 0"
+        "active agents: 0"
     )
 
 
@@ -2253,15 +2253,25 @@ def _print_session_status(session: dict) -> None:
                 tmode = "discreet" if gate.get("shareSafeTitle") else "branded"
                 print(f"Title:     {tmode}")
             if gate.get("bannerState"):
-                pause_reason = (
-                    f" ({gate.get('bannerPauseReason')})"
-                    if gate.get("bannerPauseReason")
+                mode_reason = gate.get("bannerModeReason")
+                if mode_reason is None:
+                    mode_reason = gate.get("bannerPauseReason")
+                reason_suffix = (
+                    f" ({mode_reason})"
+                    if mode_reason
                     else ""
                 )
                 print(
                     "Banner:    "
-                    f"{str(gate['bannerState']).upper()}{pause_reason}, "
-                    f"{gate.get('activeAgentWindows', 0)} active agent windows"
+                    f"{str(gate['bannerState']).upper()}{reason_suffix}, "
+                    f"{gate.get('activeAgentWindows', 0)} active agents"
+                )
+            dialog_roots = gate.get("dialogRoots")
+            if isinstance(dialog_roots, dict):
+                print(
+                    "Dialogs:   "
+                    f"{dialog_roots.get('blocking', 0)} blocking, "
+                    f"{dialog_roots.get('ignoredNonModal', 0)} ignored non-modal"
                 )
             print(f"Injector:  {_format_injector_hash(gate.get('scriptHash'))}")
             expected_hash: str | None = None

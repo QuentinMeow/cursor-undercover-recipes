@@ -609,6 +609,29 @@ class InjectorSourceTests(unittest.TestCase):
         )
         self.assertNotIn('"scroll"', interaction_guard)
 
+    def test_non_modal_monaco_find_widget_does_not_block_cycle(self) -> None:
+        source = INJECTOR_PATH.read_text()
+        classify_start = source.index("function _isNonModalEditorDialog(")
+        classify_end = source.index("\n  function ", classify_start)
+        classify = source[classify_start:classify_end]
+        blocking_start = source.index("function _isBlockingModalRoot(")
+        blocking_end = source.index("\n  function ", blocking_start)
+        blocking = source[blocking_start:blocking_end]
+        unrelated_start = source.index("function _hasUnrelatedVisibleModal(")
+        unrelated_end = source.index("\n  function ", unrelated_start)
+        unrelated = source[unrelated_start:unrelated_end]
+        status_start = source.index("function status()")
+        status_end = source.index("\n  // ", status_start)
+        status = source[status_start:status_end]
+
+        self.assertIn('modal.getAttribute("role") === "dialog"', classify)
+        self.assertIn('modal.getAttribute("aria-modal") !== "true"', classify)
+        self.assertIn('modal.matches(".find-widget")', classify)
+        self.assertIn('modal.closest(".monaco-editor")', classify)
+        self.assertIn("if (_isNonModalEditorDialog(modal)) return false;", blocking)
+        self.assertIn("if (!_isBlockingModalRoot(modal)) continue;", unrelated)
+        self.assertIn("dialogRoots: _modalRootSummary()", status)
+
     def test_cycle_focus_restoration_preserves_newer_user_focus(self) -> None:
         source = INJECTOR_PATH.read_text()
         restore_start = source.index("function _settleFocusAfterAutomation(")
@@ -647,6 +670,9 @@ class InjectorSourceTests(unittest.TestCase):
         banner_start = source.index("function _bannerSnapshot(")
         banner_end = source.index("\n  function ", banner_start)
         banner = source[banner_start:banner_end]
+        mode_start = source.index("function _multiWindowBlockReason(")
+        mode_end = source.index("\n  function ", mode_start)
+        multi_window_mode = source[mode_start:mode_end]
         status_start = source.index("function status()")
         status_end = source.index("\n  // ", status_start)
         status = source[status_start:status_end]
@@ -660,12 +686,15 @@ class InjectorSourceTests(unittest.TestCase):
         self.assertIn("normalizeLabel(_agentSidebarRowTitle(row))", active_count)
         self.assertIn("return activeTitles.size;", active_count)
         self.assertIn('let status = "off";', banner)
-        self.assertIn('status = "paused";', banner)
-        self.assertIn('status = "on";', banner)
-        self.assertIn("state.cycleEnabled ? _cycleBlockReason(false) : null", banner)
+        self.assertIn('status = "focused";', banner)
+        self.assertIn('status = "multi-window";', banner)
+        self.assertIn("modeReason = _multiWindowBlockReason();", banner)
+        self.assertIn('if (!state.cycleEnabled) return "cycle_disabled";', multi_window_mode)
+        self.assertIn('if (document.hasFocus()) return "window_focused";', multi_window_mode)
+        self.assertIn("return _cycleBlockReason(false);", multi_window_mode)
         self.assertIn("`${REPO_SLUG} - autoapprove ${emoji} ${status} - `", banner)
-        self.assertIn("`active window: ${activeCount}`", banner)
-        self.assertIn("bannerPauseReason: banner.pauseReason", status)
+        self.assertIn("`active agents: ${activeCount}`", banner)
+        self.assertIn("bannerModeReason: banner.modeReason", status)
         self.assertIn("activeAgentWindows: banner.activeAgentWindows", status)
 
 
@@ -688,11 +717,11 @@ class ParserTests(unittest.TestCase):
     def test_static_title_fallback_matches_detailed_banner_format(self) -> None:
         self.assertEqual(
             launcher._window_title("/workspace/my-repo", gate_on=True),
-            "my-repo - autoapprove 🟢 on - active window: 0",
+            "my-repo - autoapprove 🟢 multi-window - active agents: 0",
         )
         self.assertEqual(
             launcher._window_title("/workspace/my-repo", gate_on=False),
-            "my-repo - autoapprove 🔴 off - active window: 0",
+            "my-repo - autoapprove 🔴 off - active agents: 0",
         )
 
     def test_cycle_modes_and_subagents_json(self) -> None:
