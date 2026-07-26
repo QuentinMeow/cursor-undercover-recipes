@@ -91,6 +91,7 @@
   const MAX_SAFE_SCAN_DURATION_MS = 250;
   const MAX_CONSECUTIVE_SLOW_SCANS = 3;
   const MAX_JS_HEAP_BYTES = 4 * 1024 * 1024 * 1024;
+  const TRUSTED_CLICK_FALLBACK_DELAY_MS = 750;
   const ACTIVE_SUBAGENT_STATUSES = new Set([
     "discovered",
     "running",
@@ -208,6 +209,10 @@
     trayApprovalAttempts: new Map(),
     pinnedApprovalAttempts: new Map(),
     directRegisteredApprovalAttempts: new Map(),
+    trustedClickRequests: new Map(),
+    trustedClickTarget: null,
+    trustedClickTargetUntil: 0,
+    totalTrustedClickAttempts: 0,
     totalTrayVisits: 0,
     totalTrayApprovalAttempts: 0,
     totalTrayConfirmedApprovals: 0,
@@ -521,6 +526,25 @@
     return matches.length === 1 ? matches[0] : null;
   }
 
+  function _clearDirectRegisteredApprovalAttemptsForTask(taskKey) {
+    if (!taskKey) return 0;
+    let cleared = 0;
+    for (const [fingerprint, attempt] of state.directRegisteredApprovalAttempts) {
+      if (attempt.taskKey !== taskKey) continue;
+      state.directRegisteredApprovalAttempts.delete(fingerprint);
+      cleared++;
+    }
+    for (const [token, request] of state.trustedClickRequests) {
+      if (request.taskKey !== taskKey) continue;
+      if (state.trustedClickTarget === request.el) {
+        state.trustedClickTarget = null;
+        state.trustedClickTargetUntil = 0;
+      }
+      state.trustedClickRequests.delete(token);
+    }
+    return cleared;
+  }
+
   function _discoverSubagentRows(root = document) {
     const rows = new Set();
     const roots = Array.isArray(root) ? root : [root];
@@ -563,8 +587,15 @@
         identity,
       ].join("|");
       const existing = state.subagents.get(taskKey);
+      const hasVisibleApproval = _visibleRowApproval(row);
       const nextStatus = _deriveTaskStatus(row, existing?.status);
       const title = _shortTaskTitle(surface);
+      if (existing && !hasVisibleApproval) {
+        // A task can request several approvals over its lifetime, all with the
+        // same row/label fingerprint. Rearm only after observing the exact
+        // mounted row without an approval; an unmounted row proves nothing.
+        _clearDirectRegisteredApprovalAttemptsForTask(taskKey);
+      }
       if (!existing) {
         const record = {
           taskKey,
@@ -643,6 +674,14 @@
 
   function _recordUserInteraction(event) {
     if (state.programmaticScrollDepth > 0 || event?.isTrusted === false) return;
+    if (
+      Date.now() <= state.trustedClickTargetUntil &&
+      state.trustedClickTarget &&
+      (event?.target === state.trustedClickTarget ||
+        state.trustedClickTarget.contains?.(event?.target))
+    ) {
+      return;
+    }
     state.lastUserInteractionAt = Date.now();
     state.lastUserInteractionType = event?.type || "unknown";
     state.interactionGeneration++;
@@ -983,6 +1022,7 @@
     context,
     options = {}
   ) {
+    let consecutiveAbsentChecks = 0;
     for (const delay of CYCLE_CONFIRM_DELAYS_MS) {
       await new Promise((resolve) => setTimeout(resolve, delay));
       if (!state.running) return { confirmed: false, reason: "gate_off" };
@@ -1010,10 +1050,15 @@
       }
       if (!row) continue;
       const nextStatus = _deriveTaskStatus(row, record.status);
-      const candidateGone = !_sameApprovalStillPresent(record, row, candidate);
-      const statusAdvanced = !["approval_pending", "approval_attempted"].includes(nextStatus);
-      if (candidateGone || statusAdvanced) {
-        return { confirmed: true, status: nextStatus, reason: candidateGone ? "candidate_gone" : "status_advanced" };
+      consecutiveAbsentChecks = _sameApprovalStillPresent(record, row, candidate)
+        ? 0
+        : consecutiveAbsentChecks + 1;
+      if (consecutiveAbsentChecks >= 2) {
+        return {
+          confirmed: true,
+          status: nextStatus,
+          reason: "candidate_gone",
+        };
       }
     }
     return { confirmed: false, reason: "unconfirmed_click" };
@@ -1119,6 +1164,7 @@
         options
       );
       if (confirmation.confirmed) {
+        _clearDirectRegisteredApprovalAttemptsForTask(record.taskKey);
         record.status = ["completed", "failed"].includes(confirmation.status)
           ? confirmation.status
           : "approved";
@@ -4117,6 +4163,42 @@
   // -----------------------------------------------------------------------
 
   function clickEl(el) {
+    if (el.matches?.("button.task-subagent-header-pill-button--allow")) {
+      // Cursor 3.13 task pills ignore bare HTMLElement.click(). Keep the
+      // stronger sequence scoped to the already-authorized Allow control.
+      const r = el.getBoundingClientRect();
+      const opts = {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        view: window,
+        button: 0,
+        buttons: 1,
+        clientX: r.left + r.width / 2,
+        clientY: r.top + r.height / 2,
+      };
+      const pointerOpts = {
+        ...opts,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true,
+        width: 1,
+        height: 1,
+        pressure: 0.5,
+      };
+      el.dispatchEvent(new PointerEvent("pointerdown", pointerOpts));
+      el.dispatchEvent(new MouseEvent("mousedown", opts));
+      el.dispatchEvent(
+        new PointerEvent("pointerup", {
+          ...pointerOpts,
+          buttons: 0,
+          pressure: 0,
+        })
+      );
+      el.dispatchEvent(new MouseEvent("mouseup", { ...opts, buttons: 0 }));
+      el.click();
+      return;
+    }
     try {
       if (typeof el.click === "function") {
         el.click();
@@ -4129,6 +4211,178 @@
     const y = r.top + r.height / 2;
     const opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y };
     el.dispatchEvent(new MouseEvent("click", opts));
+  }
+
+  function _pruneTrustedClickRequests(now = Date.now()) {
+    for (const [token, request] of state.trustedClickRequests) {
+      if (now - request.createdAt <= 5000) continue;
+      state.trustedClickRequests.delete(token);
+    }
+    if (
+      state.trustedClickTarget &&
+      now > state.trustedClickTargetUntil
+    ) {
+      state.trustedClickTarget = null;
+      state.trustedClickTargetUntil = 0;
+    }
+  }
+
+  function takeTrustedClickRequest() {
+    const now = Date.now();
+    _pruneTrustedClickRequests(now);
+    if (!state.running) return { ok: false, reason: "gate_off" };
+
+    for (const btn of findApprovalButtons()) {
+      if (
+        btn.kind !== "approval" ||
+        btn.id !== "allow" ||
+        !btn.el?.matches?.("button.task-subagent-header-pill-button--allow")
+      ) {
+        continue;
+      }
+      const task = _registeredTaskForCandidate(btn);
+      const fingerprint = _promptFingerprint(btn.el);
+      const attempt = state.directRegisteredApprovalAttempts.get(fingerprint);
+      if (
+        !task ||
+        !attempt ||
+        attempt.taskKey !== task.taskKey ||
+        attempt.trustedAttemptedAt ||
+        now - Date.parse(attempt.attemptedAt || 0) <
+          TRUSTED_CLICK_FALLBACK_DELAY_MS ||
+        _isCycleOwnedSubagentCandidate(btn) ||
+        _eligibilityReason(btn) === null ||
+        !_notCoveredByUnrelatedElement(btn.el)
+      ) {
+        continue;
+      }
+
+      const rect = btn.el.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) continue;
+      const token =
+        typeof crypto?.randomUUID === "function"
+          ? crypto.randomUUID()
+          : `${now}-${Math.random().toString(16).slice(2)}`;
+      attempt.trustedAttemptedAt = new Date(now).toISOString();
+      const request = {
+        token,
+        createdAt: now,
+        el: btn.el,
+        taskKey: task.taskKey,
+        fingerprint,
+        id: btn.id,
+        text: btn.text,
+        reason: _eligibilityReason(btn),
+        prompt: _capturePromptSubtree(btn.el),
+        command: _extractCommandText(btn.el),
+      };
+      state.trustedClickRequests.set(token, request);
+      state.trustedClickTarget = btn.el;
+      state.trustedClickTargetUntil = now + 1500;
+      _queueEvent({
+        type: "trusted_click_requested",
+        taskKey: task.taskKey,
+        fingerprint,
+        pattern_id: btn.id,
+      });
+      return {
+        ok: true,
+        token,
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+      };
+    }
+    return { ok: true, request: null };
+  }
+
+  function validateTrustedClickRequest(token) {
+    const request = state.trustedClickRequests.get(token);
+    if (
+      !state.running ||
+      !request?.el?.isConnected ||
+      !request.el.matches?.(
+        "button.task-subagent-header-pill-button--allow"
+      ) ||
+      normalizeLabel(request.el.textContent || "") !== "allow"
+    ) {
+      return { ok: false, reason: "request_target_changed" };
+    }
+    const btn = {
+      el: request.el,
+      kind: "approval",
+      id: request.id,
+      text: request.text,
+    };
+    const task = _registeredTaskForCandidate(btn);
+    if (
+      !task ||
+      task.taskKey !== request.taskKey ||
+      _promptFingerprint(request.el) !== request.fingerprint ||
+      _isCycleOwnedSubagentCandidate(btn) ||
+      _eligibilityReason(btn) === null ||
+      !_notCoveredByUnrelatedElement(request.el)
+    ) {
+      return { ok: false, reason: "request_no_longer_eligible" };
+    }
+    const rect = request.el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      return { ok: false, reason: "request_target_hidden" };
+    }
+    state.trustedClickTarget = request.el;
+    state.trustedClickTargetUntil = Date.now() + 1000;
+    return {
+      ok: true,
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+    };
+  }
+
+  function reportTrustedClickResult(token, dispatched) {
+    const request = state.trustedClickRequests.get(token);
+    if (!request) return { ok: false, reason: "request_missing" };
+    state.trustedClickRequests.delete(token);
+    if (state.trustedClickTarget === request.el) {
+      state.trustedClickTarget = null;
+      state.trustedClickTargetUntil = 0;
+    }
+    if (!dispatched) {
+      _queueEvent({
+        type: "trusted_click_failed",
+        taskKey: request.taskKey,
+        fingerprint: request.fingerprint,
+        reason: "cdp_dispatch_failed",
+      });
+      return { ok: false, reason: "cdp_dispatch_failed" };
+    }
+
+    _markClicked(request.fingerprint);
+    state.totalClicks++;
+    state.totalClickAttempts++;
+    state.totalTrustedClickAttempts++;
+    const entry = {
+      ts: new Date().toISOString(),
+      kind: "approval",
+      id: request.id,
+      text: request.text,
+      reason: `trusted:${request.reason}`,
+      fingerprint: request.fingerprint,
+      commandPreview: request.command ? request.command.preview : null,
+      commandLines: request.command ? request.command.lineCount : null,
+    };
+    state.clicks.push(entry);
+    if (state.clicks.length > 100) state.clicks = state.clicks.slice(-100);
+    _queueEvent({
+      type: "click",
+      kind: "approval",
+      pattern_id: request.id,
+      text: request.text,
+      reason: entry.reason,
+      fingerprint: request.fingerprint,
+      trusted: true,
+      prompt: request.prompt,
+      command: request.command,
+    });
+    return { ok: true, fingerprint: request.fingerprint };
   }
 
   // -----------------------------------------------------------------------
@@ -4223,6 +4477,7 @@
       state.directRegisteredApprovalAttempts.set(btn.fingerprint, {
         taskKey: btn.registeredTask.taskKey,
         attemptedAt: new Date().toISOString(),
+        trustedAttemptedAt: null,
       });
       if (state.directRegisteredApprovalAttempts.size > 200) {
         state.directRegisteredApprovalAttempts.delete(
@@ -4586,6 +4841,7 @@
       cooldownEntries: state.fingerprintCooldowns.size,
       directRegisteredAttempts: state.directRegisteredApprovalAttempts.size,
       totalClickAttempts: state.totalClickAttempts,
+      totalTrustedClickAttempts: state.totalTrustedClickAttempts,
       totalConfirmedApprovals: state.totalConfirmedApprovals,
       dialogRoots: _modalRootSummary(),
       activeFocusKind: _focusKind(document.activeElement),
@@ -4682,6 +4938,7 @@
       cooldownEntries: state.fingerprintCooldowns.size,
       directRegisteredAttempts: state.directRegisteredApprovalAttempts.size,
       totalClickAttempts: state.totalClickAttempts,
+      totalTrustedClickAttempts: state.totalTrustedClickAttempts,
       totalConfirmedApprovals: state.totalConfirmedApprovals,
       totalScans: state.totalScans,
       lastScanDurationMs: state.lastScanDurationMs,
@@ -4736,6 +4993,9 @@
   globalThis.stopAccept = stop;
   globalThis.acceptStatus = status;
   globalThis.acceptDebugSnapshot = debugSnapshot;
+  globalThis.takeTrustedClickRequest = takeTrustedClickRequest;
+  globalThis.validateTrustedClickRequest = validateTrustedClickRequest;
+  globalThis.reportTrustedClickResult = reportTrustedClickResult;
   globalThis.setShareSafeTitle = setShareSafeTitle;
   globalThis.setSubagentCycle = setSubagentCycle;
   globalThis.runSubagentCycle = (options = {}) => runSubagentCycle(options);

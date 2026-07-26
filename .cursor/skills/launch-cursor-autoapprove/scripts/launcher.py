@@ -73,6 +73,7 @@ CDP_INJECT_RETRIES = 6
 DEFAULT_POLL_INTERVAL_SECONDS = 0.5
 MIN_POLL_INTERVAL_SECONDS = 0.25
 MAX_POLL_INTERVAL_SECONDS = 60.0
+TRUSTED_CLICK_WORKER_INTERVAL_SECONDS = 0.25
 
 HISTORY_PATH = RUNTIME_DIR / "history.jsonl"
 HISTORY_MAX_BYTES = 5 * 1024 * 1024  # rotate at 5 MB
@@ -1116,6 +1117,77 @@ def _pid_is_cursor(pid: int) -> bool:
     return False
 
 
+def _launcher_script_hash() -> str:
+    try:
+        return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:12]
+    except OSError:
+        return "unavailable"
+
+
+def _pid_is_trusted_click_worker(pid: int, launcher_hash: str | None = None) -> bool:
+    """Return whether a live PID is this launcher's private click worker."""
+    if not _pid_is_alive(pid):
+        return False
+    try:
+        completed = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    matches = (
+        completed.returncode == 0
+        and "_trusted-click-worker" in completed.stdout
+        and str(Path(__file__).resolve()) in completed.stdout
+    )
+    if launcher_hash is not None:
+        matches = matches and f"--launcher-hash {launcher_hash}" in completed.stdout
+    return matches
+
+
+def _ensure_trusted_click_worker(workspace: str) -> int | None:
+    """Start one detached trusted-input worker for an existing session."""
+    state = _load_state(gc=False)
+    session = state.get("sessions", {}).get(workspace)
+    if not session:
+        return None
+    existing = session.get("trusted_click_worker_pid")
+    launcher_hash = _launcher_script_hash()
+    if (
+        isinstance(existing, int)
+        and session.get("trusted_click_worker_launcher_hash") == launcher_hash
+        and _pid_is_trusted_click_worker(existing, launcher_hash)
+    ):
+        return existing
+    if isinstance(existing, int) and _pid_is_trusted_click_worker(existing):
+        with contextlib.suppress(ProcessLookupError, OSError):
+            os.kill(existing, signal.SIGTERM)
+
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "_trusted-click-worker",
+            "--workspace-key",
+            workspace,
+            "--launcher-hash",
+            launcher_hash,
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+        close_fds=True,
+    )
+    session["trusted_click_worker_pid"] = process.pid
+    session["trusted_click_worker_launcher_hash"] = launcher_hash
+    _save_state(state)
+    return process.pid
+
+
 def _cursor_main_processes() -> list[tuple[int, str]]:
     """Find Cursor main processes as (pid, args)."""
     try:
@@ -2082,6 +2154,17 @@ def _print_session_status(session: dict) -> None:
     print(f"Session:   {slug}")
     print(f"PID:       {pid or 'none'} ({'running' if alive else 'stopped'})")
     print(f"CDP port:  {port or 'none'}")
+    worker_pid = session.get("trusted_click_worker_pid")
+    worker_hash = session.get("trusted_click_worker_launcher_hash")
+    worker_state = (
+        "running"
+        if isinstance(worker_pid, int)
+        and isinstance(worker_hash, str)
+        and worker_hash == _launcher_script_hash()
+        and _pid_is_trusted_click_worker(worker_pid, worker_hash)
+        else "stopped"
+    )
+    print(f"Worker:    {worker_pid or 'none'} ({worker_state})")
     print(f"Workspace: {workspace}")
     if session.get("kind") == "ssh":
         print(f"SSH Host:  {session.get('ssh_host', '?')}")
@@ -2147,6 +2230,8 @@ def _print_session_status(session: dict) -> None:
             print(f"Clicks:    {clicks}")
             if isinstance(gate.get("totalClickAttempts"), int):
                 print(f"Attempts:  {gate['totalClickAttempts']}")
+            if isinstance(gate.get("totalTrustedClickAttempts"), int):
+                print(f"Trusted:   {gate['totalTrustedClickAttempts']} CDP click(s)")
             if isinstance(gate.get("directRegisteredAttempts"), int):
                 print(
                     "DirectCaps:"
@@ -2556,6 +2641,9 @@ def cmd_launch(args: argparse.Namespace) -> int:
         _log_event("gate", ws_key, slug, action="on",
                    cdp_target_id=pinned_target,
                    poll_interval_seconds=interval_seconds)
+        worker_pid = _ensure_trusted_click_worker(ws_key)
+        if worker_pid:
+            print(f"Trusted click worker: PID {worker_pid}")
     else:
         surface = (
             _cdp_bound_target_surface(cdp_port, pinned_target, timeout=5.0)
@@ -2743,6 +2831,9 @@ def cmd_launch_ssh(args: argparse.Namespace) -> int:
         _log_event("gate", ws_key, slug, action="on",
                    cdp_target_id=pinned_target,
                    poll_interval_seconds=interval_seconds)
+        worker_pid = _ensure_trusted_click_worker(ws_key)
+        if worker_pid:
+            print(f"Trusted click worker: PID {worker_pid}")
     else:
         surface = (
             _cdp_bound_target_surface(cdp_port, pinned_target, timeout=5.0)
@@ -2871,6 +2962,9 @@ def cmd_on(args: argparse.Namespace) -> int:
         if workspace in current_state.get("sessions", {}):
             current_state["sessions"][workspace]["poll_interval_seconds"] = interval_seconds
             _save_state(current_state)
+        worker_pid = _ensure_trusted_click_worker(workspace)
+        if worker_pid:
+            print(f"Trusted click worker: PID {worker_pid}")
         _log_event("gate", workspace, slug, action="on",
                    cdp_target_id=bound_target,
                    poll_interval_seconds=interval_seconds)
@@ -2945,6 +3039,163 @@ def _cdp_json_expression(port: int, expression: str, target_id: str | None,
     except (ConnectionRefusedError, OSError, RuntimeError, json.JSONDecodeError) as exc:
         print(f"CDP error: {exc}", file=sys.stderr)
         return None
+
+
+def _report_trusted_click_result(port: int, target_id: str, token: str,
+                                 dispatched: bool) -> None:
+    token_literal = json.dumps(token)
+    dispatched_literal = "true" if dispatched else "false"
+    _cdp_json_expression(
+        port,
+        "JSON.stringify("
+        f"reportTrustedClickResult({token_literal}, {dispatched_literal})"
+        ")",
+        target_id,
+        timeout=5.0,
+    )
+
+
+def _trusted_click_worker_step(session: dict) -> bool:
+    """Dispatch at most one exact renderer-authorized trusted mouse click."""
+    port = session.get("cdp_port")
+    target_id = session.get("cdp_target_id")
+    if not isinstance(port, int) or not isinstance(target_id, str):
+        return False
+
+    request = _cdp_json_expression(
+        port,
+        "JSON.stringify("
+        "typeof takeTrustedClickRequest === 'function' "
+        "? takeTrustedClickRequest() "
+        ": {ok:false, reason:'api_unavailable'}"
+        ")",
+        target_id,
+        timeout=5.0,
+    )
+    if not request or not request.get("token"):
+        return False
+
+    token = str(request["token"])
+    dispatched = False
+    try:
+        surface = _cdp_bound_target_surface(port, target_id, timeout=5.0)
+        if surface.get("mode") != "ide":
+            return False
+        targets = _cdp_list_page_targets(port, timeout=5.0)
+        matches = [target for target in targets if target.get("id") == target_id]
+        if len(matches) != 1 or not matches[0].get("webSocketDebuggerUrl"):
+            return False
+        ws_url = matches[0]["webSocketDebuggerUrl"]
+        validation = _cdp_json_expression(
+            port,
+            "JSON.stringify("
+            f"validateTrustedClickRequest({json.dumps(token)})"
+            ")",
+            target_id,
+            timeout=5.0,
+        )
+        x = validation.get("x") if validation else None
+        y = validation.get("y") if validation else None
+        if (
+            not validation
+            or not validation.get("ok")
+            or not isinstance(x, (int, float))
+            or not isinstance(y, (int, float))
+        ):
+            return False
+        pressed = False
+        try:
+            _cdp_send_method(
+                ws_url,
+                "Input.dispatchMouseEvent",
+                {
+                    "type": "mousePressed",
+                    "x": x,
+                    "y": y,
+                    "button": "left",
+                    "buttons": 1,
+                    "clickCount": 1,
+                },
+                timeout=5.0,
+            )
+            pressed = True
+            _cdp_send_method(
+                ws_url,
+                "Input.dispatchMouseEvent",
+                {
+                    "type": "mouseReleased",
+                    "x": x,
+                    "y": y,
+                    "button": "left",
+                    "buttons": 0,
+                    "clickCount": 1,
+                },
+                timeout=5.0,
+            )
+            pressed = False
+            dispatched = True
+        finally:
+            if pressed:
+                with contextlib.suppress(
+                    ConnectionRefusedError, OSError, RuntimeError
+                ):
+                    _cdp_send_method(
+                        ws_url,
+                        "Input.dispatchMouseEvent",
+                        {
+                            "type": "mouseReleased",
+                            "x": x,
+                            "y": y,
+                            "button": "left",
+                            "buttons": 0,
+                            "clickCount": 1,
+                        },
+                        timeout=5.0,
+                    )
+    except (ConnectionRefusedError, OSError, RuntimeError):
+        dispatched = False
+    finally:
+        _report_trusted_click_result(port, target_id, token, dispatched)
+    return dispatched
+
+
+def cmd_trusted_click_worker(args: argparse.Namespace) -> int:
+    """Private detached worker that turns exact requests into trusted input."""
+    workspace = args.workspace_key
+    own_pid = os.getpid()
+    if args.launcher_hash != _launcher_script_hash():
+        return 1
+    session: dict | None = None
+    for _ in range(50):
+        state = _load_state(gc=False)
+        session = state.get("sessions", {}).get(workspace)
+        worker_pid = session.get("trusted_click_worker_pid") if session else None
+        worker_hash = (
+            session.get("trusted_click_worker_launcher_hash") if session else None
+        )
+        if worker_pid == own_pid and worker_hash == args.launcher_hash:
+            break
+        if isinstance(worker_pid, int) and worker_pid != own_pid:
+            return 0
+        time.sleep(0.1)
+    else:
+        return 1
+
+    while True:
+        state = _load_state(gc=False)
+        session = state.get("sessions", {}).get(workspace)
+        if (
+            not session
+            or session.get("trusted_click_worker_pid") != own_pid
+            or session.get("trusted_click_worker_launcher_hash")
+            != args.launcher_hash
+        ):
+            return 0
+        cursor_pid = session.get("pid")
+        if not isinstance(cursor_pid, int) or not _pid_is_alive(cursor_pid):
+            return 0
+        _trusted_click_worker_step(session)
+        time.sleep(TRUSTED_CLICK_WORKER_INTERVAL_SECONDS)
 
 
 def cmd_cycle(args: argparse.Namespace) -> int:
@@ -3986,6 +4237,14 @@ def build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argument
     p_help.add_argument("topic", nargs="?", help="Optional command name")
     p_help.set_defaults(func=cmd_help, parser=parser, command_parsers=command_parsers)
     command_parsers["help"] = p_help
+
+    p_worker = sub.add_parser(
+        "_trusted-click-worker",
+        help=argparse.SUPPRESS,
+    )
+    p_worker.add_argument("--workspace-key", required=True)
+    p_worker.add_argument("--launcher-hash", required=True)
+    p_worker.set_defaults(func=cmd_trusted_click_worker)
 
     return parser, command_parsers
 

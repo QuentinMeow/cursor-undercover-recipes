@@ -74,6 +74,15 @@ profiles remain under `~/.cursor/launch-autoapprove/`.
 
 ## Agent Workflow
 
+**Every Cursor workspace launch must go through this launcher's `launch` or
+`launch-ssh` command. Never invoke
+`/Applications/Cursor.app/Contents/MacOS/Cursor` directly, including for a
+version check:** the GUI binary may stay running and open Cursor's default
+Agents surface. On macOS, read
+`CFBundleShortVersionString` from `/Applications/Cursor.app/Contents/Info.plist`
+when a version is needed. A window is usable only after this launcher reports
+`Mode: IDE (verified)`.
+
 For a global install, set:
 
 ```bash
@@ -128,7 +137,7 @@ lifecycle with `on`/`off`/`stop`.
 | `off [-w PATH\|SLUG]` | Pause auto-clicking (`stopAccept()` via CDP) while keeping the dedicated window open. Auto-detected if only one session, otherwise opens an interactive picker in a TTY. |
 | `cycle --on\|--off\|--once [-w PATH\|SLUG]` | Control registered parent-transcript rows, exact `N subagents running` tray entries, and pinned top-level agents. Automatic pinned navigation visits active unselected rows in round-robin passes of up to two while the Agent Window is unfocused. `--once` runs one bounded pass, including completed rows. Confirms results, caps retries, restores the original agent/tabs/scroll/focus, and fails closed on drift. |
 | `subagents [-w PATH\|SLUG] [--json]` | Show the sanitized renderer task registry, row hints, statuses, attempts, and confirmation timestamps. |
-| `status [-w PATH\|SLUG]` | Show verified IDE mode plus session details including last approved command preview, tray advertised/mounted/collapsed state, and nested/pinned visit/confirmation totals. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
+| `status [-w PATH\|SLUG]` | Show verified IDE mode plus session details including the trusted-input worker, last approved command preview, tray advertised/mounted/collapsed state, and nested/pinned visit/confirmation totals. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
 | `stop [-w PATH\|SLUG] [--all]` | Pause gate, close dedicated Cursor process, and remove session when shutdown succeeds. Without `-w`, it prefers running sessions when any are alive; if none are running, it falls back to stale entries for cleanup. Use `--all` to stop every session, but do not combine `--all` with `-w` or a positional workspace. |
 | `alias [set\|remove\|list]` | Manage workspace aliases stored in `config.json`. `set <name> <path>` registers a new alias (validates the path exists and the name is not already taken). `remove <name>` deletes one. `list` shows all. |
 | `history [-w SLUG] [-n LIMIT] [--json] [--commands]` | Show durable event log of session/gate/click events. Persisted across sessions. Use `--commands` for a dedicated command-approval view with readable multiline formatting. |
@@ -174,6 +183,11 @@ use `caa --help` (or the full launcher path with `--help`).
    most one eligible candidate per scan. Distinct prompts can be clicked on
    consecutive scans; the same unresolved prompt stays deduped for eight
    seconds.
+   Cursor 3.13 task-subagent Allow pills may ignore renderer-synthetic clicks.
+   A detached per-session helper therefore converts only an exact
+   renderer-authorized, still-visible Allow-pill fallback request into a
+   trusted CDP mouse click. The helper re-verifies IDE mode and the pinned
+   target before dispatch and stays idle while the gate is OFF.
 7. The injector continuously maintains a detailed window title such as
    `<repo> - autoapprove 🟢 multi-window - active agents: 2`. It uses 🟢
    `multi-window` when the dedicated IDE is unfocused and top-level agent

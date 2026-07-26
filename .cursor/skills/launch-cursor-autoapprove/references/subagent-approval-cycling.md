@@ -457,18 +457,28 @@ retain exclusive ownership through restoration. Direct and registered-row
 paths share one task-scoped cooldown fingerprint so either click suppresses an
 immediate duplicate while preserving the other as a later backup. Debug
 snapshots expose `cycleOwned` and `directRetryExhausted`; either state is
-excluded from `eligible`.
+excluded from `eligible`. Because one task can emit multiple sequential prompts
+with the same fingerprint, the direct cap is rearmed only after the exact
+mounted row is observed without an approval control. Virtualization alone never
+rearms it.
 
 1. Bring the exact button inside the scroll viewport.
 2. Re-query after scrolling to avoid a recycled element.
 3. Capture pre-click task status and row identity.
-4. Dispatch the conservative DOM click.
+4. Dispatch the conservative DOM click. Exact task-subagent Allow pills use
+   `pointerdown`, `mousedown`, `pointerup`, `mouseup`, then `click` because
+   Cursor 3.13.10 ignores bare native clicks and handled mouse-only synthesis
+   inconsistently on that widget; other controls retain the native-click path.
+   If the exact pill remains after 750 ms, the injector may issue one
+   task/fingerprint-bound request to a detached helper. The helper re-verifies
+   IDE mode and the pinned target, then dispatches one trusted CDP mouse click
+   at the injector-validated uncovered center point.
 5. Mark `approval_attempted`; do not increment confirmed approvals yet.
 6. Verify at bounded intervals:
-   - candidate disappeared, or
-   - task status advanced, or
-   - row content changed from waiting to running/completed
-7. Mark `approved` only after confirmation.
+   - the same raw approval control is absent across two consecutive checks
+   - outer task status may inform the resulting task state, but cannot confirm
+     while the raw approval remains
+7. Mark `approved` only after raw-control confirmation.
 
 If the first attempt is unconfirmed:
 

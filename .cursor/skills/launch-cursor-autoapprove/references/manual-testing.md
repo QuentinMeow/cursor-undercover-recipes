@@ -813,7 +813,11 @@ For each button found during a prompt:
 
 ## Cursor Version Tracking
 
-The injector's DOM selectors are coupled to specific Cursor versions. Always record the version when validating.
+The injector's DOM selectors are coupled to specific Cursor versions. Always
+record the version when validating. On macOS, read
+`CFBundleShortVersionString` from `/Applications/Cursor.app/Contents/Info.plist`;
+do not execute the app's GUI binary with `--version`, because it may open an
+unverified Agents window and remain running.
 
 ### Known Working Versions
 
@@ -824,12 +828,14 @@ The injector's DOM selectors are coupled to specific Cursor versions. Always rec
 | 3.12.17 | Chrome/144.0.7559.236 | 538f6927c92e | OK (real Run) | Not rerun | OK (2 rows; confirm, transient-control, user-selection, and restoration probes) | 2026-07-22 |
 | 3.12.17 | Chrome/144.0.7559.236 | 8643e4bfc524 | OK (real Run) | OK (collapsed tray auto-expanded; two real Run prompts confirmed; parent identity/restoration confirmed) | Not rerun | 2026-07-22 |
 | 3.12.30 | Chrome/144.0.7559.236 | 8b314b2e3196 | OK (real pinned and tray Run confirmations) | OK (real mounted parent Allow clicked directly with `reason: companion`) | OK (2 active rows despite history duplicate; visits, real confirmation, and restoration) | 2026-07-23 |
+| 3.13.10 | Chrome/144.0.7559.236 | 9bb203ec3be6 | Not rerun | OK (3 previously stuck real Allow tasks completed; untrusted-resistant exact pill cleared by trusted worker) | Not rerun | 2026-07-26 |
 
 ### Version Upgrade Checklist
 
 When upgrading Cursor:
 
-1. **Before upgrading**: Record current version and injector hash
+1. **Before upgrading**: Read the app bundle version without launching Cursor,
+   then record it with the injector hash
 2. **After upgrading**: Confirm `cursor --help` still advertises `--classic`
    (it is dev-only), then run `caa status`; require `Mode: IDE (verified)` and
    an injector hash before testing prompts
