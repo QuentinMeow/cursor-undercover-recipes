@@ -231,9 +231,9 @@
 
 - **Pinned row cycling is sequential, never simultaneous**: Clicking each
   sidebar row exposes one chat at a time. Automatic navigation must therefore
-  target only active unselected pinned rows while the Agent Window is
-  unfocused. A focused-window `cycle --once` is an explicit bounded test, not
-  background behavior.
+  target only active unselected pinned rows. Window focus alone is not a reason
+  to stop; a visible pending human-question tray in the focused mounted
+  conversation is.
 
 - **Top-level navigation needs exact restoration identity**: Use the exact
   `Pinned` section, a normalized title unique across the rendered Agent
@@ -258,8 +258,9 @@
   interaction generation before top-level navigation. If it changes, abort the
   entire cycle, preserve the user's current sidebar/tab/scroll selection, and
   skip all remaining pinned, tray, and virtual-row navigation. Apply the same
-  guard while mounting, confirming, and restoring every path. A focus-only
-  transition may restore automation-owned state, but must still end that cycle.
+  guard while mounting, confirming, and restoring every path. A focused human
+  question discovered after navigation must likewise preserve the selected
+  question-bearing agent or child instead of restoring away from it.
 
 - **Give navigation paths independent budgets**: Slow pinned or tray visits
   must not consume the time reserved for registered virtual-row recovery.
@@ -359,12 +360,6 @@
   approval clicks too, because product post-click behavior can change focus
   without any tab navigation.
 
-- **Focused editing surfaces should block automatic navigation**: When the
-  dedicated window is focused and its terminal or another non-composer editor
-  is active, postpone row/tray cycling even if the user has paused typing for
-  more than the normal interaction timeout. Direct non-navigating approval
-  scans can continue.
-
 - **Product focus can settle after the automation promise**: Cursor may focus
   its agent surface asynchronously after an approval resolves. Restore focus
   immediately and once more after a short delay, but re-resolve the latest user
@@ -378,10 +373,22 @@
   any relative wheel/keyboard movement the user added afterward.
 
 - **Name the actual automation scope, not a generic pause**: A focused dedicated
-  IDE still scans the currently mounted conversation, while top-level pinned
-  navigation is intentionally withheld. Operational titles must distinguish
-  🔵 `focused`, 🟢 `multi-window`, and 🔴 `off` so the visible mode states what
-  can actually run.
+  IDE still scans the currently mounted conversation and, without a pending
+  question, continues bounded recovery navigation. Operational titles must
+  distinguish 🔵 `focused`, 🟢 `multi-window`, and 🔴 `off` so the visible mode
+  states what can actually run.
+
+- **Human questions—not focus alone—form the shared navigation boundary**:
+  Gating only pinned rows is insufficient because registered-row
+  materialization and running-tray visits can still scroll the parent or
+  replace it with a child editor. Every automatic path must check the same
+  focused pending-question condition before and during navigation. Cursor
+  3.13.10 renders the active questionnaire as a visible
+  `.glass-questionnaire-tray` with `Next`/`Continue` and `Skip`; completed
+  answer cards do not use that surface. If the question appears after
+  automation selected a child or pinned agent, preserve that selection for the
+  human response. A focused window without the tray continues recovery after
+  the short interaction guard.
 
 - **ARIA `dialog` does not prove modality**: Monaco's embedded editor Find
   widget uses `role="dialog"` even though it is non-modal and can remain visible

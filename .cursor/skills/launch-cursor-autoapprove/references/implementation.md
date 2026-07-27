@@ -39,15 +39,21 @@ The injector uses a five-part architecture:
    when its child rows are unmounted. It mounts each read-only child agent
    editor, scans that selected editor, restores the parent between visits, and
    restores the prior tray expansion/tabs/focus state.
+   Automatic recovery continues while the dedicated IDE is focused unless the
+   mounted conversation exposes a pending human-question tray. A focused
+   question pauses forward navigation and preserves that selected agent or
+   child. An explicit `cycle --once` may still run a bounded pass.
    Tray visits run before row confirmation with separate six- and ten-second
    budgets, so either nested path can make progress. `cycle --off` disables
    both nested paths plus pinned-agent recovery below.
 5. **Pinned Agent Recovery**: Active pinned top-level Agent Window rows are
    visited sequentially because Cursor mounts only the selected conversation.
-   Automatic navigation runs only while the window is unfocused. Explicit
-   `cycle --once` visits up to two uniquely titled pinned rows, including
-   completed rows, per round-robin pass. Both modes restore the original agent, editor
-   selections, transcript scroll, and focus.
+   Automatic navigation may run in focused and unfocused windows, but stops on
+   a focused pending human question. Explicit `cycle --once` visits up to two
+   uniquely titled pinned rows, including completed rows, per round-robin pass.
+   Normal visits restore the original agent, editor selections, transcript
+   scroll, and focus; question discovery preserves the question-bearing
+   selection.
 
 Prompt fingerprinting (sorted button labels within the prompt root) prevents
 the same unresolved prompt from being clicked repeatedly every poll cycle.
@@ -396,8 +402,9 @@ run simultaneously.
   10-second budget
 - Pinned-agent visits have a separate 3.5-second budget and are round-robin
   bounded to two active, unselected rows per automatic cycle, so top-level
-  navigation cannot consume the nested recovery budget; focused windows never
-  receive automatic top-level navigation
+  navigation cannot consume the nested recovery budget; a focused window keeps
+  navigating unless a visible human-question tray or another safety guard
+  blocks it
 - Tray approvals use exact selected-tab resource identity, transcript-tail
   materialization, confirmation, and a two-attempt limit. Empty children back
   off from 15 to 60 seconds; exhausted prompts back off from one to 15 minutes
@@ -418,14 +425,14 @@ run simultaneously.
 The branded title is
 `<repo> - autoapprove <emoji> <mode> - active agents: <count>`:
 
-- 🟢 `multi-window` — the approval gate is enabled, the dedicated IDE is
-  unfocused, and top-level pinned Agent Window recovery may navigate between
-  active conversations.
+- 🟢 `multi-window` — the approval gate is enabled and recovery may navigate
+  between nested or top-level agents. Window focus alone does not change this
+  after the short interaction guard.
 - 🔵 `focused` — the gate remains enabled for direct scanning of the mounted
-  conversation, but top-level Agent Window switching is withheld because the
-  dedicated IDE is focused, cycling is disabled, or another recovery guard is
-  active (for example, recent input, unsent composer text, or an unrelated
-  blocking modal).
+  conversation, but automatic registered-row scrolling, tray-child switching,
+  and top-level Agent Window switching are withheld because a focused pending
+  human question, disabled cycling, recent input, unsent composer text, or an
+  unrelated blocking modal owns the current view.
 - 🔴 `off` — the approval gate is disabled.
 
 `active agents` counts uniquely titled active Agent Window rows currently
@@ -571,8 +578,9 @@ navigation rather than pretending inactive chats are simultaneously clickable:
    Cursor 3.12.30 legitimately projects one pinned conversation again in its
    date-based history section, so cross-section duplicates are not ambiguous.
 3. For automatic cycles, keep only unselected rows with Cursor's
-   `.spinning-loader` active marker and require `document.hasFocus() === false`;
-   recheck focus before selection and while waiting for the mounted candidate.
+   `.spinning-loader` active marker. Before selection and while waiting for the
+   mounted candidate, stop only when the focused mounted conversation exposes a
+   pending `.glass-questionnaire-tray`; window focus alone is allowed.
 4. Save the selected sidebar row, selected editor tabs, transcript scroll, and
    focus context.
 5. Select each row with the same mouse event sequence used for editor tabs.
@@ -588,16 +596,17 @@ navigation rather than pretending inactive chats are simultaneously clickable:
 8. Re-resolve the original title inside its captured sidebar section, require
    its selected-tab resource to match the captured resource, then restore
    transcript scroll, editor tabs, and focus before nested recovery continues.
-9. If a real user interaction or window-focus transition occurs during an
-   automatic visit, abort the entire cycle. A newer user sidebar/tab/scroll
-   selection is preserved and all remaining pinned, tray, and virtual-row
-   navigation is skipped; restoration runs only while the selection remains
-   automation-owned.
+9. If a real user interaction or focused pending human question occurs during
+   an automatic visit, abort the entire cycle. A newer user sidebar/tab/scroll
+   selection is preserved. A discovered question also preserves the selected
+   question-bearing agent or child instead of restoring the original parent.
+   All remaining pinned, tray, and virtual-row navigation is skipped.
 
 `cycle --once` deliberately includes completed pinned rows so a two-row
 navigation/restoration test does not require two live approvals. Automatic
-cycles do not visit completed rows and do not switch top-level agents while the
-window is focused. Events use `pinned_visit`, `pinned_no_candidate`,
+cycles do not visit completed rows and do not switch top-level agents while a
+pending human question is visible in the focused mounted conversation. Events
+use `pinned_visit`, `pinned_no_candidate`,
 `pinned_approval_attempted`, `pinned_approval_confirmed`,
 `pinned_approval_unconfirmed`, and `pinned_restore`.
 
@@ -614,16 +623,23 @@ with `abortedReason: new_user_interaction`.
 
 ### Focus-Safe Recovery
 
-Automatic row/tray recovery pauses while the focused Cursor window has
-`textarea.xterm-helper-textarea` or another non-composer editable surface
-focused. This focus guard is independent of the two-second recent-interaction
-timeout, so pausing while typing does not allow navigation to resume underneath
-an idle terminal.
+Automatic registered-row, tray-child, and pinned-agent recovery continues in a
+focused Cursor window after the two-second interaction guard. The
+`_pendingHumanQuestionRoot()` detector requires Cursor's visible
+`.glass-questionnaire-tray` plus its `Next`/`Continue` and `Skip` controls, so
+completed transcript answer cards and ordinary approval prompts do not trigger
+the hold. When that pending tray is visible and the document is focused,
+`human_question_pending` pauses navigation; terminal or editor focus alone does
+not.
 
-The interaction generation and an unfocused-to-focused transition are also
-checked during pinned mounts, tray mounts, virtual-row materialization,
-confirmation waits, and restoration. A takeover aborts the whole cycle rather
-than only the current path. Tab restoration is asynchronous and ownership is
+The interaction generation and focused-question state are checked during
+pinned mounts, tray mounts, virtual-row materialization, and confirmation
+waits. A takeover aborts all remaining forward recovery rather than only the
+current path. New user interaction preserves the user's current selection. A
+question discovered after automation selected a child or pinned agent also
+preserves that current selection and skips focus restoration so the human can
+respond there. Ordinary visits still restore their captured parent/sidebar,
+tabs, scroll, and focus. Tab restoration is asynchronous and ownership is
 released only after the captured selections are observed selected again.
 Virtual-row materialization records its actual programmatic scroll delta; if a
 takeover occurs while mounting or confirming, that delta is subtracted from the
@@ -895,8 +911,8 @@ settings remain there until manually removed.
   attempts, confirmations, and failed retry states
 - pinned-agent total/active/ambiguous count, visits, attempts, confirmations,
   failures, last restoration result, and any cycle-abort reason
-- active focus kind, any focus reason pausing automatic cycles, and the last
-  focus-settle outcome
+- active focus kind, whether a human question is pending, any question-specific
+  focus reason pausing automatic cycles, and the last focus-settle outcome
 - last/max scan duration, JavaScript heap, and safety-trip reason
 - WARNING if multiple workbench targets exist on the port
 - WARNING if the bound target is missing

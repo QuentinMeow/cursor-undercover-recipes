@@ -89,7 +89,7 @@ built-in usage summary, `caa help` for examples and doc paths, or
 | `launch-ssh <host> [/absolute/remote/path] [--no-preflight] [--interval SECONDS]` | Start dedicated Cursor connected to an SSH remote host from `~/.ssh/config`, inject script, and turn the gate plus nested/pinned-agent cycling ON. Path-specific launches verify the remote directory with `ssh <host> test -d <path>` before creating a profile or alias. |
 | `on [--interval SECONDS]` | Turn gate ON and optionally change/persist the session's fallback scan interval. Reloads injector code when in-window hash differs from the current injector file. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
 | `off` | Turn gate OFF without closing the dedicated window. Auto-detects if one session is active, otherwise opens a picker in an interactive terminal. |
-| `cycle --on\|--off\|--once` | Control registered parent-transcript rows, exact entries in the `N subagents running` tray, and pinned top-level agents. It starts ON; automatic pinned navigation visits active unselected rows in round-robin passes of up to two while the window is unfocused. `--once` explicitly visits one bounded pass, including completed rows, then restores the original agent. |
+| `cycle --on\|--off\|--once` | Control registered parent-transcript rows, exact entries in the `N subagents running` tray, and pinned top-level agents. It starts ON and keeps recovering subagents while the window is focused unless the mounted conversation has a pending human-question tray. `--once` explicitly runs one bounded pass, including completed pinned rows, then restores the original agent. |
 | `subagents [--json]` | Show the sanitized task registry, row hints, attempts, and confirmations. |
 | `status` | Show verified IDE mode, PID, CDP port, workspace, gate state, click count, injector hash, current title, tray advertised/mounted/collapsed state, recent clicks, and last approved command preview. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
 | `stop` | Turn gate OFF, close the dedicated Cursor process, and clear local session state when shutdown succeeds. Without `-w`, it prefers running sessions when any are alive; if none are running, it falls back to stale entries for cleanup. Use `--all` to stop every session, and do not combine `--all` with `-w` or a positional workspace. |
@@ -107,10 +107,11 @@ built-in usage summary, `caa help` for examples and doc paths, or
 - Does **not** copy non-auth `state.vscdb` rows (chat history/model state remain profile-specific).
 - There is no `inject --restart` command in this supported launcher.
 - The branded title reports `<repo> - autoapprove 🟢 multi-window - active agents: N`
-  while the dedicated IDE is unfocused and cross-agent recovery can navigate.
-  🔵 `focused` means approval scanning remains active for the currently mounted
-  conversation, while top-level Agent Window switching is withheld because the
-  IDE is focused or another recovery guard is active. 🔴 `off` disables the
+  whenever cross-agent recovery can navigate, including a focused IDE with no
+  pending human question after the short interaction guard. 🔵 `focused` means
+  approval scanning remains active for the mounted conversation while a visible
+  question awaiting human input, unsent text, or another safety guard withholds
+  navigation. 🔴 `off` disables the
   gate. `active agents` counts uniquely titled active Agent Window
   conversations discovered across the sidebar.
 - The observer reacts to DOM changes after a 300ms debounce. `--interval`
@@ -123,9 +124,10 @@ built-in usage summary, `caa help` for examples and doc paths, or
   pinned top-level agents. A collapsed exact running tray is expanded within a
   fixed bound, and child rows are re-resolved after each parent restoration.
   Pinned agents are necessarily visited sequentially because Cursor mounts
-  only the selected conversation. Automatic top-level
-  navigation runs only while the window is unfocused; `cycle --once` is the
-  explicit focused-window test path. Cycles are bounded, approvals are
+  only the selected conversation. Automatic recovery continues in a focused
+  window when no visible human question is pending. A focused pending
+  questionnaire stops forward navigation and preserves that selected
+  conversation or child for the user. Cycles are bounded, approvals are
   confirmed with capped retries, delayed child transcripts are kept selected
   while their tail is materialized, and exhausted or empty children receive
   probe backoff instead of being remounted continuously. The original agent,
@@ -151,9 +153,11 @@ built-in usage summary, `caa help` for examples and doc paths, or
   heap above 4 GiB trips the gate OFF and appears under `status`.
 - Keep the gate OFF (`caa off`) when doing sensitive UI actions in the dedicated
   window that are unrelated to approvals.
-- Direct visible-prompt scans remain active while the terminal is focused, but
-  row/tray navigation waits. Focus restoration tracks newer user interaction
-  and performs a guarded delayed correction for Cursor's asynchronous focus.
+- Direct visible-prompt scans remain active while the IDE is focused. Automatic
+  row, tray-child, and pinned-agent navigation also continues after the short
+  interaction guard unless the mounted conversation shows Cursor's visible
+  human-question tray. Focus restoration tracks newer user interaction and
+  performs a guarded delayed correction for Cursor's asynchronous focus.
 - A non-focused but still visible dedicated window continued auto-clicking in
   Cursor 3.12.17 (`document.hasFocus() === false`). Minimized/hidden renderers
   may still be throttled, so verify with `status` for unattended workflows.
@@ -161,8 +165,11 @@ built-in usage summary, `caa help` for examples and doc paths, or
   pinned-agent support is sequential rather than truly simultaneous. Duplicate
   titles inside Pinned fail closed; the same conversation repeated in history
   is expected and does not block cycling.
-- Automatic pinned cycling considers only rows with Cursor's active spinner and
-  never changes the selected top-level agent while the window is focused.
+- Automatic pinned cycling considers only rows with Cursor's active spinner.
+  Window focus by itself does not block a visit. If a pending human question is
+  visible when focused—or appears after recovery selects an agent or child—the
+  cycle stops, preserves that question-bearing selection, and waits for the
+  user. A newer user selection is always preserved.
   `cycle --once` intentionally visits completed pinned rows too, making it
   useful for a bounded two-row restoration test.
 
