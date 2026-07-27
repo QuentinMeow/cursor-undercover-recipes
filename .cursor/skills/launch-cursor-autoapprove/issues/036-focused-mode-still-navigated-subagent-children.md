@@ -54,7 +54,8 @@ navigating. Source inspection found:
 ## Verification
 
 - Injector syntax check passed.
-- The 42-test launcher/injector suite passed.
+- The 43-test launcher/injector suite passed, including a mocked
+  `cycle --once` contract check for `explicit: true` and promise awaiting.
 - Global installation and both running-session reloads succeeded with injector
   `f7bb2e652670`; both targets remained `Mode: IDE (verified)` with the gate and
   cycle enabled.
@@ -66,6 +67,12 @@ navigating. Source inspection found:
   `{"ok": false, "reason": "human_question_pending"}`.
 - The same mounted questionnaire with focus false reported `MULTI-WINDOW`,
   proving the gate requires both the pending question and focused document.
+- A final-hash direct-scanner probe mounted a `View`/`Allow` prompt while
+  `document.hasFocus()` was true and confirmed one click with no questionnaire
+  block.
+- A pre-scheduled 6.2-second focused-question sampler retained identical editor
+  tabs and transcript scroll across 120 samples, with no `cycle_started`,
+  `row_materialized`, `tray_visit`, or `pinned_visit` events.
 
 ## Lesson
 

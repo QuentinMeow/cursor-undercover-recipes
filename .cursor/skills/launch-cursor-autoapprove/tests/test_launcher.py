@@ -998,6 +998,58 @@ class SubagentSnapshotTests(unittest.TestCase):
 
 
 class CdpJsonTests(unittest.TestCase):
+    def test_cycle_once_runs_explicit_cycle_and_awaits_promise(self) -> None:
+        args = argparse.Namespace(cycle_mode="once")
+        session = {
+            "cdp_port": 9222,
+            "cdp_target_id": "target",
+            "workspace": "/workspace",
+            "slug": "repo",
+        }
+        result = {
+            "ok": True,
+            "rows": 1,
+            "confirmed": 0,
+            "failed": 0,
+            "misses": 1,
+            "trayVisits": 0,
+            "trayConfirmed": 0,
+            "pinnedVisits": 0,
+            "pinnedConfirmed": 0,
+        }
+
+        with (
+            mock.patch.object(launcher, "_load_state", return_value={}),
+            mock.patch.object(launcher, "_resolve_session", return_value=session),
+            mock.patch.object(
+                launcher,
+                "_rebind_session_target_if_unique",
+                return_value=("target", False),
+            ),
+            mock.patch.object(
+                launcher,
+                "_cdp_bound_target_surface",
+                return_value={"mode": "ide"},
+            ),
+            mock.patch.object(
+                launcher,
+                "_cdp_json_expression",
+                return_value=result,
+            ) as evaluate,
+            mock.patch.object(launcher, "_drain_injector_events", return_value=[]),
+            mock.patch.object(launcher, "_sync_subagent_registry", return_value=None),
+        ):
+            return_code = launcher.cmd_cycle(args)
+
+        self.assertEqual(return_code, 0)
+        evaluate.assert_called_once()
+        call = evaluate.call_args
+        self.assertEqual(call.args[0], 9222)
+        self.assertIn("runSubagentCycle({explicit: true})", call.args[1])
+        self.assertEqual(call.args[2], "target")
+        self.assertEqual(call.kwargs["timeout"], 180.0)
+        self.assertTrue(call.kwargs["await_promise"])
+
     def test_json_expression_requests_promise_awaiting(self) -> None:
         cdp_result = {
             "result": {
