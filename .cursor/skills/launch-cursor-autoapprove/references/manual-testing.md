@@ -46,15 +46,18 @@ You should see:
 - a window title like
   `<repo> - autoapprove 🟢 multi-window - active agents: <count>`
 
-Focus the dedicated IDE and confirm the title changes to 🔵 `focused`; direct
-visible-prompt scanning should remain enabled for its mounted conversation.
-Move focus to another app/window and confirm the title returns to 🟢
-`multi-window`, where active pinned Agent Window conversations can be visited
-sequentially. Open Monaco Find in an editor, search for a missing string so it
-shows `No results`, then unfocus the IDE; the title must still become
-`multi-window`. `caa off` should instead show 🔴 `off`. The `active agents`
-count is the number of uniquely titled active Agent Window conversations
-currently discovered across the sidebar, not the nested-subagent tray count.
+Focus the dedicated IDE with no pending question, leave it idle for more than
+two seconds, and confirm the title remains or returns to 🟢 `multi-window`;
+registered-row scrolling, tray-child switching, and pinned-agent switching may
+continue. When the mounted conversation shows Cursor's pending human-question
+tray, confirm the title changes to 🔵 `focused`, direct scanning remains active,
+and navigation pauses on that question-bearing selection. Moving focus away
+allows 🟢 `multi-window` again. Open Monaco Find in an editor, search for a
+missing string so it shows `No results`, and confirm focus alone still settles
+back to `multi-window`. `caa off` should instead show 🔴 `off`. The
+`active agents` count is the number of uniquely titled active Agent Window
+conversations currently discovered across the sidebar, not the nested-subagent
+tray count.
 
 5. Smoke-test the command help:
 
@@ -415,13 +418,14 @@ Expected result:
 - duplicate normalized titles inside `Pinned` still fail closed instead of
   selecting by position
 
-For automatic behavior, start work in two pinned agents and move the dedicated
-window to the background without minimizing it. Only unselected rows with
-Cursor's active spinner should be visited. Refocus the Agent Window and confirm
-automatic top-level navigation stops and no nested navigation follows that
-aborted pass; direct selected-chat scanning continues. During another automatic
-pass, manually select a different agent. The cycle must preserve that newer
-selection and report `PinnedLast: preserved_new_user_selection`.
+For automatic behavior, start work in two pinned agents. Only unselected rows
+with Cursor's active spinner should be visited. Focus the Agent Window with no
+question, wait out the two-second interaction guard, and confirm visits
+continue. Then surface a pending human questionnaire and confirm automatic
+top-level and nested navigation stops on that question-bearing selection.
+During another automatic pass, manually select a different agent. The cycle
+must preserve that newer selection and report
+`PinnedLast: preserved_new_user_selection`.
 
 For confirmation safety, inject a scoped synthetic approval whose click handler
 temporarily disables or hides the same control and then restores it. The attempt
@@ -679,16 +683,27 @@ re-enable cycling after an explicit `cycle --off`.
 /usr/bin/python3 "$LAUNCHER" history -n 30 --json
 ```
 
-6. While recovery work remains, focus the integrated terminal and type. Pause
-   for more than two seconds, then run `status` from another shell/window if
-   possible. Also try moving into the terminal immediately after a cycle starts.
+6. While recovery work remains, focus the parent conversation with no question
+   and leave it idle for more than two seconds. Run `status` from another
+   shell/window if possible and confirm tray/pinned visit counts continue to
+   increase when eligible work exists. Repeat with the integrated terminal
+   focused. Then show a pending human-question tray and confirm visits stop.
+   Also let recovery navigate to a child or pinned agent whose question appears
+   after selection.
 
 Expected focus result:
 
-- terminal input remains focused
-- `Focus: terminal (cycle paused: terminal_focused)` appears while the
-  dedicated window and terminal are focused
-- moving focus away allows automatic cycling to resume
+- a focused terminal or editor with no recent input and no question does not
+  indefinitely pause cycling
+- a focused pending question reports
+  `Focus: ... (cycle paused: human_question_pending)`, with no new
+  registered-row, tray-child, or pinned-agent navigation
+- moving focus away or answering/skipping the question allows automatic
+  cycling to resume
+- if a question appears after recovery selected a child or pinned agent, that
+  selection remains visible for the human response instead of being restored
+  to the original parent
+- selecting a different tab or conversation yourself is also preserved
 - if the user changes focus during a cycle, `FocusLast` targets the newer
   terminal/editor choice instead of the stale cycle-start element
 
@@ -829,6 +844,8 @@ unverified Agents window and remain running.
 | 3.12.17 | Chrome/144.0.7559.236 | 8643e4bfc524 | OK (real Run) | OK (collapsed tray auto-expanded; two real Run prompts confirmed; parent identity/restoration confirmed) | Not rerun | 2026-07-22 |
 | 3.12.30 | Chrome/144.0.7559.236 | 8b314b2e3196 | OK (real pinned and tray Run confirmations) | OK (real mounted parent Allow clicked directly with `reason: companion`) | OK (2 active rows despite history duplicate; visits, real confirmation, and restoration) | 2026-07-23 |
 | 3.13.10 | Chrome/144.0.7559.236 | 9bb203ec3be6 | Not rerun | OK (3 previously stuck real Allow tasks completed; untrusted-resistant exact pill cleared by trusted worker) | Not rerun | 2026-07-26 |
+| 3.13.10 | Chrome/144.0.7559.236 | fa1ee9df7db4 | Not rerun | Superseded: blanket `window_focused` gating paused subagent recovery even with no question | Not rerun | 2026-07-27 |
+| 3.13.10 | Chrome/144.0.7559.236 | f7bb2e652670 | Not rerun | Question gate verified live: focused/no-question automatic cycle returned `ok`; focused questionnaire returned `human_question_pending`; unfocused questionnaire remained multi-window | Not rerun | 2026-07-27 |
 
 ### Version Upgrade Checklist
 

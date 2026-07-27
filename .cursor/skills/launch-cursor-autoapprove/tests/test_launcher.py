@@ -626,7 +626,6 @@ class InjectorSourceTests(unittest.TestCase):
         self.assertNotIn("isVisible(", raw_check)
         self.assertNotIn("isClickable(", raw_check)
         self.assertIn("activeOnly: !explicit", cycle)
-        self.assertIn("if (!explicit && document.hasFocus()) pinnedEntries = [];", cycle)
         self.assertIn("await _visitPinnedAgentEntry(entry, {", cycle)
         self.assertIn('if (result.outcome === "paused") {', cycle)
         self.assertIn("preserveUserSelection = true;", cycle)
@@ -672,26 +671,63 @@ class InjectorSourceTests(unittest.TestCase):
         self.assertIn("_rollbackMaterializationScroll(context, result);", materialize)
         self.assertIn("_rollbackMaterializationScroll(context, materialized);", attempt)
 
-    def test_automatic_cycle_pauses_while_terminal_or_editor_is_focused(self) -> None:
+    def test_automatic_cycle_pauses_only_for_visible_human_question(self) -> None:
         source = INJECTOR_PATH.read_text()
-        focus_start = source.index("function _activeEditingSurfaceBlockReason(")
-        focus_end = source.index("\n  function ", focus_start)
-        focus_guard = source[focus_start:focus_end]
+        question_start = source.index("function _pendingHumanQuestionRoot(")
+        question_end = source.index("\n  function ", question_start)
+        question_guard = source[question_start:question_end]
         block_start = source.index("function _cycleBlockReason(")
         block_end = source.index("\n  function ", block_start)
         cycle_block = source[block_start:block_end]
+        takeover_start = source.index("function _navigationTakeoverReason(")
+        takeover_end = source.index("\n  async function ", takeover_start)
+        takeover = source[takeover_start:takeover_end]
+        cycle_start = source.index("async function runSubagentCycle(")
+        cycle_end = source.index("\n  function ", cycle_start)
+        cycle = source[cycle_start:cycle_end]
+        scanner_start = source.index("function _checkAndClickImpl(")
+        scanner_end = source.index("\n  function ", scanner_start)
+        scanner = source[scanner_start:scanner_end]
         interaction_start = source.index("function _setupInteractionGuard(")
         interaction_end = source.index("\n  function ", interaction_start)
         interaction_guard = source[interaction_start:interaction_end]
 
-        self.assertIn("textarea.xterm-helper-textarea", focus_guard)
-        self.assertIn('return "terminal_focused";', focus_guard)
-        self.assertIn('return editable && !composerEditable ? "editor_focused"', focus_guard)
         self.assertIn(
-            "const focusReason = _activeEditingSurfaceBlockReason();",
+            'const HUMAN_QUESTION_TRAY_SELECTOR = ".glass-questionnaire-tray";',
+            source,
+        )
+        self.assertIn(
+            "document.querySelectorAll(HUMAN_QUESTION_TRAY_SELECTOR)",
+            question_guard,
+        )
+        self.assertIn('label === "continue" || label === "next"', question_guard)
+        self.assertIn('label === "skip"', question_guard)
+        self.assertIn("if (hasAdvance && hasSkip) return root;", question_guard)
+        self.assertIn(
+            "const questionReason = _focusedHumanQuestionBlockReason();",
             cycle_block,
         )
-        self.assertIn("if (focusReason) return focusReason;", cycle_block)
+        self.assertIn("if (questionReason) return questionReason;", cycle_block)
+        self.assertIn("if (!explicit && document.hasFocus()) {", cycle_block)
+        self.assertNotIn('return "window_focused";', cycle_block)
+        self.assertNotIn("_activeEditingSurfaceBlockReason", source)
+        self.assertIn("abortIfHumanQuestionPending: !explicit,", cycle)
+        self.assertIn("options.abortIfHumanQuestionPending === true", takeover)
+        self.assertIn('return "human_question_pending";', takeover)
+        self.assertIn(
+            "preserveUserSelection = _isNavigationPauseReason(",
+            cycle,
+        )
+        self.assertIn('"preserved_human_question"', cycle)
+        self.assertLess(
+            cycle.index("const blocked = _cycleBlockReason(explicit);"),
+            cycle.index("_discoverSubagentRows(document);"),
+        )
+        self.assertEqual(
+            source.count("cycleFocusBlockReason: _focusedHumanQuestionBlockReason()"),
+            2,
+        )
+        self.assertNotIn("document.hasFocus()", scanner)
         self.assertIn(
             '["pointerdown", "keydown", "wheel"]',
             interaction_guard,
@@ -779,12 +815,13 @@ class InjectorSourceTests(unittest.TestCase):
         self.assertIn('status = "multi-window";', banner)
         self.assertIn("modeReason = _multiWindowBlockReason();", banner)
         self.assertIn('if (!state.cycleEnabled) return "cycle_disabled";', multi_window_mode)
-        self.assertIn('if (document.hasFocus()) return "window_focused";', multi_window_mode)
+        self.assertNotIn("document.hasFocus()", multi_window_mode)
         self.assertIn("return _cycleBlockReason(false);", multi_window_mode)
         self.assertIn("`${REPO_SLUG} - autoapprove ${emoji} ${status} - `", banner)
         self.assertIn("`active agents: ${activeCount}`", banner)
         self.assertIn("bannerModeReason: banner.modeReason", status)
         self.assertIn("activeAgentWindows: banner.activeAgentWindows", status)
+        self.assertIn("humanQuestionPending: !!_pendingHumanQuestionRoot()", status)
 
 
 class ParserTests(unittest.TestCase):
@@ -961,6 +998,58 @@ class SubagentSnapshotTests(unittest.TestCase):
 
 
 class CdpJsonTests(unittest.TestCase):
+    def test_cycle_once_runs_explicit_cycle_and_awaits_promise(self) -> None:
+        args = argparse.Namespace(cycle_mode="once")
+        session = {
+            "cdp_port": 9222,
+            "cdp_target_id": "target",
+            "workspace": "/workspace",
+            "slug": "repo",
+        }
+        result = {
+            "ok": True,
+            "rows": 1,
+            "confirmed": 0,
+            "failed": 0,
+            "misses": 1,
+            "trayVisits": 0,
+            "trayConfirmed": 0,
+            "pinnedVisits": 0,
+            "pinnedConfirmed": 0,
+        }
+
+        with (
+            mock.patch.object(launcher, "_load_state", return_value={}),
+            mock.patch.object(launcher, "_resolve_session", return_value=session),
+            mock.patch.object(
+                launcher,
+                "_rebind_session_target_if_unique",
+                return_value=("target", False),
+            ),
+            mock.patch.object(
+                launcher,
+                "_cdp_bound_target_surface",
+                return_value={"mode": "ide"},
+            ),
+            mock.patch.object(
+                launcher,
+                "_cdp_json_expression",
+                return_value=result,
+            ) as evaluate,
+            mock.patch.object(launcher, "_drain_injector_events", return_value=[]),
+            mock.patch.object(launcher, "_sync_subagent_registry", return_value=None),
+        ):
+            return_code = launcher.cmd_cycle(args)
+
+        self.assertEqual(return_code, 0)
+        evaluate.assert_called_once()
+        call = evaluate.call_args
+        self.assertEqual(call.args[0], 9222)
+        self.assertIn("runSubagentCycle({explicit: true})", call.args[1])
+        self.assertEqual(call.args[2], "target")
+        self.assertEqual(call.kwargs["timeout"], 180.0)
+        self.assertTrue(call.kwargs["await_promise"])
+
     def test_json_expression_requests_promise_awaiting(self) -> None:
         cdp_result = {
             "result": {

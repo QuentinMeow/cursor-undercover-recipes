@@ -62,8 +62,9 @@ file was removed after the test.
 - materialize exact collapsed running-subagent trays when parent-row recovery
   is unavailable, then visit re-resolved entries and scope matching to the
   selected child agent editor
-- visit uniquely titled active pinned top-level agents only while the window is
-  unfocused, then restore the original selected agent
+- run registered-row, tray-child, and uniquely titled active pinned navigation
+  automatically in focused or unfocused windows, pausing a focused window only
+  when its mounted conversation shows a pending human-question tray
 - verify the approval resolved
 - restore the user's selected tabs, scroll position, and focus
 
@@ -90,8 +91,11 @@ file was removed after the test.
 8. **Navigate narrowly**: tray recovery must resolve one exact header, expand
    it within a fixed bound when collapsed, and resolve one exact row title to
    one selected agent tab/resource before relaxing the editor-zone exclusion.
-9. **Background-only top-level navigation**: automatic pinned cycling must not
-   change the selected conversation in a focused Agent Window.
+9. **Question-aware focused recovery**: automatic registered-row
+   materialization, tray-child switching, and pinned cycling continue in a
+   focused Agent Window when no human question is pending. A visible
+   `.glass-questionnaire-tray` stops forward work and preserves its selected
+   agent or child so the user can answer it.
 
 ## Identity Model
 
@@ -278,9 +282,9 @@ Run a recovery cycle when all are true:
 
 - gate is ON
 - cycling is enabled
+- no focused mounted conversation has a pending human-question tray
 - at least one registered task is active or one exact running-tray entry exists
-- or at least one unselected pinned row has Cursor's active spinner while the
-  window is unfocused
+- or at least one unselected pinned row has Cursor's active spinner
 - no cycle is already active
 - no approval was confirmed for that task during its cooldown
 
@@ -330,11 +334,11 @@ widget requires `mousedown`/`mouseup` before `click` for reliable restoration.
 The bound workbench exposes pinned conversations under the exact `Pinned`
 `.agent-sidebar-section`. Each `.agent-sidebar-cell` has a stable title for the
 current mount, `data-selected`, and an active `.spinning-loader` marker.
-Automatic cycles visit only active unselected rows while
-`document.hasFocus() === false`. Normalized titles duplicated inside the exact
-`Pinned` section are skipped. A pinned conversation duplicated in a date-based
-history section is expected on Cursor 3.12.30 and does not make the pinned row
-ambiguous.
+Automatic cycles visit active unselected rows while focused or unfocused,
+unless the focused mounted conversation has a pending human question.
+Normalized titles duplicated inside the exact `Pinned` section are skipped. A
+pinned conversation duplicated in a date-based history section is expected on
+Cursor 3.12.30 and does not make the pinned row ambiguous.
 
 Each visit requires one selected editor tab whose title exactly matches the
 sidebar row, the exact pinned row to remain selected, and its group to contain
@@ -355,10 +359,11 @@ recovery receives a separate 10-second budget.
 `cycle --once` includes completed pinned rows so navigation/restoration can be
 tested without two live prompts.
 
-If the user focuses or interacts with the window during automatic navigation,
-abort the whole cycle across pinned, tray, and virtual-row paths. Restore only
-if no newer user interaction occurred; otherwise preserve the newer
-sidebar/tab/scroll selection and skip all remaining recovery.
+If the user interacts with the window or a focused pending human question
+appears during automatic navigation, abort the whole cycle across pinned, tray,
+and virtual-row paths. Preserve newer user choices. For a newly discovered
+question, preserve the question-bearing selected agent or child and skip all
+remaining recovery instead of restoring it away.
 Virtual-row materialization rolls back only its recorded programmatic scroll
 delta on takeover, preserving relative movement added by the user.
 
@@ -366,16 +371,16 @@ delta on takeover, preserving relative movement added by the user.
 
 Postpone automatic cycling when:
 
-- the dedicated window is focused and the user typed, scrolled, or clicked
-  within the last two seconds
-- the focused window has its integrated terminal or another non-composer
-  editable surface active, even if the last keystroke was more than two seconds
-  ago
+- the focused mounted conversation contains Cursor's visible
+  `.glass-questionnaire-tray` with `Next`/`Continue` and `Skip` controls
+- the user typed, scrolled, or clicked within the last two seconds
 - the composer input contains unsent text
 - a modal unrelated to the registered row is active
 
-`cycle --once` is explicit and may bypass the recent-scroll delay, but it must
-still preserve input and modal safety.
+Terminal/editor focus without recent input or a pending question does not block
+automatic navigation. `cycle --once` is explicit and may bypass the
+recent-interaction and question delay, but it must still preserve input and
+modal safety.
 
 ## Row Materialization Algorithm
 
@@ -631,7 +636,8 @@ the previous editor tab across repeated cycles.
 ### Phase E: pinned Agent Window cycling — implemented
 
 - discover exact uniquely titled rows under the `Pinned` section
-- visit active unselected rows only when the window is unfocused
+- visit active unselected rows unless a focused pending human question owns the
+  mounted conversation
 - use exact selected-tab/editor identity and scoped approval policy
 - restore original row, transcript scroll, editor tabs, and focus
 - let explicit `cycle --once` visit one round-robin pass of up to two pinned
@@ -660,7 +666,9 @@ Required live cases:
     after parent restoration, and the original expansion state is restored.
 16. Two pinned top-level rows are visited by an explicit cycle and the original
     selected row is restored.
-17. Automatic pinned cycling skips completed rows and every focused window.
+17. Every automatic recovery path continues in a quiet focused window without
+    a question, pauses on a focused pending questionnaire, and preserves a
+    question discovered after navigation.
 
 For each case save:
 
@@ -697,9 +705,10 @@ after its row is already unmounted was not deterministically reproduced.
 - No prompt or command text is persisted in the registry.
 - Tray recovery is bounded, confirms disappearance, caps retries, and restores
   the selected editor tabs.
-- Pinned Agent Window recovery is bounded, background-only when automatic,
-  rejects duplicate titles inside Pinned, tolerates the same conversation's
-  history projection, and restores the original selected agent.
+- Registered-row, tray-child, and pinned Agent Window recovery remain active in
+  focused windows without pending questions. Pinned recovery rejects duplicate
+  titles inside Pinned, tolerates the same conversation's history projection,
+  restores ordinary visits, and preserves a selected question-bearing agent.
 
 ## Known Risks
 

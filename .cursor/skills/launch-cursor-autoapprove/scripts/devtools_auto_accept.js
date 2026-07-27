@@ -33,7 +33,7 @@
   const LOG_PREFIX = "[autoAccept]";
   const SCRIPT_HASH = globalThis.__cursorAutoAcceptScriptHash || "unknown";
   const REPO_SLUG = globalThis.__cursorAutoAcceptRepoSlug || "workspace";
-  const STRATEGY_VERSION = "2026-07-agent-cycle-v8-focused-multi-window";
+  const STRATEGY_VERSION = "2026-07-agent-cycle-v10-question-focus-gate";
   const TITLE_SYNC_INTERVAL = 1000;
   /** Faster ping while discreet so Cursor cannot show a fresh native title for long. */
   const TITLE_SYNC_INTERVAL_SHARE_SAFE = 500;
@@ -58,6 +58,7 @@
   const PINNED_AGENT_SECTION_PATTERN = /^pinned$/i;
   const PINNED_AGENT_ACTIVE_SELECTOR = ".spinning-loader";
   const SCROLL_CONTAINER_SELECTOR = ".virtualized-composer-messages-scroll-container";
+  const HUMAN_QUESTION_TRAY_SELECTOR = ".glass-questionnaire-tray";
   const CYCLE_INTERACTION_GUARD_MS = 2000;
   const CYCLE_MOUNT_TIMEOUT_MS = 250;
   const CYCLE_CONFIRM_DELAYS_MS = [150, 350, 700, 1200];
@@ -779,24 +780,33 @@
     return false;
   }
 
-  function _activeEditingSurfaceBlockReason() {
-    const active = document.activeElement;
-    if (!active || active === document.body || !(active instanceof Element)) {
-      return null;
+  function _pendingHumanQuestionRoot() {
+    for (const root of document.querySelectorAll(HUMAN_QUESTION_TRAY_SELECTOR)) {
+      if (!(root instanceof Element) || !isVisible(root)) continue;
+      let hasAdvance = false;
+      let hasSkip = false;
+      for (const control of root.querySelectorAll(BUTTON_SELECTORS.join(", "))) {
+        if (!isVisible(control)) continue;
+        const label = normalizeLabel(control.textContent || "");
+        if (label === "continue" || label === "next") hasAdvance = true;
+        if (label === "skip") hasSkip = true;
+      }
+      if (hasAdvance && hasSkip) return root;
     }
-    if (
-      active.matches("textarea.xterm-helper-textarea") ||
-      active.closest(".terminal-instance, .xterm")
-    ) {
-      return "terminal_focused";
-    }
-    const editable = active.matches(
-      'input, textarea, select, [contenteditable="true"], [role="textbox"]'
+    return null;
+  }
+
+  function _focusedHumanQuestionBlockReason() {
+    return document.hasFocus() && _pendingHumanQuestionRoot()
+      ? "human_question_pending"
+      : null;
+  }
+
+  function _isNavigationPauseReason(reason) {
+    return (
+      reason === "new_user_interaction" ||
+      reason === "human_question_pending"
     );
-    const composerEditable = active.closest(
-      "div.full-input-box, .composer-input-blur-wrapper"
-    );
-    return editable && !composerEditable ? "editor_focused" : null;
   }
 
   function _cycleBlockReason(explicit) {
@@ -804,8 +814,8 @@
     if (_composerHasUnsentText()) return "unsent_composer_text";
     if (_hasUnrelatedVisibleModal()) return "unrelated_modal";
     if (!explicit && document.hasFocus()) {
-      const focusReason = _activeEditingSurfaceBlockReason();
-      if (focusReason) return focusReason;
+      const questionReason = _focusedHumanQuestionBlockReason();
+      if (questionReason) return questionReason;
       if (Date.now() - state.lastUserInteractionAt < CYCLE_INTERACTION_GUARD_MS) {
         return `recent_${state.lastUserInteractionType || "interaction"}`;
       }
@@ -1038,7 +1048,7 @@
           context,
           options
         );
-        if (["new_user_interaction", "window_focused"].includes(remounted.reason)) {
+        if (_isNavigationPauseReason(remounted.reason)) {
           return { confirmed: false, reason: remounted.reason };
         }
         row = remounted.row;
@@ -1091,7 +1101,7 @@
       context,
       options
     );
-    if (["new_user_interaction", "window_focused"].includes(materialized.reason)) {
+    if (_isNavigationPauseReason(materialized.reason)) {
       return { outcome: "paused", reason: materialized.reason };
     }
     const materializeTakeover = _navigationTakeoverReason(options);
@@ -1199,7 +1209,7 @@
         retry,
         reason: confirmation.reason,
       });
-      if (["new_user_interaction", "window_focused"].includes(confirmation.reason)) {
+      if (_isNavigationPauseReason(confirmation.reason)) {
         _rollbackMaterializationScroll(context, materialized);
         return { outcome: "paused", reason: confirmation.reason };
       }
@@ -2225,8 +2235,11 @@
     ) {
       return "new_user_interaction";
     }
-    if (options.abortIfWindowFocused === true && document.hasFocus()) {
-      return "window_focused";
+    if (
+      options.abortIfHumanQuestionPending === true &&
+      _focusedHumanQuestionBlockReason()
+    ) {
+      return "human_question_pending";
     }
     return null;
   }
@@ -2519,10 +2532,7 @@
       const approvalControls = target.group?.isConnected
         ? _trayApprovalMatches(target.group).length
         : 0;
-      const paused = [
-        "window_focused",
-        "new_user_interaction",
-      ].includes(waitResult.reason);
+      const paused = _isNavigationPauseReason(waitResult.reason);
       const missed = waitResult.reason === "selected_subagent_changed";
       const nextProbeAt =
         !paused && !missed
@@ -2859,7 +2869,9 @@
     }
     const navigationOptions = {
       interactionGeneration: state.interactionGeneration,
-      abortIfWindowFocused: !explicit && !document.hasFocus(),
+      // Focused automatic recovery remains active until the mounted conversation
+      // exposes Cursor's pending human-question tray.
+      abortIfHumanQuestionPending: !explicit,
     };
     const restorationOptions = {
       interactionGeneration: navigationOptions.interactionGeneration,
@@ -2882,7 +2894,6 @@
       activeOnly: !explicit,
       includeSelected: explicit,
     });
-    if (!explicit && document.hasFocus()) pinnedEntries = [];
     let pinnedBackoffSkipped = 0;
     if (!explicit && pinnedEntries.length > 0) {
       const filtered = _filterNavigationBackoff(pinnedEntries, "pinned");
@@ -3002,8 +3013,7 @@
         const beforeVisitTakeover = _navigationTakeoverReason(navigationOptions);
         if (beforeVisitTakeover) {
           abortAfterPinned = true;
-          preserveUserSelection =
-            beforeVisitTakeover === "new_user_interaction";
+          preserveUserSelection = _isNavigationPauseReason(beforeVisitTakeover);
           summary.abortedReason = beforeVisitTakeover;
           break;
         }
@@ -3014,7 +3024,7 @@
         if (result.visited) summary.pinnedVisits++;
         if (result.outcome === "paused") {
           abortAfterPinned = true;
-          preserveUserSelection = result.reason === "new_user_interaction";
+          preserveUserSelection = _isNavigationPauseReason(result.reason);
           summary.abortedReason = result.reason;
           break;
         }
@@ -3028,21 +3038,26 @@
         const afterVisitTakeover = _navigationTakeoverReason(navigationOptions);
         if (afterVisitTakeover) {
           abortAfterPinned = true;
-          preserveUserSelection =
-            afterVisitTakeover === "new_user_interaction";
+          preserveUserSelection = _isNavigationPauseReason(afterVisitTakeover);
           summary.abortedReason = afterVisitTakeover;
           break;
         }
       }
       if (sidebarContext) {
         if (preserveUserSelection) {
+          const preservedReason =
+            summary.abortedReason === "human_question_pending"
+              ? "preserved_human_question"
+              : "preserved_new_user_selection";
           _recordPinnedRestore({
             ok: true,
             preserved: true,
-            reason: "preserved_new_user_selection",
+            reason: preservedReason,
           });
           sidebarRestored = true;
-          summary.abortedReason = "new_user_interaction";
+          if (!summary.abortedReason) {
+            summary.abortedReason = "new_user_interaction";
+          }
         } else {
           const restored = await _restoreAgentSidebarSelectionContext(
             sidebarContext,
@@ -3073,7 +3088,7 @@
               summary.abortedReason = editorRestored.reason;
             }
             if (abortAfterPinned && !summary.abortedReason) {
-              summary.abortedReason = "window_focused";
+              summary.abortedReason = "navigation_aborted";
             }
           }
         }
@@ -3110,8 +3125,9 @@
             );
             if (preparedTray.paused) {
               abortAfterPinned = true;
-              preserveUserSelection =
-                preparedTray.reason === "new_user_interaction";
+              preserveUserSelection = _isNavigationPauseReason(
+                preparedTray.reason
+              );
               summary.abortedReason = preparedTray.reason;
               trayEntries = [];
             } else if (!preparedTray.ok) {
@@ -3158,8 +3174,7 @@
           const beforeTrayTakeover = _navigationTakeoverReason(navigationOptions);
           if (beforeTrayTakeover) {
             abortAfterPinned = true;
-            preserveUserSelection =
-              beforeTrayTakeover === "new_user_interaction";
+            preserveUserSelection = _isNavigationPauseReason(beforeTrayTakeover);
             summary.abortedReason = beforeTrayTakeover;
             break;
           }
@@ -3171,7 +3186,7 @@
           if (result.visited) summary.trayVisits++;
           if (result.outcome === "paused") {
             abortAfterPinned = true;
-            preserveUserSelection = result.reason === "new_user_interaction";
+            preserveUserSelection = _isNavigationPauseReason(result.reason);
             summary.abortedReason = result.reason;
             break;
           }
@@ -3207,8 +3222,7 @@
           const afterTrayTakeover = _navigationTakeoverReason(navigationOptions);
           if (afterTrayTakeover) {
             abortAfterPinned = true;
-            preserveUserSelection =
-              afterTrayTakeover === "new_user_interaction";
+            preserveUserSelection = _isNavigationPauseReason(afterTrayTakeover);
             summary.abortedReason = afterTrayTakeover;
             break;
           }
@@ -3216,8 +3230,8 @@
 
         const rowStartedPerformance = performance.now();
         if (abortAfterPinned) {
-          // A focus transition or newer user interaction owns the remainder of
-          // this cycle. Do not continue into virtual-row navigation.
+          // A pending human question or newer user interaction owns the
+          // remainder of this cycle. Do not continue into virtual-row navigation.
         } else if (!context && records.length > 0) {
           summary.misses += records.length;
           _queueEvent({
@@ -3238,8 +3252,9 @@
             const beforeRowTakeover = _navigationTakeoverReason(navigationOptions);
             if (beforeRowTakeover) {
               abortAfterPinned = true;
-              preserveUserSelection =
-                beforeRowTakeover === "new_user_interaction";
+              preserveUserSelection = _isNavigationPauseReason(
+                beforeRowTakeover
+              );
               summary.abortedReason = beforeRowTakeover;
               break;
             }
@@ -3252,7 +3267,7 @@
             );
             if (result.outcome === "paused") {
               abortAfterPinned = true;
-              preserveUserSelection = result.reason === "new_user_interaction";
+              preserveUserSelection = _isNavigationPauseReason(result.reason);
               summary.abortedReason = result.reason;
               break;
             }
@@ -3262,8 +3277,9 @@
                 _navigationTakeoverReason(navigationOptions);
               if (beforeRetryTakeover) {
                 abortAfterPinned = true;
-                preserveUserSelection =
-                  beforeRetryTakeover === "new_user_interaction";
+                preserveUserSelection = _isNavigationPauseReason(
+                  beforeRetryTakeover
+                );
                 summary.abortedReason = beforeRetryTakeover;
                 break;
               }
@@ -3275,8 +3291,7 @@
               );
               if (result.outcome === "paused") {
                 abortAfterPinned = true;
-                preserveUserSelection =
-                  result.reason === "new_user_interaction";
+                preserveUserSelection = _isNavigationPauseReason(result.reason);
                 summary.abortedReason = result.reason;
                 break;
               }
@@ -3291,8 +3306,9 @@
             const afterRowTakeover = _navigationTakeoverReason(navigationOptions);
             if (afterRowTakeover) {
               abortAfterPinned = true;
-              preserveUserSelection =
-                afterRowTakeover === "new_user_interaction";
+              preserveUserSelection = _isNavigationPauseReason(
+                afterRowTakeover
+              );
               summary.abortedReason = afterRowTakeover;
               break;
             }
@@ -3307,7 +3323,7 @@
       const finalTakeover = _navigationTakeoverReason(navigationOptions);
       if (finalTakeover) {
         summary.abortedReason = finalTakeover;
-        if (finalTakeover === "new_user_interaction") {
+        if (_isNavigationPauseReason(finalTakeover)) {
           preserveUserSelection = true;
         }
       }
@@ -3378,10 +3394,23 @@
           });
         }
       }
-      _settleFocusAfterAutomation(
-        outerEditorContext || editorContext || context,
-        "subagent_cycle"
-      );
+      if (summary.abortedReason === "human_question_pending") {
+        state.lastFocusRestore = {
+          ts: new Date().toISOString(),
+          source: "subagent_cycle",
+          phase: "skipped",
+          outcome: "preserved_human_question",
+          targetKind: _focusKind(document.activeElement),
+          interactionChanged:
+            state.interactionGeneration !==
+            navigationOptions.interactionGeneration,
+        };
+      } else {
+        _settleFocusAfterAutomation(
+          outerEditorContext || editorContext || context,
+          "subagent_cycle"
+        );
+      }
       state.navigationApprovalScope = null;
       state.cycleActive = false;
       state.lastCycle = {
@@ -4678,7 +4707,6 @@
 
   function _multiWindowBlockReason() {
     if (!state.cycleEnabled) return "cycle_disabled";
-    if (document.hasFocus()) return "window_focused";
     return _cycleBlockReason(false);
   }
 
@@ -4845,9 +4873,8 @@
       totalConfirmedApprovals: state.totalConfirmedApprovals,
       dialogRoots: _modalRootSummary(),
       activeFocusKind: _focusKind(document.activeElement),
-      cycleFocusBlockReason: document.hasFocus()
-        ? _activeEditingSurfaceBlockReason()
-        : null,
+      humanQuestionPending: !!_pendingHumanQuestionRoot(),
+      cycleFocusBlockReason: _focusedHumanQuestionBlockReason(),
       lastFocusRestore: state.lastFocusRestore,
       subagents: exportSubagentRegistry(),
       visibleButtons: _debugButtons(),
@@ -4959,9 +4986,8 @@
       subagentTray: registry.tray,
       pinnedAgents: registry.pinned,
       activeFocusKind: _focusKind(document.activeElement),
-      cycleFocusBlockReason: document.hasFocus()
-        ? _activeEditingSurfaceBlockReason()
-        : null,
+      humanQuestionPending: !!_pendingHumanQuestionRoot(),
+      cycleFocusBlockReason: _focusedHumanQuestionBlockReason(),
       lastFocusRestore: state.lastFocusRestore,
       lastCycle: state.lastCycle,
     };

@@ -135,7 +135,7 @@ lifecycle with `on`/`off`/`stop`.
 | `launch-ssh <host> [/absolute/remote/path] [--no-preflight] [--interval SECONDS]` | Open dedicated Cursor connected to an SSH remote host (from `~/.ssh/config`), inject script, and turn the gate plus nested/pinned-agent cycling ON. Path-specific launches first verify the remote directory with `ssh <host> test -d <path>` so bad host/path pairs fail before creating a profile or alias. |
 | `on [-w PATH\|SLUG] [--interval SECONDS]` | Resume auto-clicking (`startAccept()` via CDP). An interval supplied while already ON takes effect immediately and persists for the session. Reloads stale in-window injector code when hash differs. Auto-detected if only one session, otherwise opens an interactive picker in a TTY. |
 | `off [-w PATH\|SLUG]` | Pause auto-clicking (`stopAccept()` via CDP) while keeping the dedicated window open. Auto-detected if only one session, otherwise opens an interactive picker in a TTY. |
-| `cycle --on\|--off\|--once [-w PATH\|SLUG]` | Control registered parent-transcript rows, exact `N subagents running` tray entries, and pinned top-level agents. Automatic pinned navigation visits active unselected rows in round-robin passes of up to two while the Agent Window is unfocused. `--once` runs one bounded pass, including completed rows. Confirms results, caps retries, restores the original agent/tabs/scroll/focus, and fails closed on drift. |
+| `cycle --on\|--off\|--once [-w PATH\|SLUG]` | Control registered parent-transcript rows, exact `N subagents running` tray entries, and pinned top-level agents. Automatic recovery continues in a focused Agent Window unless the mounted conversation shows a pending human-question tray. `--once` runs one explicit bounded pass, including completed pinned rows. Confirms results, caps retries, restores the original agent/tabs/scroll/focus, and fails closed on drift. |
 | `subagents [-w PATH\|SLUG] [--json]` | Show the sanitized renderer task registry, row hints, statuses, attempts, and confirmation timestamps. |
 | `status [-w PATH\|SLUG]` | Show verified IDE mode plus session details including the trusted-input worker, last approved command preview, tray advertised/mounted/collapsed state, and nested/pinned visit/confirmation totals. Shows all sessions if `-w` is omitted; if `-w <slug>` is ambiguous, the picker is used. |
 | `stop [-w PATH\|SLUG] [--all]` | Pause gate, close dedicated Cursor process, and remove session when shutdown succeeds. Without `-w`, it prefers running sessions when any are alive; if none are running, it falls back to stale entries for cleanup. Use `--all` to stop every session, but do not combine `--all` with `-w` or a positional workspace. |
@@ -190,10 +190,11 @@ use `caa --help` (or the full launcher path with `--help`).
    target before dispatch and stays idle while the gate is OFF.
 7. The injector continuously maintains a detailed window title such as
    `<repo> - autoapprove 🟢 multi-window - active agents: 2`. It uses 🟢
-   `multi-window` when the dedicated IDE is unfocused and top-level agent
-   switching is available, 🔵 `focused` when direct scanning remains active for
-   the mounted conversation but cross-agent navigation is withheld, and 🔴
-   `off` when the gate is disabled. `active agents` counts uniquely titled
+   `multi-window` whenever automatic recovery switching is available, including
+   a focused IDE with no pending human question after the short interaction
+   guard; 🔵 `focused` while direct scanning remains active but a visible human
+   question or another safety guard withholds navigation; and 🔴 `off` when the
+   gate is disabled. `active agents` counts uniquely titled
    active Agent Window conversations currently discovered across the sidebar,
    including the selected conversation outside Pinned. The one-second title sync also
    self-heals if Cursor resets it — unless
@@ -214,10 +215,13 @@ use `caa --help` (or the full launcher path with `--help`).
     restoration, mounts each read-only child editor, handles eligible approvals
     there, and restores the original tray/tabs/focus state. Both paths count
     confirmations separately from click attempts.
-    Automatic cycles pause while the focused window has its terminal or another
-    non-composer editor active; focus settling follows newer user interaction
-    instead of restoring a stale snapshot. Use `caa cycle --off` for the
-    explicit opt-out.
+    Automatic row materialization and tray-child navigation continue while the
+    window is focused when no visible human question is pending. If Cursor's
+    mounted `.glass-questionnaire-tray` is waiting for human input while
+    focused, forward recovery stops and preserves that question-bearing agent
+    or child instead of restoring away from it. Focus settling follows newer
+    user interaction instead of restoring a stale snapshot. Use
+    `caa cycle --off` for the explicit opt-out.
     Child navigation keeps a long transcript selected while its exact
     virtualized tail is materialized for up to five seconds. Empty children and
     exhausted prompts then receive bounded probe backoff instead of being
@@ -229,9 +233,10 @@ use `caa --help` (or the full launcher path with `--help`).
     it is actively confirming. Both paths share a task-scoped cooldown, while
     tray navigation remains an independent child-editor backup.
 12. Active pinned Agent Window conversations are visited sequentially because
-    Cursor mounts only the selected conversation. Automatic visits happen only
-    while the window is unfocused, skip the selected row, reject duplicate
-    titles inside Pinned, and restore the original agent and scroll position. Explicit
+    Cursor mounts only the selected conversation. Automatic visits skip the
+    selected row and reject duplicate titles inside Pinned. They normally
+    restore the original agent and scroll position, but preserve a selected
+    agent when a focused pending human question appears there. Explicit
     `cycle --once` visits completed pinned rows too for bounded validation.
     Title identity is scoped to the exact Pinned section so Cursor's duplicate
     history projection does not block cycling; same-title duplicates inside
