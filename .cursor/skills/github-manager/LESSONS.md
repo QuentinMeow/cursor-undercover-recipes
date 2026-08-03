@@ -15,3 +15,14 @@
   not remove files that were force-added or previously committed, so PR
   workflows must inspect staged paths and use `git rm --cached` to unwind
   accidental tracking instead of assuming ignore rules are enough.
+
+## Worktree Safety
+
+- **Local branch refs are shared, but indexes and files are per worktree**:
+  moving `refs/heads/main` from a cleanup running elsewhere can make the main
+  checkout appear to contain staged reverse changes. Refresh remote-tracking
+  refs for comparison, snapshot the base OID, and update a local branch only
+  through an explicit operation inside the worktree that has it checked out.
+- **Inventory all worktrees before deleting a branch**: protecting only the
+  invoking checkout is insufficient. Treat an unavailable or malformed
+  worktree inventory as a reason to perform no cleanup.

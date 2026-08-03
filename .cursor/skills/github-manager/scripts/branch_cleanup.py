@@ -63,78 +63,75 @@ def remote_exists(cwd: str, remote: str) -> bool:
     return remote in {line.strip() for line in proc.stdout.splitlines()}
 
 
-def base_branch_name(base_ref: str, remote: str) -> str:
-    if base_ref.startswith("refs/heads/"):
-        return base_ref.removeprefix("refs/heads/")
-    remote_prefix = f"{remote}/"
-    if base_ref.startswith(remote_prefix):
-        return base_ref.removeprefix(remote_prefix)
-    if "/" not in base_ref:
-        return base_ref
-    return base_ref.rsplit("/", 1)[1]
+def commit_oid(cwd: str, ref: str) -> str:
+    proc = git(cwd, ["rev-parse", "--verify", f"{ref}^{{commit}}"], check=True)
+    return proc.stdout.strip()
 
 
-def resolve_base(cwd: str, remote: str, explicit_base: str | None) -> tuple[str, str]:
+def resolve_base(
+    cwd: str,
+    remote: str,
+    explicit_base: str | None,
+    *,
+    allow_local_fallback: bool = True,
+) -> tuple[str, str]:
+    """Resolve the base once and return its immutable commit OID plus label."""
     if explicit_base:
         if not ref_exists(cwd, explicit_base):
             raise RuntimeError(f"base ref does not exist: {explicit_base}")
-        return explicit_base, explicit_base
+        return commit_oid(cwd, explicit_base), explicit_base
 
     remote_head = git(cwd, ["symbolic-ref", "--quiet", "--short", f"refs/remotes/{remote}/HEAD"])
     if remote_head.returncode == 0 and remote_head.stdout.strip():
         base = remote_head.stdout.strip()
         if ref_exists(cwd, base):
-            return base, base
+            return commit_oid(cwd, base), base
 
-    for candidate in ("main", "master", f"{remote}/main", f"{remote}/master"):
+    candidates = [f"{remote}/main", f"{remote}/master"]
+    if allow_local_fallback:
+        candidates.extend(["main", "master"])
+    for candidate in candidates:
         if ref_exists(cwd, candidate):
-            return candidate, candidate
+            return commit_oid(cwd, candidate), candidate
 
     raise RuntimeError(f"could not resolve a base branch from {remote}/HEAD, main, or master")
 
 
-def refresh_default_base(cwd: str, remote: str, explicit_base: str | None, notes: list[str]) -> None:
+def refresh_default_base(cwd: str, remote: str, explicit_base: str | None, notes: list[str]) -> bool:
+    """Refresh remote-tracking refs without moving any local branch.
+
+    Local refs are shared by every linked worktree. Moving ``refs/heads/main``
+    from a different worktree can leave the worktree that has ``main`` checked
+    out with an index and files from the old commit. The cleanup helper therefore
+    treats ``origin/main`` (or the remote's equivalent HEAD) as its comparison
+    base and never pulls or writes a local branch ref.
+    """
     if explicit_base:
-        return
+        return True
     if not remote_exists(cwd, remote):
         notes.append(f"remote not found, skipped fetch: {remote}")
-        return
+        return False
 
-    fetch_proc = git(cwd, ["fetch", "--prune", remote])
+    remote_refspec = f"+refs/heads/*:refs/remotes/{remote}/*"
+    fetch_proc = git(cwd, ["fetch", "--prune", "--no-tags", remote, remote_refspec])
     if fetch_proc.returncode != 0:
         notes.append(f"fetch failed: {first_line(fetch_proc.stderr) or first_line(fetch_proc.stdout)}")
-        return
-
-    try:
-        base_ref, _ = resolve_base(cwd, remote, None)
-    except RuntimeError as exc:
-        notes.append(str(exc))
-        return
-
-    local_base = base_branch_name(base_ref, remote)
-    if local_base not in {"main", "master"} or not ref_exists(cwd, local_base):
-        return
-
-    if current_branch(cwd) == local_base:
-        update_proc = git(cwd, ["pull", "--ff-only", remote, local_base])
-        action = f"pull {remote} {local_base}"
-    else:
-        update_proc = git(cwd, ["fetch", remote, f"{local_base}:refs/heads/{local_base}"])
-        action = f"fast-forward local {local_base}"
-
-    if update_proc.returncode != 0:
-        reason = first_line(update_proc.stderr) or first_line(update_proc.stdout)
-        notes.append(f"could not {action}; comparing refreshed {remote}/{local_base}: {reason}")
+        return False
+    return True
 
 
-def local_base_names(base_ref: str) -> set[str]:
+def local_base_names(base_label: str, remote: str) -> set[str]:
     names = {"main", "master"}
-    if base_ref.startswith("refs/heads/"):
-        names.add(base_ref.removeprefix("refs/heads/"))
-    elif "/" in base_ref:
-        names.add(base_ref.split("/", 1)[1])
+    if base_label.startswith("refs/heads/"):
+        names.add(base_label[len("refs/heads/"):])
+    elif base_label.startswith(f"refs/remotes/{remote}/"):
+        prefix = f"refs/remotes/{remote}/"
+        names.add(base_label[len(prefix):])
+    elif base_label.startswith(f"{remote}/"):
+        prefix = f"{remote}/"
+        names.add(base_label[len(prefix):])
     else:
-        names.add(base_ref)
+        names.add(base_label)
     return names
 
 
@@ -156,6 +153,52 @@ def list_local_branches(cwd: str) -> list[Branch]:
 def current_branch(cwd: str) -> str:
     proc = git(cwd, ["branch", "--show-current"])
     return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def checked_out_branches(cwd: str) -> dict[str, str]:
+    """Return every local branch checked out in this repository's worktrees."""
+    proc = git(cwd, ["worktree", "list", "--porcelain"], check=True)
+    locations: dict[str, str] = {}
+    records = [record for record in proc.stdout.split("\n\n") if record.strip()]
+    if not records:
+        raise RuntimeError("git worktree inventory was empty or malformed")
+    for record in records:
+        fields = record.splitlines()
+        for line in fields:
+            if not (
+                line.startswith("worktree ")
+                or line.startswith("HEAD ")
+                or line.startswith("branch refs/heads/")
+                or line == "detached"
+                or line == "bare"
+                or line == "locked"
+                or line.startswith("locked ")
+                or line == "prunable"
+                or line.startswith("prunable ")
+            ):
+                raise RuntimeError(
+                    f"git worktree inventory contained an unknown field: {line}"
+                )
+        path_fields = [line[len("worktree "):] for line in fields if line.startswith("worktree ")]
+        head_fields = [line[len("HEAD "):] for line in fields if line.startswith("HEAD ")]
+        branch_fields = [
+            line[len("branch refs/heads/"):]
+            for line in fields
+            if line.startswith("branch refs/heads/")
+        ]
+        detached = "detached" in fields
+        bare = "bare" in fields
+        if len(path_fields) != 1 or not path_fields[0]:
+            raise RuntimeError("git worktree inventory contained an invalid path record")
+        if not bare and (len(head_fields) != 1 or not head_fields[0]):
+            raise RuntimeError("git worktree inventory contained a record without HEAD")
+        if len(branch_fields) > 1 or (branch_fields and not branch_fields[0]):
+            raise RuntimeError("git worktree inventory contained an invalid branch record")
+        if not bare and bool(branch_fields) == detached:
+            raise RuntimeError("git worktree inventory contained an ambiguous checkout state")
+        if branch_fields:
+            locations[branch_fields[0]] = path_fields[0]
+    return locations
 
 
 def is_ancestor(cwd: str, branch: str, base_ref: str) -> bool:
@@ -307,14 +350,25 @@ def main(argv: list[str]) -> int:
     try:
         cwd = repo_root()
         if args.fetch:
-            refresh_default_base(cwd, args.remote, args.base, notes)
+            refreshed = refresh_default_base(cwd, args.remote, args.base, notes)
+            if args.clean and not refreshed:
+                detail = notes[-1] if notes else "remote refresh failed"
+                raise RuntimeError(
+                    "refusing cleanup because the requested remote refresh failed; "
+                    f"retry the fetch or explicitly use --no-fetch ({detail})"
+                )
 
-        base_ref, base_label = resolve_base(cwd, args.remote, args.base)
+        base_commit, base_label = resolve_base(
+            cwd,
+            args.remote,
+            args.base,
+            allow_local_fallback=not args.fetch,
+        )
         branches = list_local_branches(cwd)
         current = current_branch(cwd)
-        protected = local_base_names(base_ref)
-        if current:
-            protected.add(current)
+        checkout_locations = checked_out_branches(cwd)
+        protected = local_base_names(base_label, args.remote)
+        protected.update(checkout_locations)
 
         pr_lookup = PrLookup(cwd)
         clean = bool(args.clean)
@@ -322,19 +376,44 @@ def main(argv: list[str]) -> int:
 
         for branch in branches:
             branch_notes: list[str] = []
+            checkout_path = checkout_locations.get(branch.name, "")
             if branch.name == current:
                 branch_notes.append("current branch")
+            elif checkout_path:
+                branch_notes.append(f"checked out at {checkout_path}")
 
-            branch_is_base = branch.name in local_base_names(base_ref)
-            merged = is_ancestor(cwd, branch.name, base_ref)
+            branch_is_base = branch.name in local_base_names(base_label, args.remote)
+            merged = is_ancestor(cwd, branch.name, base_commit)
             remote_ref = matching_remote(cwd, args.remote, branch.name, branch.upstream)
 
             if branch_is_base:
                 rows.append(Row(branch.name, "base branch", remote=remote_ref, notes=", ".join(branch_notes)))
                 continue
 
+            if merged and checkout_path:
+                rows.append(
+                    Row(
+                        branch.name,
+                        "merged; kept (checked out in worktree)",
+                        remote=remote_ref,
+                        notes=", ".join(branch_notes),
+                    )
+                )
+                continue
+
             if merged and branch.name not in protected:
                 if clean:
+                    latest_checkouts = checked_out_branches(cwd)
+                    if branch.name in latest_checkouts:
+                        rows.append(
+                            Row(
+                                branch.name,
+                                "merged; kept (checked out in worktree)",
+                                remote=remote_ref,
+                                notes=f"checked out at {latest_checkouts[branch.name]}",
+                            )
+                        )
+                        continue
                     deleted, message = clean_branch(cwd, branch.name)
                     if deleted:
                         rows.append(Row(branch.name, "merged and cleaned locally", remote=remote_ref, notes=message))

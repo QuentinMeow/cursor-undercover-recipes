@@ -30,9 +30,10 @@ for Section 1 (always get the real PR base) and scenarios A–E.
 python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/branch_cleanup.py" --clean
 ```
 
-The helper refreshes `origin`, tries to fast-forward local `main`/`master`, then
-compares against the latest base. Use `--dry-run` to preview the table without
-deleting local branches.
+The helper refreshes `origin`'s remote-tracking refs, snapshots the latest base,
+and leaves every local branch, index, and worktree untouched during refresh. It
+protects branches checked out in any linked worktree. Use `--dry-run` to preview
+the table without deleting local branches.
 
 ### Global copy on another machine
 
@@ -46,8 +47,9 @@ Then use Cursor slash command **`/global-github-manager`**.
 
 - **`scripts/gh_identity.py`** — saves the active `gh` user before `enter`,
   restores it on `leave`, using state under the repo’s `.git/` directory.
-- **`scripts/branch_cleanup.py`** — safely deletes branches already merged into
-  `main`/`master` and reports PR/remote/local-only status in a Markdown table.
+- **`scripts/branch_cleanup.py`** — safely deletes unoccupied branches already
+  merged into the snapshotted base and reports PR/remote/local-only status in a
+  Markdown table.
 - **Comprehensive reference** — stacked PRs, AIO-merge vs stacked-merge,
   `av` CLI, merge queues, and troubleshooting live in
   `references/pr-workflows-comprehensive.md`.
