@@ -32,6 +32,7 @@ here, and overflow in `references/`.
 - `scripts/branch_cleanup.py` — safe local branch cleanup table for Scenario E.
 - `scripts/gh_identity.py` — `gh` identity helper.
 - `scripts/install.sh` — install to `~/.cursor/skills/global-github-manager/` or another repo.
+- `tests/test_branch_cleanup.py` — linked-worktree cleanup safety tests.
 - `tests/test_gh_identity.py` — unit tests for identity state.
 - `logs/<run-id>/` — gitignored PR-body scratch (see SKILL.md).
 
@@ -64,9 +65,10 @@ bash "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/ins
 - Identity helpers must fail closed on ambiguous state.
 - Branch cleanup must use safe local deletion (`git branch -d`), never force
   deletion, unless the user explicitly asks for unsafe cleanup.
-- Branch cleanup must refresh `origin` and try to fast-forward local
-  `main`/`master` before comparing, unless the user explicitly requests
-  `--no-fetch`.
+- Branch cleanup must refresh only remote-tracking refs, snapshot the comparison
+  base, and never move or check out a local branch. Protect branches checked out
+  in every registered worktree. A requested fetch or worktree inventory failure
+  must prevent cleanup; `--no-fetch` is the explicit stale-data opt-in.
 - Branch cleanup responses must include the helper's full Markdown table for all
   inspected local branches; do not replace it with a prose-only summary.
 - Generalize employer-specific tool names in the comprehensive reference; keep

@@ -1048,12 +1048,12 @@ for branch in stack/<username>-pr1-<desc> stack/<username>-pr2-<desc>; do
   sleep 1
 done
 
-# Delete local branches
-git branch -D stack/<username>-pr1-<desc> stack/<username>-pr2-<desc>
+# Inspect and safely delete only branches Git proves merged and unoccupied.
+python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/branch_cleanup.py" --clean
 
-# The AIO branch is deleted automatically by GitHub on merge
-# Clean up local tracking ref
-git branch -D <aio-branch> 2>/dev/null
+# The AIO branch is deleted automatically by GitHub on merge. A squash merge
+# may leave its local commits non-ancestral, so retain it unless the user
+# explicitly approves discarding that recoverable history.
 git remote prune origin 2>/dev/null
 ```
 
@@ -1131,11 +1131,14 @@ gh pr close <AIO-PR> --comment "All stacked PRs merged. Closing AIO reference PR
 #### Clean up branches
 
 ```bash
-git branch -D <aio-branch>                          # delete local
 gh api repos/<owner>/<repo>/git/refs/heads/<aio-branch> -X DELETE 2>/dev/null
+python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/branch_cleanup.py" --clean
 ```
 
-Aviator should have already deleted the stacked PR branches on merge.
+Aviator should have already deleted the stacked PR branches on merge. If the
+local AIO branch is not an ancestor of the base, retain it unless the user
+explicitly approves discarding its commits; never force-delete it as routine
+cleanup.
 
 ---
 
@@ -1151,14 +1154,16 @@ Prefer the helper so cleanup and branch status are captured in one table:
 python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/branch_cleanup.py" --clean
 ```
 
-The helper refreshes `origin`, tries to fast-forward local `main`/`master`, then
-resolves the repo's latest `main`/`master` base. It deletes only local branches
-that Git considers merged via `git branch -d`, and prints each inspected branch
-as one of:
+The helper refreshes only `origin`'s remote-tracking refs, resolves the repo's
+latest base to an immutable commit, and never moves local `main`/`master`. It
+protects branches checked out in every registered worktree, deletes only
+unoccupied local branches Git considers merged via `git branch -d`, and prints
+each inspected branch as one of:
 
 | Status | Meaning |
 |--------|---------|
 | `merged and cleaned locally` | The branch was merged into the base and deleted locally. |
+| `merged; kept (checked out in worktree)` | The branch is merged but protected because a worktree has it checked out. |
 | `PR created (...)` | The branch was not cleaned and has a GitHub PR, including state and link. |
 | `pushed to remote` | No PR was found, but the branch has an upstream or matching remote branch. |
 | `local only` | No PR or remote branch was found. |
@@ -1169,8 +1174,9 @@ Preview without deletion:
 python3 "$(git rev-parse --show-toplevel)/.cursor/skills/github-manager/scripts/branch_cleanup.py" --dry-run
 ```
 
-Use `--no-fetch` only when the user explicitly wants to avoid refreshing the
-base branch.
+If the requested fetch or worktree inventory fails, cleanup stops without
+deleting anything. Use `--no-fetch` only when the user explicitly accepts cached
+remote state.
 
 When reporting results to the user, include the helper's full `Base`, `Mode`,
 and Markdown table output. Do not summarize branch cleanup as prose only; the
@@ -1183,12 +1189,17 @@ deletion unless the user explicitly asks for unsafe cleanup.
 
 ### E.2 — Clean up worktrees
 
-If Aviator or manual operations created worktrees:
+If Aviator or manual operations created worktrees, inspect each candidate first:
 
 ```bash
-git worktree list
-git worktree remove <path> --force    # for each stale worktree
+git worktree list --porcelain
+git -C <path> status --short
+git worktree remove <path>            # refuses dirty or unsafe removal
 ```
+
+Do not use `--force` by default. It can discard another agent's uncommitted
+files. Force removal requires explicit user approval after identifying the exact
+worktree and showing why its contents are recoverable or intentionally discarded.
 
 ### E.3 — Prune stale remote tracking refs
 
